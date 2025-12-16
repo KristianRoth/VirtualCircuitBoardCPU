@@ -1,4 +1,4 @@
-![](https://raw.githubusercontent.com/KristianRoth/VirtualCircuitBoardCPU/main/AoC1P1.mp4)
+https://github.com/user-attachments/assets/4178198c-dcfb-4dda-80ad-a7bf4f559366
 
 # Instructions
 1. No-Op:     0000 xxxx xxxx xxxx
@@ -17,3 +17,4 @@
 14. 
 15. Call:     1110 xxxx xxxx xxxx - AAAA AAAA AAAA AAAA
 16. Ret:      1111 xxxx xxxx xxxx
+
