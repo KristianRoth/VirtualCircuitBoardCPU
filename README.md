@@ -1,4 +1,4 @@
-[Day 1 Part 1](https://raw.githubusercontent.com/KristianRoth/VirtualCircuitBoardCPU/main/AoC1P1.mp4)
+![](https://raw.githubusercontent.com/KristianRoth/VirtualCircuitBoardCPU/main/AoC1P1.mp4)
 
 # Instructions
 1. No-Op:     0000 xxxx xxxx xxxx
