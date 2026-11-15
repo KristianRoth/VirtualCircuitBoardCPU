@@ -175,3 +175,32 @@ fn engine_reproduces_the_recorded_random_bits_exactly() {
         assert!(wrong.is_empty(), "{name}: {} of 127 words differ, first: {}", wrong.len(), wrong[0]);
     }
 }
+
+#[test]
+fn engine_vmem_matches_every_after_save() {
+    // A pair fixture: <name>.vcb is the board, <name>.after.vcb is the game's save after running it with a
+    // Persistent Memory region and returning to edit mode. The engine runs the board until its Breakpoint
+    // (or 5000 ticks for boards that just settle) and must hold the same words over that region.
+    // Word 0 is left out: the game does not save it (observed on the random recorder boards).
+    let mut names: Vec<String> = std::fs::read_dir(engine_dir().join("tests/boards"))
+        .unwrap()
+        .filter_map(|entry| entry.unwrap().file_name().to_str()?.strip_suffix(".after.vcb").map(String::from))
+        .collect();
+    names.sort();
+    assert!(names.len() >= 3);
+    for name in names {
+        let board = Board::read(&fixture_file(&name, "vcb")).unwrap();
+        let after = Board::read(&fixture_file(&name, "after.vcb")).unwrap();
+        assert!(board.inks == after.inks, "{name}: the after save is another board");
+        let (from, to) = (after.settings.vmem_settings[14].max(1) as usize, after.settings.vmem_settings[15] as usize);
+        assert!(after.vmem[from..=to].iter().any(|w| *w != 0), "{name}: the game saved nothing in words {from}..={to}");
+
+        let mut engine = Engine::new(&board, Components::build(&board).unwrap(), &Default::default()).unwrap();
+        let report = engine.run_until(&StopSet { max_ticks: 5000, breakpoint: true }, |_| {});
+        let wrong: Vec<String> = (from..=to)
+            .filter(|a| engine.vmem()[*a] != after.vmem[*a])
+            .map(|a| format!("word {a}: engine {:08x}, game {:08x}", engine.vmem()[a], after.vmem[a]))
+            .collect();
+        assert!(wrong.is_empty(), "{name} (stopped at tick {}): {} words differ, first: {}", report.tick, wrong.len(), wrong[0]);
+    }
+}

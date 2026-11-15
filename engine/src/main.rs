@@ -48,6 +48,12 @@ struct RunArgs {
     /// Write a PNG snapshot after a tick: tick:file.png. Repeatable.
     #[arg(long)]
     render: Vec<String>,
+    /// Print these VMem words at the end, as hex and unsigned decimal: addr[,addr...]. Hex needs 0x.
+    #[arg(long, value_delimiter = ',')]
+    watch: Vec<String>,
+    /// Write all of VMem to a file at the end, one `0xADDRESS 0xVALUE` line per word.
+    #[arg(long)]
+    dump_vmem: Option<PathBuf>,
     /// Ignore Breakpoint inks.
     #[arg(long)]
     no_breakpoint: bool,
@@ -200,9 +206,22 @@ fn run(args: RunArgs) -> Result<()> {
         }
         renders.push((tick, file.into()));
     }
-    let render_paths: Vec<&Path> = renders.iter().map(|(_, p)| p.as_path()).collect();
-    check_outputs(&[&args.board, &args.board.with_extension("vcbmem")], &render_paths)?;
-    for path in &render_paths {
+    let mut watch: Vec<usize> = Vec::new();
+    for spec in &args.watch {
+        let parsed = match spec.strip_prefix("0x") {
+            Some(hex) => usize::from_str_radix(hex, 16),
+            None => spec.parse(),
+        };
+        watch.push(parsed.ok().filter(|a| *a < board.vmem.len()).ok_or(format!("--watch {spec}: not a VMem address"))?);
+    }
+    if !board.settings.vmem_enabled && (!watch.is_empty() || args.dump_vmem.is_some()) {
+        return Err("is_vmem_enabled: is false, so there is no VMem to watch or dump".into());
+    }
+
+    let mut output_paths: Vec<&Path> = renders.iter().map(|(_, p)| p.as_path()).collect();
+    output_paths.extend(args.dump_vmem.as_deref());
+    check_outputs(&[&args.board, &args.board.with_extension("vcbmem")], &output_paths)?;
+    for path in &output_paths {
         check_overwrite(path, args.force)?;
     }
 
@@ -231,6 +250,17 @@ fn run(args: RunArgs) -> Result<()> {
         line += &format!(" (unverified: {})", units.join(", "));
     }
     println!("{line}");
+    for address in watch {
+        let value = engine.vmem()[address];
+        println!("{address:#010X} = {value:#010X} ({value})");
+    }
+    if let Some(path) = &args.dump_vmem {
+        let mut text = String::with_capacity(engine.vmem().len() * 22);
+        for (address, value) in engine.vmem().iter().enumerate() {
+            text += &format!("{address:#010X} {value:#010X}\n");
+        }
+        write_file(path, text.as_bytes())?;
+    }
     if let Some((tick, path)) = renders.iter().find(|(tick, _)| *tick > report.tick) {
         return Err(format!("--render {tick}:{}: the run stopped at tick {} before that tick", path.display(), report.tick));
     }
