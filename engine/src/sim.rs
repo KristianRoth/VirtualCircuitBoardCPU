@@ -56,17 +56,42 @@ pub struct Options {
     pub timer_ticks: Option<u64>,
 }
 
-/// The engine's own generator for Random ink (splitmix64). It is repeatable per seed, but it is not the
-/// game's generator: none of the candidates tried reproduced the game's sequence (facts question 14).
-struct Rng(u64);
+/// MT19937, the generator the game uses for Random ink (std::mt19937 seeded with the board's seed).
+/// Verified against 2 x 4064 recorded bits (random-vmem-seed-1 and -2).
+struct Rng {
+    state: [u32; 624],
+    index: usize,
+}
 
 impl Rng {
+    fn new(seed: u32) -> Rng {
+        let mut state = [0u32; 624];
+        state[0] = seed;
+        for i in 1..624 {
+            state[i] = 1812433253u32.wrapping_mul(state[i - 1] ^ (state[i - 1] >> 30)).wrapping_add(i as u32);
+        }
+        Rng { state, index: 624 }
+    }
+
+    fn next_u32(&mut self) -> u32 {
+        if self.index == 624 {
+            for k in 0..624 {
+                let y = (self.state[k] & 0x8000_0000) | (self.state[(k + 1) % 624] & 0x7fff_ffff);
+                self.state[k] = self.state[(k + 397) % 624] ^ (y >> 1) ^ if y & 1 == 1 { 0x9908_b0df } else { 0 };
+            }
+            self.index = 0;
+        }
+        let mut y = self.state[self.index];
+        self.index += 1;
+        y ^= y >> 11;
+        y ^= (y << 7) & 0x9d2c_5680;
+        y ^= (y << 15) & 0xefc6_0000;
+        y ^ (y >> 18)
+    }
+
+    /// The game uses the low bit of each draw.
     fn next_bit(&mut self) -> bool {
-        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        (z ^ (z >> 31)) >> 63 == 1
+        self.next_u32() & 1 == 1
     }
 }
 
@@ -101,7 +126,7 @@ impl Engine {
             None if has_timer => return Err("the board has Timer ink: --timer-ticks <n> is required, because the game's timers follow the wall clock".into()),
             None => 1,
         };
-        let rng = Rng(board.settings.random_seed as u64);
+        let rng = Rng::new(board.settings.random_seed as u32);
         let mut engine = Engine { on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, components };
         let c = &engine.components;
         // Observed (gates board): at tick 0 every component already has the output it gets with all
@@ -177,15 +202,11 @@ impl Simulation for Engine {
             self.queued[e as usize] = false;
             let Kind::Component(ink) = c.kinds[e as usize] else { unreachable!("only components are queued") };
             let next = if ink == Ink::Random {
-                // Observed (random recorder boards): each time an input rises the output is a fresh coin flip,
-                // and it does not stay on until the next draw. Model for when it turns off (question 14):
-                // when no input is on any more.
-                let reads = &c.reads[e as usize];
-                if reads.iter().any(|t| self.rose[*t as usize]) {
-                    self.rng.next_bit()
-                } else {
-                    self.on[e as usize] && reads.iter().any(|t| self.on[*t as usize])
-                }
+                // Observed (random recorder boards): a Random draws every time it is evaluated, that is, whenever
+                // one of its inputs changed. When an input rose the output is that draw. The draw made when the
+                // input falls is used up without effect. Model (question 14): the output is on only while an input is on.
+                let draw = self.rng.next_bit();
+                draw && c.reads[e as usize].iter().any(|t| self.on[*t as usize])
             } else {
                 self.evaluate(e as usize, ink)
             };

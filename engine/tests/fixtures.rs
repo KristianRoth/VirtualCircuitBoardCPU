@@ -147,3 +147,29 @@ fn recorded_random_words_are_fair_coin_flips() {
     let (a, b) = (Board::read(&fixture_file("random-vmem-seed-1", "after.vcb")).unwrap(), Board::read(&fixture_file("random-vmem-seed-2", "after.vcb")).unwrap());
     assert!(a.vmem != b.vmem, "the two seeds gave the same words");
 }
+
+#[test]
+fn engine_reproduces_the_recorded_random_bits_exactly() {
+    // The 32 Randoms sit three pixels above the content pins and are triggered every 24 ticks, first at tick 2.
+    // Word c of the game's save holds their outputs after trigger c. The engine must give the same 4064 bits.
+    for seed in [1, 2] {
+        let name = format!("random-vmem-seed-{seed}");
+        let board = Board::read(&fixture_file(&name, "vcb")).unwrap();
+        let recorded = Board::read(&fixture_file(&name, "after.vcb")).unwrap().vmem;
+        let components = Components::build(&board).unwrap();
+        let s = board.settings.vmem_settings;
+        let randoms: Vec<u32> = (0..32).map(|k| components.entity_at((s[8] - s[10] * k) as usize, s[9] as usize - 3).unwrap()).collect();
+        let mut engine = Engine::new(&board, components, &Default::default()).unwrap();
+        let mut wrong = Vec::new();
+        engine.run_until(&StopSet { max_ticks: 2 + 24 * 127, breakpoint: false }, |e| {
+            let (cycle, phase) = ((e.tick() as usize).saturating_sub(2) / 24, (e.tick() + 22) % 24);
+            if phase == 0 && (1..=127).contains(&cycle) {
+                let word: u32 = randoms.iter().enumerate().map(|(k, r)| (e.state()[*r as usize] as u32) << k).sum();
+                if word != recorded[cycle] {
+                    wrong.push(format!("word {cycle}: engine {word:08x}, game {:08x}", recorded[cycle]));
+                }
+            }
+        });
+        assert!(wrong.is_empty(), "{name}: {} of 127 words differ, first: {}", wrong.len(), wrong[0]);
+    }
+}

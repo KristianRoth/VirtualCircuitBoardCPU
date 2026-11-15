@@ -166,8 +166,8 @@ fn timer_flips_every_timer_ticks_and_needs_the_setting() {
 
 #[test]
 fn random_is_a_coin_flip_per_rising_input_and_repeats_per_seed() {
-    // A clock with interval 1 rises at even ticks and falls at odd ticks. The Random flips a coin on the
-    // tick after each rise and is off again one tick later, once its input is off.
+    // A clock with interval 1 rises at even ticks and falls at odd ticks. The Random takes a fresh draw on
+    // the tick after each rise and is off again one tick later, once its input is off.
     let source = |seed: u64| format!("clock_interval = 1\nrandom_seed = {seed}\nprobe.random = 4,0\n\nCW5R?");
     let run = |seed| lit_ticks(&textboard::parse(&source(seed)).unwrap(), 400).remove(0).1;
     let lit = run(1);
@@ -175,6 +175,9 @@ fn random_is_a_coin_flip_per_rising_input_and_repeats_per_seed() {
     assert_ne!(lit, run(2), "another seed differs");
     assert!(lit.iter().all(|t| t % 2 == 1), "on only on the tick after a rising input");
     assert!((70..=130).contains(&lit.len()), "{} ones in 200 draws is not about half", lit.len());
+    // MT19937 with seed 1: the low bits of the first draws are 1, 1, 0, 0, 1, 1, 1, 1 and every second draw
+    // is used up when the input falls. So the draws at ticks 1, 3, 5, 7 are numbers 1, 3, 5, 7: 1, 0, 1, 1.
+    assert_eq!(lit[..3], [1, 5, 7]);
 }
 
 #[test]

@@ -71,7 +71,6 @@ fn unverified_inks_are_refused_unless_allowed() {
     assert_eq!(text(&out.stdout), "tick 0: on=0 off=0\ntick 1: on=1 off=0\ntick 2: on=1 off=0\nstopped at tick 2: max-ticks\n");
     assert!(out.stderr.is_empty());
 
-    // Random is modelled: it runs, with a warning that it is not the game's sequence.
     let gen = |name: &str, art: &str| {
         let source = d.join(format!("{name}.txt"));
         std::fs::write(&source, art).unwrap();
@@ -79,11 +78,6 @@ fn unverified_inks_are_refused_unless_allowed() {
         assert!(vcb(&["gen", source.to_str().unwrap(), "-o", board.to_str().unwrap()]).status.success());
         board.to_str().unwrap().to_string()
     };
-    let random = gen("random", "\nLW5R?\n");
-    let out = vcb(&["run", &random, "--ticks", "2"]);
-    assert!(out.status.success());
-    assert_eq!(text(&out.stdout), "stopped at tick 2: max-ticks\n");
-    assert_eq!(text(&out.stderr), "warning: Random is modelled, not game-exact\n");
 
     // Timer has no observed fixture yet.
     let timer = gen("timer", "\nIW5RE\n");
