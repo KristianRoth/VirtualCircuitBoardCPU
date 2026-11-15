@@ -157,9 +157,10 @@ fn draw_label(board: &mut Board, number: usize, p: &Probe) -> Result<()> {
         out
     };
     let free = |board: &Board, at: &[(usize, usize)]| at.iter().all(|(x, y)| *x < board.width && *y < board.height && board.ink(*x, *y) == Ink::Empty);
-    let below = pixels(bottom + 2 + stagger);
-    let above = (top >= 6 + stagger + ORIGIN.1).then(|| pixels(top - 6 - stagger));
-    let place = if free(board, &below) { below } else { above.filter(|at| free(board, at)).ok_or(format!("probe \"{}\": no room for its label below or above", p.label))? };
+    // The side is chosen by the spot right next to the block, so odd and even labels end up on the same side.
+    let side_below = free(board, &pixels(bottom + 2));
+    let place = if side_below { Some(pixels(bottom + 2 + stagger)) } else { (top >= 6 + stagger + ORIGIN.1).then(|| pixels(top - 6 - stagger)) };
+    let place = place.filter(|at| free(board, at)).ok_or(format!("probe \"{}\": no room for its label below or above", p.label))?;
     for (x, y) in place {
         board.set(x, y, Ink::Annotation);
     }
@@ -222,7 +223,7 @@ mod tests {
         assert_eq!(row(7), [true, true, true]);
         assert!(parse("labels = on\nprobe.a = 1,0\n\nEEE\n\n\n\nLLL").is_err(), "label would overwrite art");
         // With no room below, the label goes above the block (the art starts 8 rows down here).
-        let tb = parse("labels = on\nprobe.a = 1,8\n\n.\n.\n.\n.\n.\n.\n.\n.\nEEE\nLLL").unwrap();
+        let tb = parse("labels = on\nprobe.a = 1,8\n\n.\n.\n.\n.\n.\n.\n.\n.\nEEE\n\nLLL").unwrap();
         assert_eq!(tb.board.ink(16, 16 + 6), Ink::Annotation); // bottom row of the "1": ###
         assert_eq!(tb.board.ink(17, 16 + 2), Ink::Annotation); // top row: .#.
     }
