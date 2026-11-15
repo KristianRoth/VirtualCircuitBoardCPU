@@ -73,6 +73,20 @@ pub fn parse(text: &str) -> Result<TextBoard> {
                 None => ticks = value.split(',').map(|t| number(t, n)).collect::<Result<_>>()?,
             },
             "labels" => labels = value == "on",
+            // VMem pins: bits, col, row, offsetX, offsetY (col,row relative to the art). Bit k is at (col - offsetX*k, row + offsetY*k).
+            "vmem.address" | "vmem.content" => {
+                let v: Vec<i64> = value.split(',').map(|t| number(t, n)).collect::<Result<_>>()?;
+                let [bits, col, row, offset_x, offset_y] = v[..] else { return Err(format!("line {n}: expected bits,col,row,offsetX,offsetY")) };
+                let at = if key == "vmem.address" { 0 } else { 7 };
+                board.settings.vmem_settings[at..at + 7].copy_from_slice(&[bits, col + ORIGIN.0 as i64, row + ORIGIN.1 as i64, offset_x, offset_y, 1, 1]);
+                board.settings.vmem_enabled = true;
+            }
+            // Persistent Memory From,To: the game copies this address range into the project when the simulation ends.
+            "persistent" => {
+                let (from, to) = value.split_once(',').ok_or(format!("line {n}: expected from,to"))?;
+                board.settings.vmem_settings[14] = number(from, n)?;
+                board.settings.vmem_settings[15] = number(to, n)?;
+            }
             "covers" => covers = value.split(',').map(|c| c.trim().to_string()).collect(),
             _ => return Err(format!("line {n}: unknown key \"{key}\"")),
         }
@@ -159,6 +173,10 @@ mod tests {
         assert_eq!(tb.ticks, [0, 1, 2]);
         assert_eq!(tb.covers, ["rule1", "6"]);
         assert_eq!((tb.probes[0].label.as_str(), tb.probes[0].x, tb.probes[0].y), ("led", 17, 17));
+
+        let tb = parse("vmem.address = 8,10,2,6,0\nvmem.content = 32,20,5,4,0\npersistent = 0,255\n\nL").unwrap();
+        assert!(tb.board.settings.vmem_enabled);
+        assert_eq!(tb.board.settings.vmem_settings, [8, 26, 18, 6, 0, 1, 1, 32, 36, 21, 4, 0, 1, 1, 0, 255]);
     }
 
     #[test]

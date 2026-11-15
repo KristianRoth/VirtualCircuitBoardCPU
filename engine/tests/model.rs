@@ -181,6 +181,26 @@ fn random_changes_only_after_a_rising_input_and_repeats_per_seed() {
 }
 
 #[test]
+fn random_recorder_counts_to_address_128_and_stops() {
+    // The address pins are simulated as plain latches here (VMem itself comes in milestone M5).
+    // They form a synchronous counter that steps every 24 ticks; a Breakpoint on the top bit ends the run.
+    let tb = load("random-vmem-seed-1.txt");
+    let components = Components::build(&tb.board).unwrap();
+    let s = tb.board.settings.vmem_settings;
+    let pins: Vec<u32> = (0..8).map(|k| components.entity_at((s[1] - s[3] * k) as usize, s[2] as usize).unwrap()).collect();
+    let mut engine = Engine::new(&tb.board, components, &Default::default()).unwrap();
+    let mut addresses = vec![0u32];
+    let report = engine.run_until(&StopSet { max_ticks: 5000, breakpoint: true }, |e| {
+        let address = pins.iter().enumerate().map(|(k, pin)| (e.state()[*pin as usize] as u32) << k).sum();
+        if address != *addresses.last().unwrap() {
+            addresses.push(address);
+        }
+    });
+    assert_eq!(addresses, (0..=128).collect::<Vec<u32>>(), "every address appears once, with no in-between values");
+    assert_eq!((report.tick, report.reasons), (3058, vec!["breakpoint"]));
+}
+
+#[test]
 fn touching_crosses_are_an_error() {
     let tb = textboard::parse("\n5++5").unwrap();
     assert!(Components::build(&tb.board).err().unwrap().contains("Cross at 17,16"));
