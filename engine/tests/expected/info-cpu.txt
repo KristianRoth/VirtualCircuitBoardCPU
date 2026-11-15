@@ -1,0 +1,48 @@
+size: 2048x2048
+clock_interval: 1
+timer_interval: 500 ms
+random_seed: 1 (time seed: true)
+vmem: enabled
+vmem_settings: [16, 1067, 222, 5, 0, 1, 1, 16, 1067, 246, 5, 0, 1, 1, 0, 0]
+vmem non-zero words: 5
+inks: 40
+  Trace 0: 456
+  Trace 1: 9796
+  Trace 2: 1243
+  Trace 3: 878
+  Trace 4: 872
+  Trace 5: 1622
+  Trace 6: 490
+  Trace 7: 540
+  Trace 8: 5785
+  Trace 9: 421
+  Trace 10: 424
+  Trace 11: 422
+  Trace 12: 403
+  Trace 13: 405
+  Trace 14: 404
+  Trace 15: 4163
+  Read: 9451
+  Write: 5536
+  Cross: 7216
+  Tunnel: 274
+  Bus 0: 4171
+  Bus 1: 2443
+  Bus 2: 7370
+  Bus 3: 548
+  Bus 4: 7243
+  Bus 5: 2197
+  Buffer: 64
+  AND: 7181
+  OR: 4656
+  XOR: 1561
+  NOT: 177
+  NAND: 5
+  NOR: 152
+  XNOR: 98
+  Latch On: 57
+  Latch Off: 755
+  Clock: 1
+  LED: 1197
+  Breakpoint: 2
+  Annotation: 1193
