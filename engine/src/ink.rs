@@ -119,8 +119,10 @@ pub const GAME_VERSION: &str = "1.0.1";
 
 /// Units whose behaviour is proven by observed fixtures. A unit is added in the same commit as those fixtures.
 pub const VERIFIED: &[&str] = &[
-    // `gates` and `gates-recheck`, observed 2026-11-15. Latch On/Off wait for the latch edge cases (question 11).
+    // `gates` and `gates-recheck`, observed 2026-11-15.
     "Trace", "Read", "Write", "Buffer", "AND", "OR", "XOR", "NOT", "NAND", "NOR", "XNOR", "LED",
+    // `routing-a`, `routing-b`, `general` and `general-1`, observed 2026-11-15.
+    "Cross", "Tunnel", "Bus", "Mesh", "Wireless", "Clock", "Breakpoint", "Latch On", "Latch Off",
 ];
 /// Units that cannot match the game tick for tick and are only checked for what can be observed.
 pub const MODELLED: &[&str] = &[];

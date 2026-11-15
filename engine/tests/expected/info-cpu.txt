@@ -46,4 +46,4 @@ inks: 40
   LED: 1197
   Breakpoint: 2
   Annotation: 1193
-not verified yet: Tunnel, Latch On, Cross, Bus, Latch Off, Clock, Breakpoint, vmem
+not verified yet: vmem

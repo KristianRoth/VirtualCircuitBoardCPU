@@ -75,7 +75,11 @@ impl Engine {
         // inputs off, so Latch On and the inverting gates start on.
         for (e, kind) in c.kinds.iter().enumerate() {
             match kind {
-                Kind::Component(Ink::Clock) => engine.clocks.push(e as u32),
+                // Observed (general boards): a clock is on at tick 0 and flips at every multiple of the interval.
+                Kind::Component(Ink::Clock) => {
+                    engine.clocks.push(e as u32);
+                    engine.on[e] = true;
+                }
                 Kind::Component(Ink::LatchOn) => engine.on[e] = true,
                 Kind::Component(ink @ (Ink::Not | Ink::Nor | Ink::Nand | Ink::Xnor)) => engine.on[e] = engine.evaluate(e, *ink),
                 _ => {}
@@ -113,9 +117,11 @@ impl Engine {
             Ink::Xnor => active % 2 == 0,
             // Observed: toggles once per input that rose, so two inputs rising together cancel out.
             Ink::LatchOn | Ink::LatchOff => self.on[e] != (risen() % 2 == 1),
-            // Clocks flip from the schedule in `step`, never from their inputs (model, question 13).
+            // Clocks flip from the schedule in `step`, never from their inputs (observed).
             Ink::Clock => self.on[e],
-            other => unreachable!("{other} has no component rule yet; the netlist or the gate refuses it"),
+            // Timer and Random get their rules in milestone M3. Until then the gate refuses them,
+            // and with --allow-unverified they simply never change.
+            _ => self.on[e],
         }
     }
 }

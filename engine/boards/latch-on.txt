@@ -1,0 +1,17 @@
+labels = on
+ticks = 0..3
+covers = Latch On
+probe.latch_on_with_rising_input = 1,9
+probe.latch_on_with_idle_input = 6,9
+
+.L....l
+.W....W
+.5....5
+.R....R
+.L....L
+.W....W
+.5....5
+.R....R
+EEE..EEE
+EEE..EEE
+EEE..EEE

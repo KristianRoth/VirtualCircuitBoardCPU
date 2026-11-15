@@ -78,6 +78,20 @@ The game refused to simulate the board and listed these in the Event Log:
 - A colour-2 pair with a colour-9 entrance between its two tunnels gave no error.
 - All tunnels in `32-bit-alu-try.vcb` satisfy these rules (the engine's netlist builds it with the same checks).
 
+### Observed on the routing and general boards (2026-11-15)
+Boards `routing-a`, `routing-b`, `general` (clock interval 3) and `general-1` (clock interval 1), sources in `engine/boards/`. Every LED matched the model except the clock's starting state.
+- **Cross:** the horizontal and vertical traces stay separate. A cross joins traces of different colours. Write and Read pixels count as trace pixels at a cross. A gate split by a cross is one gate (OR, XOR, XNOR, AND).
+- **Tunnel:** the colour-2 pair connected and the colour-9 pair stayed separate while interleaved with it.
+- **Bus:** traces are matched by colour, not position; the 6 bus colours are one bus. **The colour that counts is that of the pixel touching the bus:** a colour-2 trace that touches the bus with a colour-9 pixel came out on the colour-9 exit, not the colour-2 one. A bus continues through a cross and through a tunnel pair. Gates of the same ink touching one bus are one gate (AND, XOR, NOT).
+- **Mesh:** two colour-2 traces on separate mesh pixels were joined; a colour-9 trace on a third mesh pixel was not. Matching is by colour.
+- **Wireless:** a Wireless 0 pixel fed in one place drove a Wireless 0 pixel elsewhere; Wireless 1 stayed off.
+- **Clock:** it is **on at tick 0** and flips at every multiple of `clock_interval` (interval 3: on for ticks 0–2, off 3–5, on 6–8; interval 1: on at even ticks). An input on a clock changes nothing.
+- **Latch:** a second input that rises later toggles the latch back. An input that falls does nothing, also when another input rises in the same tick.
+- **Shared Write pixel:** a Write pixel touching a Latch On and a Latch Off carried the Latch On's output, whichever side each was on.
+- **Breakpoint:** a Breakpoint that turns on at tick 7 (its input trace on at tick 6) paused the running game with the counter showing **8**. So the counter at a pause is one more than the tick the Breakpoint turned on. Which tick's state the paused game holds is not yet known (question 17).
+- **Latch On with an input** (`latch-on` board): it is on at tick 0 and is toggled off at tick 1 by an input that is on from the start; with an idle input it stays on. Latch On toggles like Latch Off.
+- **Read and Write pixels inside a trace** are just trace. An LED can drive another component through a Write pixel.
+
 ## VMem
 - **Layout** (verified with `saves/all-inks.vcb.tmp`, filled by hand in the editor): 2^20 words × 32 bits, **big-endian**, so word `i` is bytes `4i..4i+3`. Total 4 MiB. The file always stores the full space; `vmem_settings` only limits which addresses the circuit's pins can reach.
 - **External VMem:** with `vmem_is_external: true`, the inline `vmem_data` is an empty blob (trailer `(2, 0)` only). The memory lives in `<project>.vcbmem` next to the `.vcb`; there is no path field. The `.vcbmem` is raw and uncompressed, 4,194,304 bytes, same layout, no trailer. Verified: a hand-written file with word i = `0x112233_0i` showed in the game's VMem editor as `11 22 33 01, 11 22 33 02, …`.
@@ -160,14 +174,14 @@ Owner: the user (in-game checks) and the engine author (research). Numbers are k
 
 Questions 11–21 come from the v1 design (`vcb-engine-v1.md` lists the interim model and the milestone for each).
 
-11. **Latch, several inputs:** two inputs rising in the same tick: answered 2026-11-15, the latch toggles twice (no change). Still open: one input rises while another is already on; one falls as another rises.
-12. **"Same ink" at cross, tunnel, bus and mesh:** is matching by the colour of the touching trace pixel? Does a cross join traces of different colours? What does a Read or Write pixel touching a tunnel, bus or mesh match? The user is sure that at a bus the same ink continues.
-13. **Clock:** on which tick does a clock first flip, for intervals 1, 2 and 3? Does a clock with an input behave differently?
+11. **Latch, several inputs:** answered 2026-11-15: the latch toggles once per rising input, whatever the other inputs do; falling inputs do nothing.
+12. **"Same ink" at cross, tunnel, bus and mesh:** answered 2026-11-15: matching is by the colour of the touching pixel at a tunnel, bus and mesh; a cross joins traces of any colour. Still unobserved: a Read or Write pixel touching a tunnel, bus or mesh (the CPU has none).
+13. **Clock:** answered 2026-11-15: on at tick 0, flips at multiples of the interval; inputs are ignored.
 14. **Random:** the toggle probability, whether there is one draw per component or per rising input, and which generator (the game is made with Godot).
 15. **VMem locking:** exactly which ticks reject input, and is a rejected toggle lost or delayed?
 16. **VMem read latency:** on which tick after an address pin flips do the content pins show the new word?
-17. **Breakpoint pause:** which counter value does the game show at the pause, relative to the tick the Breakpoint turned on?
+17. **Breakpoint pause:** the counter shows the tick the Breakpoint turned on, plus one (answered 2026-11-15). Still open, before the CPU rung: does the paused game hold the state of that tick or of the next one (does VMem written in the extra tick show)?
 18. **Latch On at tick 0:** answered 2026-11-15: its trace is on at tick 0 and a latch reading it sees a rising edge.
 19. **Assembly and memory:** does a non-empty `assembly` field overwrite `vmem_data` at simulation start? With Persistent Memory covering the program area, does a save after a run contain the assembled program? If yes, programs can be assembled by the game and no hand-encoding or separate assembler is needed.
-20. **Shared Read/Write pixel:** one Read pixel touching two components feeds both (answered 2026-11-15). A shared Write pixel is still unobserved.
+20. **Shared Read/Write pixel:** one Read pixel touching two components feeds both (answered 2026-11-15). A shared Write pixel also connects both (observed on `general`).
 21. **Content width under 32 bits:** what does a write do to the bits above the content width?

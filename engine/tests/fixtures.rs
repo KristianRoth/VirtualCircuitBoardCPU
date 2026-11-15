@@ -75,6 +75,14 @@ fn engine_matches_every_observation() {
             }
         });
         assert!(differences.is_empty(), "{name} disagrees with the game:\n{}", differences.join("\n"));
+
+        // Observed on `general`: when a Breakpoint pauses the game, its counter shows one more than
+        // the tick on which the Breakpoint turned on, which is the engine's stop tick.
+        if let Some(Ok(counter)) = field(&checklist, "- Tick counter when a Breakpoint paused the game (if any):").map(str::parse::<u64>) {
+            let mut engine = Engine::new(&tb.board, Components::build(&tb.board).unwrap()).unwrap();
+            let report = engine.run_until(&StopSet { max_ticks: counter + 10, breakpoint: true }, |_| {});
+            assert_eq!((report.tick + 1, report.reasons), (counter, vec!["breakpoint"]), "{name}: Breakpoint pause");
+        }
     }
 }
 
@@ -105,4 +113,15 @@ fn every_verified_ink_is_on_an_observed_board() {
     for unit in vcb::ink::VERIFIED.iter().chain(vcb::ink::MODELLED) {
         assert!(seen.contains(unit), "{unit} is marked verified but is on no observed board");
     }
+}
+
+#[test]
+fn every_ink_pair_touching_in_the_cpu_is_on_an_observed_board() {
+    let mut observed = BTreeSet::new();
+    for name in fixtures() {
+        observed.extend(vcb::adjacency(&Board::read(&fixture_file(&name, "vcb")).unwrap()).into_keys());
+    }
+    let cpu = Board::read(&engine_dir().join("../32-bit-alu-try.vcb")).unwrap();
+    let missing: Vec<_> = vcb::adjacency(&cpu).into_keys().filter(|pair| !observed.contains(pair)).collect();
+    assert!(missing.is_empty(), "the CPU has touching inks that no observed board covers: {missing:?}");
 }
