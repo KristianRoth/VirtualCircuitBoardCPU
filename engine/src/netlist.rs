@@ -131,18 +131,29 @@ impl Components {
                         }
                     }
                 }
-                // Rule 5: the pixel behind the entrance joins the pixel behind the first matching exit.
+                // Rule 5: a tunnel pixel with ink on one side is an entrance. The ink joins the same ink on the
+                // far side of the next tunnel pixel that has it there. The game refuses a board where an entrance
+                // has no exit, or where another entrance for the same ink comes first (observed 2026-11-15).
                 Px::Tunnel => {
+                    const NAMES: [&str; 4] = ["left to right", "top to bottom", "right to left", "bottom to top"];
                     for d in 0..4 {
                         let Some(behind) = step(i, (d + 2) % 4).filter(|n| px[*n].joinable()) else { continue };
+                        let same_ink = |j: Option<usize>| j.filter(|j| px[*j].joinable() && key(board.inks[*j]) == key(board.inks[behind]));
                         let mut q = step(i, d);
-                        while let Some(exit) = q {
-                            let far = step(exit, d).filter(|far| px[exit] == Px::Tunnel && px[*far].joinable());
-                            if let Some(far) = far.filter(|far| key(board.inks[*far]) == key(board.inks[behind])) {
-                                union(&mut parent, behind, far);
-                                break;
+                        loop {
+                            let Some(t) = q else {
+                                return Err(format!("Tunnel at {},{}: no exit with the same ink ({})", i % w, i / w, NAMES[d]));
+                            };
+                            if px[t] == Px::Tunnel {
+                                if same_ink(step(t, (d + 2) % 4)).is_some() {
+                                    return Err(format!("Tunnel at {},{}: another entrance for the same ink at {},{} comes before an exit ({})", i % w, i / w, t % w, t / w, NAMES[d]));
+                                }
+                                if let Some(far) = same_ink(step(t, d)) {
+                                    union(&mut parent, behind, far);
+                                    break;
+                                }
                             }
-                            q = step(exit, d);
+                            q = step(t, d);
                         }
                     }
                 }
