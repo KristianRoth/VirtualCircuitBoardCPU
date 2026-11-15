@@ -119,6 +119,8 @@ pub struct Engine {
     address: usize,
     /// VMem rejects input to its pins in the tick after an address change.
     locked: bool,
+    /// The word at the new address is loaded into the content pins in that same locked tick.
+    load_pending: bool,
     /// Per entity: 1 for an address pin, 2 for a content pin, 0 otherwise.
     pin_role: Vec<u8>,
 }
@@ -136,7 +138,7 @@ impl Engine {
             None => 1,
         };
         let rng = Rng::new(board.settings.random_seed as u32);
-        let mut engine = Engine { on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, pin_role: vec![0; n], components };
+        let mut engine = Engine { on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, pin_role: vec![0; n], components };
         for (role, pins) in [(1, &engine.components.address_pins), (2, &engine.components.content_pins)] {
             for pin in pins {
                 engine.pin_role[*pin as usize] = role;
@@ -283,18 +285,13 @@ impl Simulation for Engine {
         }
         self.propagate(&flips);
 
-        // 3. VMem (model from the manual and the facts file; questions 15, 16 and 21).
+        // 3. VMem. Observed on the vmem-timing board, tick by tick:
+        //   tick T:   address pins flip. A content change in the same tick still goes to the old address.
+        //   tick T+1: VMem is locked: input to any pin is rejected and lost. The word at the new address
+        //             appears on the content pins in this tick, so readers see it at T+2.
         if !self.components.address_pins.is_empty() || !self.components.content_pins.is_empty() {
-            let flipped = |role| flips.iter().any(|e| self.pin_role[*e as usize] == role);
-            let (address_flipped, content_flipped) = (flipped(1), flipped(2));
-            // A content change goes to the address held before this tick, also when the address changes in the same tick.
-            if content_flipped {
-                self.vmem[self.address] = self.pins_value(&self.components.content_pins);
-            }
-            // Then an address change loads the new word into the content pins. Their traces change in this
-            // tick, so readers see the word on the next one.
-            if address_flipped {
-                self.address = self.pins_value(&self.components.address_pins) as usize;
+            if self.load_pending {
+                self.load_pending = false;
                 let word = self.vmem[self.address];
                 let mut loaded = Vec::new();
                 for (k, &pin) in self.components.content_pins.iter().enumerate() {
@@ -304,6 +301,16 @@ impl Simulation for Engine {
                     }
                 }
                 self.propagate(&loaded);
+            }
+            let flipped = |role| flips.iter().any(|e| self.pin_role[*e as usize] == role);
+            let (address_flipped, content_flipped) = (flipped(1), flipped(2));
+            if content_flipped {
+                // Bits above the content width are written as 0 (model, question 21).
+                self.vmem[self.address] = self.pins_value(&self.components.content_pins);
+            }
+            if address_flipped {
+                self.address = self.pins_value(&self.components.address_pins) as usize;
+                self.load_pending = true;
             }
             self.locked = address_flipped;
         }

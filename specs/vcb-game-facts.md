@@ -119,6 +119,13 @@ Boards `random-vmem-seed-1` and `-2` (`engine/boards/`): a counter on the VMem a
   - A data change on the same tick as an address change goes to the **old** address (`vmem-test2`: address and data changed together, so word 0 = 3).
   - When the address changes, memory loads into the data latches.
   - `vmem-test3` (data delayed through 6 buffers): word 1 = 3 and word 0 = 0 while running.
+- **Tick-by-tick timing** (observed 2026-11-16, `vmem-timing` board: LEDs on two address and two content pins, stepped for ticks 0–18):
+  - When the address pins flip at tick T, the content pins keep their old value during T and take the word at the new address at **tick T+1**. A reader of a content pin sees it at T+2.
+  - **Tick T+1 is the locked tick.** The Event Log reported "input to CONTENT latch rejected while the VMem was locked" for a content toggle sent in that tick, and the same for an ADDRESS latch. The rejected toggle is lost, not delayed.
+  - A content toggle two or more ticks after the address change is accepted and written.
+  - **Address 0 reads back:** the circuit wrote 1 to address 0, moved to address 1 and returned; the content pins showed 1 again. So word 0 is ordinary memory while the simulation runs.
+  - Content and address toggled in the same tick: the content pins show the toggled value for one tick, then the word at the new address. This fits "the write goes to the old address first".
+  - The engine matches all four LEDs at every tick.
 - **`32-bit-alu-try.vcb`:** only a 17-byte test pattern is non-zero (words 1–5). It holds no program.
 
 ## Saves and assembly
@@ -184,7 +191,7 @@ Owner: the user (in-game checks) and the engine author (research). Numbers are k
 4. **`vmem_settings`** (before rung C): what a pin Size other than 1×1 does. The last two values are answered (Persistent Memory From and To). Content width under 32 bits is question 21.
 6. **First-tick behaviour:** answered 2026-11-15, see "Observed on the `gates` board".
 7. **`layers[1]` and `layers[2]`:** presumably decoration. Not needed for v1; the writer emits empty layers.
-8. **VMem address 0** (before rung C): does the circuit always read address 0 as 0, and are writes to it dropped, or does only the editor hide it? Test board: write a value to address 0, read it back onto LEDs, and also preload a non-zero word 0 through `.vcbmem`.
+8. **VMem address 0:** at run time it is ordinary memory: a value written to address 0 reads back (answered 2026-11-16). It is not included in a Persistent Memory save. Still unobserved: whether a non-zero word 0 preloaded in the file reaches the circuit.
 9. **In-game TPS** of the 32-bit board on the Windows PC (speed baseline). Needed before the v2 benchmark.
 10. **Persistent Memory:** answered 2026-11-15, it works (see Saves). Still open: whether the To address is inclusive, and whether the copy happens only on return to edit mode.
 
@@ -194,8 +201,8 @@ Questions 11–21 come from the v1 design (`vcb-engine-v1.md` lists the interim 
 12. **"Same ink" at cross, tunnel, bus and mesh:** answered 2026-11-15: matching is by the colour of the touching pixel at a tunnel, bus and mesh; a cross joins traces of any colour. Still unobserved: a Read or Write pixel touching a tunnel, bus or mesh (the CPU has none).
 13. **Clock:** answered 2026-11-15: on at tick 0, flips at multiples of the interval; inputs are ignored.
 14. **Random:** answered 2026-11-16: MT19937 seeded with `random_seed`, low bit, one draw per evaluation; the output stays on while an input stays on.
-15. **VMem locking:** exactly which ticks reject input, and is a rejected toggle lost or delayed?
-16. **VMem read latency:** on which tick after an address pin flips do the content pins show the new word?
+15. **VMem locking:** answered 2026-11-16: the one tick after an address change; a rejected toggle is lost.
+16. **VMem read latency:** answered 2026-11-16: the tick after the address pins flip.
 17. **Breakpoint pause:** the counter shows the tick the Breakpoint turned on, plus one (answered 2026-11-15). Still open, before the CPU rung: does the paused game hold the state of that tick or of the next one (does VMem written in the extra tick show)?
 18. **Latch On at tick 0:** answered 2026-11-15: its trace is on at tick 0 and a latch reading it sees a rising edge.
 19. **Assembly and memory:** does a non-empty `assembly` field overwrite `vmem_data` at simulation start? With Persistent Memory covering the program area, does a save after a run contain the assembled program? If yes, programs can be assembled by the game and no hand-encoding or separate assembler is needed.

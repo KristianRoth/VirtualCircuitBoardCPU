@@ -139,11 +139,11 @@ A component is never on the dirty list twice. This gives the observed one-tick g
 ### VMem
 - 2^20 big-endian 32-bit words, loaded from the inline blob, or from `<project>.vcbmem` when `vmem_is_external` is true. The `.vcbmem` must be exactly 4,194,304 bytes; the inline blob is then ignored.
 - Address bit k and content bit k are pins at `(x − offsetX·k, y + offsetY·k)`.
-- Step 3 of the tick, in order (model, from the manual and the facts file's observations; questions 15, 16 and 21):
-  1. `prev_address` is the address pins' value at the end of the previous tick.
-  2. If any content pin was flipped by the circuit in this tick's Apply, write the content pins' value to the word at `prev_address`. Bits above the content width are written as 0.
-  3. If any address pin flipped in this tick's Apply, load the word at the new address into the content pins. Pins whose value changes go through the same path as Apply: their traces are recomputed, `rose` is set, and readers are put on the dirty list. Readers therefore see the loaded word on the next tick.
-  4. If an address pin flipped, VMem is locked for the next tick: pins are not evaluated, so input to them is lost. The lock clears after that tick.
+- Step 3 of the tick, in order (observed on the `vmem-timing` board, except where marked):
+  1. If the address changed in the previous tick, the word at the new address is loaded into the content pins now. Pins whose value changes go through the same path as Apply: their traces are recomputed, `rose` is set, and readers are put on the dirty list.
+  2. If any content pin was flipped by the circuit in this tick's Apply, the content pins' value is written to the word at the address held at the end of the previous tick. Bits above the content width are written as 0 (model, question 21).
+  3. If any address pin flipped in this tick's Apply, the new address takes effect, and the next tick is the locked tick: pins are not evaluated in it, so input to them is lost, and step 1 loads the new word.
+- At least 4 address bits and 4 content bits; the game raises smaller values and the engine refuses them.
 - Word 0: zeroed on load with a warning if the file had a non-zero value, until question 8 is answered.
 
 ### The gate: verified, modelled, unverified
@@ -276,10 +276,8 @@ All game questions are in the facts file. This table says which model v1 uses me
 | 17 which state a Breakpoint pause holds | the state of the tick the Breakpoint turned on | M6 start |
 | 22 Random draw order in mixed cases | breadth-first walk of each trace; traces in the order they changed | when a board needs it |
 | 10 persistent To inclusive | compared range avoids the To address | first M5 board |
-| 15 VMem lock ticks | the one tick after an address change; input is lost | M5 done |
-| 16 tick the loaded word is visible | the tick after the address pins flip | M5 done |
 | 21 content width under 32 bits | upper bits written as 0 | M5 done |
-| 8 VMem address 0 | zeroed on load, warn | M5 done |
+| 8 a non-zero word 0 preloaded in the file | zeroed on load, warn | when a board needs it |
 | 4 pin size other than 1×1 | error | M5 done |
 | 19 assembly and Persistent Memory | the script clears `assembly` | M6 start |
 
