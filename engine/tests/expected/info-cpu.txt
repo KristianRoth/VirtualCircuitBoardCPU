@@ -46,3 +46,4 @@ inks: 40
   LED: 1197
   Breakpoint: 2
   Annotation: 1193
+not verified yet: LED, Read, Trace, Tunnel, Latch On, Write, AND, NOT, NAND, Cross, OR, Bus, Latch Off, XNOR, NOR, Buffer, XOR, Clock, Breakpoint, vmem

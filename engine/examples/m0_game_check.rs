@@ -1,11 +1,11 @@
-//! Writes the three boards for the M0 "opens in the game" check into engine/pending/.
+//! Writes the three boards for the M0 "opens in the game" check into saves/pending/.
 //! Run from engine/: cargo run --example m0_game_check
 
 use std::path::Path;
 use vcb::{Board, Ink};
 
 fn main() -> Result<(), String> {
-    let out = Path::new("pending");
+    let out = Path::new("../saves/pending");
     std::fs::create_dir_all(out).map_err(|e| e.to_string())?;
 
     // 1. A board built from scratch: Latch On -> Write -> trace -> Read -> Buffer, at 1000,1000.

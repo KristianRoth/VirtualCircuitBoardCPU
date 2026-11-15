@@ -7,5 +7,7 @@ description = "Tick-exact simulation engine for Virtual Circuit Board .vcb files
 [dependencies]
 base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
+png = "0.18"
 serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
 zstd = "0.13"

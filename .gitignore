@@ -3,4 +3,4 @@ openVCB/
 manual/
 *.vcb.tmp
 engine/target/
-engine/pending/
+saves/pending/
