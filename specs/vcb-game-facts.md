@@ -92,6 +92,9 @@ Boards `routing-a`, `routing-b`, `general` (clock interval 3) and `general-1` (c
 - **Latch On with an input** (`latch-on` board): it is on at tick 0 and is toggled off at tick 1 by an input that is on from the start; with an idle input it stays on. Latch On toggles like Latch Off.
 - **Read and Write pixels inside a trace** are just trace. An LED can drive another component through a Write pixel.
 
+### Small combinations (2026-11-16, `combinations` board)
+A ring oscillator, a NOR SR latch, a NAND D flip-flop, a latch ripple counter and an adder, all laid out on buses with one trace colour per signal. The engine matched all 16 LEDs at every tick 0–15 on the first run, including the ten ticks in which the flip-flop's two outputs flicker together before settling. No new rule was needed.
+
 ### Random, recorded through VMem (2026-11-15)
 Boards `random-vmem-seed-1` and `-2` (`engine/boards/`): a counter on the VMem address pins steps every 24 ticks, and 32 Random pixels wired to the content pins are triggered once per step. Each board ran to address 128 and was saved after returning to edit mode. The saves are `engine/tests/boards/random-vmem-seed-N.after.vcb`: words 1–127 hold 32 bits each, word 0 is 0.
 - **Each trigger is a fresh, fair coin flip.** 50% of the bits are 1, and a bit that was 1 is 1 again in the next word 25% of the time, for both seeds. The two seeds give different words.
