@@ -107,6 +107,11 @@ Boards `random-vmem-seed-1` and `-2` (`engine/boards/`): a counter on the VMem a
 - **This run also confirmed VMem behaviour** with 8 address bits and 32 content bits: a content pin toggled by its input writes the word at the current address; an address change loads the new word (0) into the content pins; an 8-bit counter whose pins all toggle in the same tick steps the address cleanly. The write that went to address 0 does not show in the save.
 - **Saving:** both saves landed in `<name>.vcb.tmp` when the user saved over the open file.
 
+### The CPU running Advent of Code day 1, part 1 (2026-11-16)
+`saves/CPU.vcb` is the user's CPU with its run switch fixed on (a 5×5 latch block changed to Latch On) and the AoC day 1 part 1 program as assembly. With Persistent Memory over the whole of VMem, the game ran to a Breakpoint and paused with the counter at **43,146,513**. The save made after returning to edit mode is `engine/tests/boards/cpu-aoc1p1.after.vcb`.
+- **Persistent Memory captures the assembled program** (question 19): the save holds the code at `0xFF00`–`0xFF3A`, the input at `0x1000`–`0x308F`, the variables `count` (`0x100` = `0x407`) and `input` (`0x101` = `0x3092`), and one stack word at `0xE000`. So the game can assemble programs for the engine.
+- **The engine reproduces the run exactly.** Starting from that memory with the three run-time words set back, it stops on the Breakpoint at tick 43,146,512 (the game's counter minus one, as measured on the `general` board) and all 1,048,575 words equal the game's save.
+
 ## VMem
 - **Layout** (verified with `saves/all-inks.vcb.tmp`, filled by hand in the editor): 2^20 words × 32 bits, **big-endian**, so word `i` is bytes `4i..4i+3`. Total 4 MiB. The file always stores the full space; `vmem_settings` only limits which addresses the circuit's pins can reach.
 - **External VMem:** with `vmem_is_external: true`, the inline `vmem_data` is an empty blob (trailer `(2, 0)` only). The memory lives in `<project>.vcbmem` next to the `.vcb`; there is no path field. The `.vcbmem` is raw and uncompressed, 4,194,304 bytes, same layout, no trailer. Verified: a hand-written file with word i = `0x112233_0i` showed in the game's VMem editor as `11 22 33 01, 11 22 33 02, …`.
@@ -206,7 +211,7 @@ Questions 11–21 come from the v1 design (`vcb-engine-v1.md` lists the interim 
 16. **VMem read latency:** answered 2026-11-16: the tick after the address pins flip.
 17. **Breakpoint pause:** the counter shows the tick the Breakpoint turned on, plus one (answered 2026-11-15). Still open, before the CPU rung: does the paused game hold the state of that tick or of the next one (does VMem written in the extra tick show)?
 18. **Latch On at tick 0:** answered 2026-11-15: its trace is on at tick 0 and a latch reading it sees a rising edge.
-19. **Assembly and memory:** does a non-empty `assembly` field overwrite `vmem_data` at simulation start? With Persistent Memory covering the program area, does a save after a run contain the assembled program? If yes, programs can be assembled by the game and no hand-encoding or separate assembler is needed.
+19. **Assembly and memory:** answered 2026-11-16: a save made after a run with Persistent Memory over the program area contains the assembled program. Not checked: whether a non-empty `assembly` field overwrites words the program does not define (words 1–5 of the old test pattern survived).
 20. **Shared Read/Write pixel:** one Read pixel touching two components feeds both (answered 2026-11-15). A shared Write pixel also connects both (observed on `general`).
 21. **Content width under 32 bits:** answered 2026-11-16: a write sets the bits above the content width to 0.
 22. **Random draw order:** two cases observed and matched by the engine: Randoms along one trace draw in the order a walk from the trace's first pixel reaches them, and Randoms on separate traces that turn on in the same tick draw in board order (left to right on `random-pulse`). The general rule for mixed cases is not known.

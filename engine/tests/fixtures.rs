@@ -188,6 +188,7 @@ fn engine_vmem_matches_every_after_save() {
     let mut names: Vec<String> = std::fs::read_dir(engine_dir().join("tests/boards"))
         .unwrap()
         .filter_map(|entry| entry.unwrap().file_name().to_str()?.strip_suffix(".after.vcb").map(String::from))
+        .filter(|name| !name.starts_with("cpu-")) // the CPU runs are long; see the ignored test below
         .collect();
     names.sort();
     assert!(names.len() >= 3);
@@ -206,4 +207,28 @@ fn engine_vmem_matches_every_after_save() {
             .collect();
         assert!(wrong.is_empty(), "{name} (stopped at tick {}): {} words differ, first: {}", report.tick, wrong.len(), wrong[0]);
     }
+}
+
+/// The user's 32-bit CPU running Advent of Code day 1, part 1.
+///   cpu-aoc1p1.vcb:       the CPU with the program as the game assembled it (taken from the after save,
+///                         with the three words the run changes set back: count, input pointer, one stack word).
+///   cpu-aoc1p1.after.vcb: the game's save after the run, Persistent Memory over all of VMem.
+/// The game paused on a Breakpoint with its counter at 43,146,513, which is the engine's stop tick plus one.
+/// This takes about 8 seconds in a release build and minutes in a debug build, so it is ignored by default:
+///   cargo test --release -- --ignored
+#[test]
+#[ignore]
+fn cpu_runs_advent_of_code_day_1_like_the_game() {
+    let board = Board::read(&fixture_file("cpu-aoc1p1", "vcb")).unwrap();
+    let after = Board::read(&fixture_file("cpu-aoc1p1", "after.vcb")).unwrap();
+    assert!(board.inks == after.inks);
+    assert!(vcb::unverified_units(&board).is_empty());
+
+    let mut engine = Engine::new(&board, Components::build(&board).unwrap(), &Default::default()).unwrap();
+    let report = engine.run_until(&StopSet { max_ticks: 50_000_000, breakpoint: true }, |_| {});
+    assert_eq!((report.tick, report.reasons), (43_146_512, vec!["breakpoint"]));
+    assert_eq!(engine.vmem()[0x100], 0x407, "count");
+    assert_eq!(engine.vmem()[0x101], 0x3092, "input pointer");
+    let wrong = (1..after.vmem.len()).filter(|a| engine.vmem()[*a] != after.vmem[*a]).count();
+    assert_eq!(wrong, 0, "words that differ from the game's save");
 }
