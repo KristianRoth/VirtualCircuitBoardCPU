@@ -71,18 +71,29 @@ fn unverified_inks_are_refused_unless_allowed() {
     assert_eq!(text(&out.stdout), "tick 0: on=0 off=0\ntick 1: on=1 off=0\ntick 2: on=1 off=0\nstopped at tick 2: max-ticks\n");
     assert!(out.stderr.is_empty());
 
-    // Random has no observed fixture yet.
-    let source = d.join("random.txt");
-    std::fs::write(&source, "\nLW5R?\n").unwrap();
-    let random = d.join("random.vcb");
-    assert!(vcb(&["gen", source.to_str().unwrap(), "-o", random.to_str().unwrap()]).status.success());
-    let random = random.to_str().unwrap();
-    assert_fails(vcb(&["run", random, "--ticks", "2"]), "Random at 20,16 is not verified yet");
-
-    let out = vcb(&["run", random, "--ticks", "2", "--allow-unverified"]);
+    // Random is modelled: it runs, with a warning that it is not the game's sequence.
+    let gen = |name: &str, art: &str| {
+        let source = d.join(format!("{name}.txt"));
+        std::fs::write(&source, art).unwrap();
+        let board = d.join(format!("{name}.vcb"));
+        assert!(vcb(&["gen", source.to_str().unwrap(), "-o", board.to_str().unwrap()]).status.success());
+        board.to_str().unwrap().to_string()
+    };
+    let random = gen("random", "\nLW5R?\n");
+    let out = vcb(&["run", &random, "--ticks", "2"]);
     assert!(out.status.success());
-    assert_eq!(text(&out.stdout), "stopped at tick 2: max-ticks (unverified: Random)\n");
-    assert_eq!(text(&out.stderr), "warning: Random is not verified yet\n");
+    assert_eq!(text(&out.stdout), "stopped at tick 2: max-ticks\n");
+    assert_eq!(text(&out.stderr), "warning: Random is modelled, not game-exact\n");
+
+    // Timer has no observed fixture yet.
+    let timer = gen("timer", "\nIW5RE\n");
+    assert_fails(vcb(&["run", &timer, "--ticks", "2"]), "Timer at 16,16 is not verified yet");
+    let no_ticks = vcb(&["run", &timer, "--ticks", "2", "--allow-unverified"]);
+    assert!(!no_ticks.status.success() && text(&no_ticks.stderr).contains("--timer-ticks <n> is required"));
+    let out = vcb(&["run", &timer, "--ticks", "2", "--allow-unverified", "--timer-ticks", "5"]);
+    assert!(out.status.success());
+    assert_eq!(text(&out.stdout), "stopped at tick 2: max-ticks (unverified: Timer)\n");
+    assert_eq!(text(&out.stderr), "warning: Timer is not verified yet\n");
 }
 
 #[test]

@@ -165,19 +165,16 @@ fn timer_flips_every_timer_ticks_and_needs_the_setting() {
 }
 
 #[test]
-fn random_changes_only_after_a_rising_input_and_repeats_per_seed() {
-    // A clock with interval 1 rises at even ticks, so the Random may change only at odd ticks.
+fn random_is_a_coin_flip_per_rising_input_and_repeats_per_seed() {
+    // A clock with interval 1 rises at even ticks and falls at odd ticks. The Random flips a coin on the
+    // tick after each rise and is off again one tick later, once its input is off.
     let source = |seed: u64| format!("clock_interval = 1\nrandom_seed = {seed}\nprobe.random = 4,0\n\nCW5R?");
-    let run = |seed| lit_ticks(&textboard::parse(&source(seed)).unwrap(), 200).remove(0).1;
+    let run = |seed| lit_ticks(&textboard::parse(&source(seed)).unwrap(), 400).remove(0).1;
     let lit = run(1);
     assert_eq!(lit, run(1), "the same seed repeats");
     assert_ne!(lit, run(2), "another seed differs");
-    let on = |t: u64| lit.contains(&t);
-    for t in (2..=200).step_by(2) {
-        assert_eq!(on(t), on(t - 1), "changed at even tick {t}");
-    }
-    let changes = (1..=200).filter(|t| on(*t) != on(*t - 1)).count();
-    assert!((30..=70).contains(&changes), "{changes} changes in 100 draws is not about half");
+    assert!(lit.iter().all(|t| t % 2 == 1), "on only on the tick after a rising input");
+    assert!((70..=130).contains(&lit.len()), "{} ones in 200 draws is not about half", lit.len());
 }
 
 #[test]

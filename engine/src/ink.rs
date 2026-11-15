@@ -125,7 +125,10 @@ pub const VERIFIED: &[&str] = &[
     "Cross", "Tunnel", "Bus", "Mesh", "Wireless", "Clock", "Breakpoint", "Latch On", "Latch Off",
 ];
 /// Units that cannot match the game tick for tick and are only checked for what can be observed.
-pub const MODELLED: &[&str] = &[];
+pub const MODELLED: &[&str] = &[
+    // `random-vmem-seed-1` and `-2`, recorded 2026-11-15: fair coin flips, but the game's generator is unknown.
+    "Random",
+];
 
 impl Ink {
     /// The gate unit this ink belongs to: the ink kind without its colour. `None` for inks without logic.

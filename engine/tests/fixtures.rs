@@ -65,7 +65,8 @@ fn engine_matches_every_observation() {
         let entities: Vec<u32> = tb.probes.iter().map(|p| components.entity_at(p.x, p.y).unwrap()).collect();
         let mut engine = Engine::new(&tb.board, components, &Default::default()).unwrap();
         let mut differences = Vec::new();
-        engine.run_until(&StopSet { max_ticks: *tb.ticks.last().unwrap(), breakpoint: false }, |e| {
+        // Boards without probes (VMem recordings) have no ticks to compare here.
+        engine.run_until(&StopSet { max_ticks: tb.ticks.last().copied().unwrap_or(0), breakpoint: false }, |e| {
             let Some((_, lit)) = observed.iter().find(|(t, _)| *t == e.tick()) else { return };
             for (i, entity) in entities.iter().enumerate() {
                 let (number, engine_says) = (i + 1, e.state()[*entity as usize]);
@@ -124,4 +125,25 @@ fn every_ink_pair_touching_in_the_cpu_is_on_an_observed_board() {
     let cpu = Board::read(&engine_dir().join("../32-bit-alu-try.vcb")).unwrap();
     let missing: Vec<_> = vcb::adjacency(&cpu).into_keys().filter(|pair| !observed.contains(pair)).collect();
     assert!(missing.is_empty(), "the CPU has touching inks that no observed board covers: {missing:?}");
+}
+
+#[test]
+fn recorded_random_words_are_fair_coin_flips() {
+    // The game's own Random output, stored through VMem: 127 words of 32 bits per seed (words 1..=127).
+    // This pins down what was observed; the engine's Random is checked for the same properties in model.rs.
+    for seed in [1, 2] {
+        let name = format!("random-vmem-seed-{seed}");
+        let before = Board::read(&fixture_file(&name, "vcb")).unwrap();
+        let after = Board::read(&fixture_file(&name, "after.vcb")).unwrap();
+        assert!(before.inks == after.inks, "{name}: the run was made on another board");
+        let words = &after.vmem[1..128];
+        assert!(words.iter().all(|w| *w != 0) && after.vmem[128..].iter().all(|w| *w == 0), "{name}: words 1..=127 are filled, nothing after");
+        let ones: u32 = words.iter().map(|w| w.count_ones()).sum();
+        assert!((1900..=2164).contains(&ones), "{name}: {ones} ones in 4064 bits");
+        // A bit that was on is on again in the next word about half the time: every draw is independent.
+        let repeats: u32 = words.windows(2).map(|w| (w[0] & w[1]).count_ones()).sum();
+        assert!((900..=1100).contains(&repeats), "{name}: {repeats} repeated ones");
+    }
+    let (a, b) = (Board::read(&fixture_file("random-vmem-seed-1", "after.vcb")).unwrap(), Board::read(&fixture_file("random-vmem-seed-2", "after.vcb")).unwrap());
+    assert!(a.vmem != b.vmem, "the two seeds gave the same words");
 }
