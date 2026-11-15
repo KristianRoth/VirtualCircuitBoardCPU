@@ -90,8 +90,6 @@ fn routing_a_board_follows_the_model() {
         ("and_through_cross", &[2, 3, 4]),
         ("tunnel_red_on", &[1, 2, 3, 4]),        // skips the tunnel that has another colour behind it
         ("tunnel_yellow_off", &[]),
-        ("tunnel_other_colour", &[]),            // colour 2 in, colour 9 out: not joined
-        ("tunnel_no_exit", &[]),                 // trace, tunnel, trace with no second tunnel: not joined
         ("read_write_inside_trace", &[1, 2, 3, 4]),
         ("led_drives_led", &[2, 3, 4]),
     ]);
@@ -134,6 +132,16 @@ fn general_boards_follow_the_model() {
     let mut engine = Engine::new(&tb.board, Components::build(&tb.board).unwrap()).unwrap();
     let report = engine.run_until(&StopSet { max_ticks: 100, breakpoint: true }, |_| {});
     assert_eq!((report.tick, report.reasons), (7, vec!["breakpoint"]));
+}
+
+#[test]
+fn tunnels_the_game_refuses_are_errors() {
+    // Observed 2026-11-15: the game reports these as compile errors.
+    let error = |art: &str| Components::build(&textboard::parse(&format!("\n{art}")).unwrap().board).err().unwrap();
+    assert!(error("2T..T9").contains("Tunnel at 17,16: no exit with the same ink (left to right)"));
+    assert!(error("5T5").contains("Tunnel at 17,16: no exit with the same ink"));
+    assert!(error("2T.2T.T2").contains("another entrance for the same ink at 20,16"));
+    assert!(Components::build(&textboard::parse("\n2T.9T.T2.T9").unwrap().board).is_ok(), "pairs of different colours may interleave");
 }
 
 #[test]

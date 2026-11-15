@@ -88,7 +88,7 @@ Step 2, adjacency.
 Step 3, joins that depend only on pixels (any order):
 
 4. **Cross:** the pixel left of a cross pixel is joined with the pixel right of it, and the one above with the one below, when both are the same kind (trace with trace of any colour, bus with bus, component with the same component ink). Two touching cross pixels are an error naming the pixel, because the game calls that invalid.
-5. **Tunnel:** for a tunnel pixel P and a direction d, let N be the pixel on the side of P opposite to d. If N is a trace, component or bus pixel, scan from the pixel after P in direction d. At the first tunnel pixel Q whose neighbour in direction d has the same key as N, join N with that neighbour and stop. If the board edge is reached, nothing is joined.
+5. **Tunnel:** for a tunnel pixel P and a direction d, let N be the pixel on the side of P opposite to d. If N is a trace, component or bus pixel, scan from the pixel after P in direction d. At the first tunnel pixel Q whose neighbour in direction d has the same key as N, join N with that neighbour and stop. As in the game (observed), it is an error if the board edge is reached first, or if a tunnel pixel with the same key behind it (another entrance) comes first.
 6. **Mesh:** take every trace, component and bus pixel that touches a mesh pixel anywhere on the board. Pixels with the same key are joined.
 
 Step 4, bus (after step 3, because steps 4–6 can merge buses):

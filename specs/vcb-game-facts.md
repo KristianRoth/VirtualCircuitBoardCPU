@@ -70,6 +70,14 @@ The user stepped ticks 0–6 and listed the lit LEDs. Each LED is one tick behin
 - **One Read pixel touching two LEDs** lights both. (Question 20, for Read.)
 - **Re-check** (`engine/boards/gates-recheck.txt`, same day): AND with (on, off) and with (off, on) is off; AND (on, on) is on; NAND (on, off) is on; AND and NAND with no inputs are off; NOT with no inputs is on. The first report of LED 7 on the `gates` board (AND with one input on, lit) was a slip.
 
+### Tunnel compile errors (observed 2026-11-15, first version of `routing-a`)
+The game refused to simulate the board and listed these in the Event Log:
+- **"Unmatched tunnel (left to right / right to left). No exit tunnel with the same ink as the entrance was found until the edge of the board."** Reported for a colour-2 trace entering a tunnel whose only exit had a colour-9 trace behind it, and for trace–tunnel–trace in a row with no second tunnel. So **"same ink" at a tunnel means the same trace colour**, and an entrance without an exit is an error, not an open end.
+- **"Unexpected tunnel entrance. While looking for a tunnel exit another entrance for the SAME ink was found."** Reported when a right-to-left scan for colour 9 reached another colour-9 entrance first. Scans run along the whole row, so tunnels of unrelated circuits on one row see each other.
+- A tunnel pixel with ink on one side is an entrance for the direction away from that ink. The error's coordinates are the ink pixel behind the entrance (unmatched) or the entrance that was found (unexpected).
+- A colour-2 pair with a colour-9 entrance between its two tunnels gave no error.
+- All tunnels in `32-bit-alu-try.vcb` satisfy these rules (the engine's netlist builds it with the same checks).
+
 ## VMem
 - **Layout** (verified with `saves/all-inks.vcb.tmp`, filled by hand in the editor): 2^20 words × 32 bits, **big-endian**, so word `i` is bytes `4i..4i+3`. Total 4 MiB. The file always stores the full space; `vmem_settings` only limits which addresses the circuit's pins can reach.
 - **External VMem:** with `vmem_is_external: true`, the inline `vmem_data` is an empty blob (trailer `(2, 0)` only). The memory lives in `<project>.vcbmem` next to the `.vcb`; there is no path field. The `.vcbmem` is raw and uncompressed, 4,194,304 bytes, same layout, no trailer. Verified: a hand-written file with word i = `0x112233_0i` showed in the game's VMem editor as `11 22 33 01, 11 22 33 02, …`.
