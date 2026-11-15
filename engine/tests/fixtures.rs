@@ -63,7 +63,7 @@ fn engine_matches_every_observation() {
 
         let components = Components::build(&tb.board).unwrap();
         let entities: Vec<u32> = tb.probes.iter().map(|p| components.entity_at(p.x, p.y).unwrap()).collect();
-        let mut engine = Engine::new(&tb.board, components).unwrap();
+        let mut engine = Engine::new(&tb.board, components, &Default::default()).unwrap();
         let mut differences = Vec::new();
         engine.run_until(&StopSet { max_ticks: *tb.ticks.last().unwrap(), breakpoint: false }, |e| {
             let Some((_, lit)) = observed.iter().find(|(t, _)| *t == e.tick()) else { return };
@@ -79,7 +79,7 @@ fn engine_matches_every_observation() {
         // Observed on `general`: when a Breakpoint pauses the game, its counter shows one more than
         // the tick on which the Breakpoint turned on, which is the engine's stop tick.
         if let Some(Ok(counter)) = field(&checklist, "- Tick counter when a Breakpoint paused the game (if any):").map(str::parse::<u64>) {
-            let mut engine = Engine::new(&tb.board, Components::build(&tb.board).unwrap()).unwrap();
+            let mut engine = Engine::new(&tb.board, Components::build(&tb.board).unwrap(), &Default::default()).unwrap();
             let report = engine.run_until(&StopSet { max_ticks: counter + 10, breakpoint: true }, |_| {});
             assert_eq!((report.tick + 1, report.reasons), (counter, vec!["breakpoint"]), "{name}: Breakpoint pause");
         }

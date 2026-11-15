@@ -17,7 +17,7 @@ fn lit_ticks(tb: &TextBoard, ticks: u64) -> Vec<(String, Vec<u64>)> {
     let components = Components::build(&tb.board).unwrap();
     let entities: Vec<u32> = tb.probes.iter().map(|p| components.entity_at(p.x, p.y).unwrap()).collect();
     let mut lit: Vec<(String, Vec<u64>)> = tb.probes.iter().map(|p| (p.label.clone(), Vec::new())).collect();
-    let mut engine = Engine::new(&tb.board, components).unwrap();
+    let mut engine = Engine::new(&tb.board, components, &Default::default()).unwrap();
     engine.run_until(&StopSet { max_ticks: ticks, breakpoint: false }, |e| {
         for (i, entity) in entities.iter().enumerate() {
             if e.state()[*entity as usize] {
@@ -129,7 +129,7 @@ fn general_boards_follow_the_model() {
 
     // The Breakpoint shares the LED's input, so the run stops on the tick the LED lights.
     let tb = load("general.txt");
-    let mut engine = Engine::new(&tb.board, Components::build(&tb.board).unwrap()).unwrap();
+    let mut engine = Engine::new(&tb.board, Components::build(&tb.board).unwrap(), &Default::default()).unwrap();
     let report = engine.run_until(&StopSet { max_ticks: 100, breakpoint: true }, |_| {});
     assert_eq!((report.tick, report.reasons), (7, vec!["breakpoint"]));
 }
@@ -153,6 +153,34 @@ fn latch_on_board_follows_the_model() {
 }
 
 #[test]
+fn timer_flips_every_timer_ticks_and_needs_the_setting() {
+    let tb = textboard::parse("probe.timer = 0,0\n\nIW5RE").unwrap();
+    let build = |timer_ticks| Engine::new(&tb.board, Components::build(&tb.board).unwrap(), &vcb::sim::Options { timer_ticks });
+    assert!(build(None).err().unwrap().contains("--timer-ticks"));
+    assert!(build(Some(0)).err().unwrap().contains("--timer-ticks"));
+    let mut engine = build(Some(4)).unwrap();
+    let mut on = Vec::new();
+    engine.run_until(&StopSet { max_ticks: 12, breakpoint: false }, |e| on.push(e.state()[0]));
+    assert_eq!(on, [true, true, true, true, false, false, false, false, true, true, true, true, false]);
+}
+
+#[test]
+fn random_changes_only_after_a_rising_input_and_repeats_per_seed() {
+    // A clock with interval 1 rises at even ticks, so the Random may change only at odd ticks.
+    let source = |seed: u64| format!("clock_interval = 1\nrandom_seed = {seed}\nprobe.random = 4,0\n\nCW5R?");
+    let run = |seed| lit_ticks(&textboard::parse(&source(seed)).unwrap(), 200).remove(0).1;
+    let lit = run(1);
+    assert_eq!(lit, run(1), "the same seed repeats");
+    assert_ne!(lit, run(2), "another seed differs");
+    let on = |t: u64| lit.contains(&t);
+    for t in (2..=200).step_by(2) {
+        assert_eq!(on(t), on(t - 1), "changed at even tick {t}");
+    }
+    let changes = (1..=200).filter(|t| on(*t) != on(*t - 1)).count();
+    assert!((30..=70).contains(&changes), "{changes} changes in 100 draws is not about half");
+}
+
+#[test]
 fn touching_crosses_are_an_error() {
     let tb = textboard::parse("\n5++5").unwrap();
     assert!(Components::build(&tb.board).err().unwrap().contains("Cross at 17,16"));
@@ -166,11 +194,11 @@ fn clock_flips_every_interval_and_a_breakpoint_stops_the_run() {
     assert_eq!(lit[0].1, [0, 1, 2, 6, 7, 8]);
     assert_eq!(lit[1].1, [1, 2, 3, 7, 8, 9]);
 
-    let mut engine = Engine::new(&tb.board, Components::build(&tb.board).unwrap()).unwrap();
+    let mut engine = Engine::new(&tb.board, Components::build(&tb.board).unwrap(), &Default::default()).unwrap();
     let report = engine.run_until(&StopSet { max_ticks: 100, breakpoint: true }, |_| {});
     assert_eq!((report.tick, report.reasons), (1, vec!["breakpoint"]));
 
-    let mut engine = Engine::new(&tb.board, Components::build(&tb.board).unwrap()).unwrap();
+    let mut engine = Engine::new(&tb.board, Components::build(&tb.board).unwrap(), &Default::default()).unwrap();
     let report = engine.run_until(&StopSet { max_ticks: 1, breakpoint: true }, |_| {});
     assert_eq!((report.tick, report.reasons), (1, vec!["breakpoint", "max-ticks"]));
 }
@@ -180,7 +208,7 @@ fn two_runs_give_the_same_state_every_tick() {
     let tb = load("gates.txt");
     let run = || {
         let mut states = Vec::new();
-        let mut engine = Engine::new(&tb.board, Components::build(&tb.board).unwrap()).unwrap();
+        let mut engine = Engine::new(&tb.board, Components::build(&tb.board).unwrap(), &Default::default()).unwrap();
         engine.run_until(&StopSet { max_ticks: 20, breakpoint: false }, |e| states.push(e.state().to_vec()));
         states
     };

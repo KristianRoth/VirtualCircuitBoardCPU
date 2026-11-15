@@ -1,0 +1,26 @@
+labels = on
+clock_interval = 1
+random_seed = 2
+ticks = 0..20
+covers = Random, Timer, 14
+probe.random_1 = 1,9
+probe.random_2 = 6,9
+probe.random_3 = 11,9
+probe.random_4 = 16,9
+probe.random_5 = 21,9
+probe.random_6 = 26,9
+probe.random_7 = 31,9
+probe.random_8 = 36,9
+probe.timer = 42,8
+
+.C
+.W
+.555555555555555555555555555555555555
+.R....R....R....R....R....R....R....R.....I
+.?....?....?....?....?....?....?....?.....W
+.W....W....W....W....W....W....W....W.....5
+.5....5....5....5....5....5....5....5.....R
+.R....R....R....R....R....R....R....R....EEE
+EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE...EEE
+EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE...EEE
+EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE
