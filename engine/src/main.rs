@@ -4,7 +4,7 @@ use std::process::ExitCode;
 use std::time::Instant;
 use vcb::format::Result;
 use vcb::netlist::Components;
-use vcb::sim::{Engine, Simulation, StopSet};
+use vcb::sim::{Engine, Options, Simulation, StopSet};
 use vcb::Board;
 
 #[derive(Parser)]
@@ -56,6 +56,12 @@ struct RunArgs {
     allow_unverified: bool,
     #[arg(long)]
     clock_interval: Option<i64>,
+    /// Seed for Random ink. Overrides the board's seed and its time-seed setting.
+    #[arg(long)]
+    seed: Option<i64>,
+    /// How many ticks one Timer interval lasts. Required when the board has Timer ink.
+    #[arg(long)]
+    timer_ticks: Option<u64>,
     /// Print ticks, wall time and ticks per second.
     #[arg(long)]
     stats: bool,
@@ -145,6 +151,18 @@ fn run(args: RunArgs) -> Result<()> {
         board.settings.clock_interval = n;
     }
 
+    // Random: a time seed is printed so the run can be repeated with --seed.
+    let has_random = board.inks.contains(&vcb::Ink::Random);
+    match args.seed {
+        Some(seed) => board.settings.random_seed = seed,
+        None if board.settings.random_is_time_seed && has_random => {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?;
+            board.settings.random_seed = now.as_nanos() as i64;
+            println!("seed: {}", board.settings.random_seed);
+        }
+        None => {}
+    }
+
     // The gate: refuse inks nobody has observed in the game yet.
     let unverified = vcb::unverified_units(&board);
     if let Some((unit, at)) = unverified.first().filter(|_| !args.allow_unverified) {
@@ -153,6 +171,11 @@ fn run(args: RunArgs) -> Result<()> {
     }
     for (unit, _) in &unverified {
         eprintln!("warning: {unit} is not verified yet");
+    }
+    for unit in vcb::ink::MODELLED {
+        if board.inks.iter().any(|ink| ink.unit() == Some(unit)) {
+            eprintln!("warning: {unit} is modelled, not game-exact");
+        }
     }
 
     let components = Components::build(&board)?;
@@ -183,7 +206,7 @@ fn run(args: RunArgs) -> Result<()> {
         check_overwrite(path, args.force)?;
     }
 
-    let mut engine = Engine::new(&board, components)?;
+    let mut engine = Engine::new(&board, components, &Options { timer_ticks: args.timer_ticks })?;
     let mut render_error = None;
     let started = Instant::now();
     let stops = StopSet { max_ticks: args.ticks, breakpoint: !args.no_breakpoint };

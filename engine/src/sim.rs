@@ -48,6 +48,28 @@ pub trait Simulation {
     }
 }
 
+/// Run settings that do not come from the board file.
+#[derive(Default)]
+pub struct Options {
+    /// How many ticks one Timer interval lasts. Required when the board has Timer ink,
+    /// because the game's timers follow the wall clock.
+    pub timer_ticks: Option<u64>,
+}
+
+/// The engine's own generator for Random ink (splitmix64). It is repeatable per seed.
+/// Whether it matches the game's sequence is facts question 14.
+struct Rng(u64);
+
+impl Rng {
+    fn next_bit(&mut self) -> bool {
+        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        (z ^ (z >> 31)) >> 63 == 1
+    }
+}
+
 pub struct Engine {
     pub components: Components,
     /// Per entity: a trace is on when any writer is on; a component's value is its output.
@@ -60,16 +82,27 @@ pub struct Engine {
     queued: Vec<bool>,
     clocks: Vec<u32>,
     clock_interval: u64,
+    timers: Vec<u32>,
+    timer_ticks: u64,
+    rng: Rng,
     tick: u64,
     breakpoint_hit: bool,
 }
 
 impl Engine {
     /// The reset state (tick 0).
-    pub fn new(board: &Board, components: Components) -> Result<Engine> {
+    pub fn new(board: &Board, components: Components, options: &Options) -> Result<Engine> {
         let clock_interval = u64::try_from(board.settings.clock_interval).ok().filter(|n| *n > 0).ok_or("clock_interval: must be at least 1")?;
         let n = components.kinds.len();
-        let mut engine = Engine { on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_interval, tick: 0, breakpoint_hit: false, components };
+        let has_timer = components.kinds.contains(&Kind::Component(Ink::Timer));
+        let timer_ticks = match options.timer_ticks {
+            Some(0) => return Err("--timer-ticks: must be at least 1".into()),
+            Some(n) => n,
+            None if has_timer => return Err("the board has Timer ink: --timer-ticks <n> is required, because the game's timers follow the wall clock".into()),
+            None => 1,
+        };
+        let rng = Rng(board.settings.random_seed as u64);
+        let mut engine = Engine { on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, components };
         let c = &engine.components;
         // Observed (gates board): at tick 0 every component already has the output it gets with all
         // inputs off, so Latch On and the inverting gates start on.
@@ -78,6 +111,11 @@ impl Engine {
                 // Observed (general boards): a clock is on at tick 0 and flips at every multiple of the interval.
                 Kind::Component(Ink::Clock) => {
                     engine.clocks.push(e as u32);
+                    engine.on[e] = true;
+                }
+                // Model: a timer starts like a clock.
+                Kind::Component(Ink::Timer) => {
+                    engine.timers.push(e as u32);
                     engine.on[e] = true;
                 }
                 Kind::Component(Ink::LatchOn) => engine.on[e] = true,
@@ -119,9 +157,9 @@ impl Engine {
             Ink::LatchOn | Ink::LatchOff => self.on[e] != (risen() % 2 == 1),
             // Clocks flip from the schedule in `step`, never from their inputs (observed).
             Ink::Clock => self.on[e],
-            // Timer and Random get their rules in milestone M3. Until then the gate refuses them,
-            // and with --allow-unverified they simply never change.
-            _ => self.on[e],
+            // Timers flip from the schedule too.
+            Ink::Timer => self.on[e],
+            other => unreachable!("{other} is not evaluated here"),
         }
     }
 }
@@ -138,12 +176,21 @@ impl Simulation for Engine {
         for &e in &dirty {
             self.queued[e as usize] = false;
             let Kind::Component(ink) = c.kinds[e as usize] else { unreachable!("only components are queued") };
-            if self.evaluate(e as usize, ink) != self.on[e as usize] {
+            let flip = if ink == Ink::Random {
+                // Model (question 14): one draw per component per tick in which an input rose; toggles with probability 1/2.
+                c.reads[e as usize].iter().any(|t| self.rose[*t as usize]) && self.rng.next_bit()
+            } else {
+                self.evaluate(e as usize, ink) != self.on[e as usize]
+            };
+            if flip {
                 flips.push(e);
             }
         }
         if self.tick % self.clock_interval == 0 {
             flips.extend(&self.clocks);
+        }
+        if self.tick % self.timer_ticks == 0 {
+            flips.extend(&self.timers);
         }
 
         // 2. Apply.
