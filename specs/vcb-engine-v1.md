@@ -182,7 +182,7 @@ vcb run <board.vcb> ...
 - Sources live in `engine/boards/` and are committed when written.
 
 ## Fixtures and the observation workflow
-1. Claude writes `engine/boards/<name>.txt` and runs `vcb gen` into `engine/pending/` (git-ignored). This produces `<name>.vcb`, `<name>.checklist.md` and `<name>.png`.
+1. Claude writes `engine/boards/<name>.txt` and runs `vcb gen` into `saves/pending/` (git-ignored). This produces `<name>.vcb`, `<name>.checklist.md` and `<name>.png`.
 2. **The checklist** has a header with the board file's SHA-256, then one row per probe and listed tick with an empty on/off box, a field for the tick counter at any Breakpoint pause, and a field for the counter when the user stopped. It carries no engine prediction (a test checks this).
 3. **Finding and reading probes:** every probed signal drives its own LED block of at least 3×3 pixels, and the LED blocks sit in one row in checklist order. The PNG shows the board with each LED block numbered, and the checklist gives each one's board `x,y`. A lit LED is unambiguous.
 4. **Budget:** at most 24 probes and 16 listed ticks per board. Questions of the form "the first tick at which X turns on" are preferred to full tables.
@@ -258,7 +258,7 @@ Each milestone ends with a local commit once its tests pass. Commits stage expli
 
 | # | Milestone | Needs from the user |
 |---|---|---|
-| M0 | `.gitignore` (`manual/`, `.DS_Store`, `engine/pending/`, `engine/target/`, `*.vcb.tmp`); first commit of `specs/`, the `.vcb` saves and the engine skeleton; `format` reader/writer, `ink`, `vcb info`, reader error tests | open one written board and one re-written copy of the CPU in the game and confirm they load |
+| M0 | `.gitignore` (`manual/`, `.DS_Store`, `saves/pending/`, `engine/target/`, `*.vcb.tmp`); first commit of `specs/`, the `.vcb` saves and the engine skeleton; `format` reader/writer, `ink`, `vcb info`, reader error tests | open one written board and one re-written copy of the CPU in the game and confirm they load |
 | M1 | `textboard`, `vcb gen`, netlist steps 2 and 5 (rules 1, 2, 8, 9, without wireless), the core, `--probe`, `--render`, the gate; board **gates**: Read/Write, connected-once rule, 8 gates, Latch On/Off, LED, first tick, tick 0 | observe 1 board |
 | M2 | Netlist rules 3–7 and wireless; `vcb info --adjacency`; boards **routing** (cross, tunnel, bus, mesh, wireless, colour cases, and every ink pair the CPU census shows) and **general** (clock intervals 1–3, clock with an input, breakpoint counter, latch edge cases) | observe 2–3 boards |
 | M3 | Board **random-timer**. Exit: Timer is modelled; Random is verified or modelled after the one-session generator search. This milestone cannot block M4–M6 | observe 1 board |

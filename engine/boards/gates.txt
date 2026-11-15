@@ -1,0 +1,38 @@
+ticks = 0..6
+covers = rule1, rule2, rule8, rule9, Buffer, AND, OR, XOR, NOT, NAND, NOR, XNOR, Latch, LED, 6, 11, 18, 20
+probe.latch_on = 1,9
+probe.buffer = 6,9
+probe.not_no_input = 11,9
+probe.two_colours = 16,9
+probe.no_write = 21,9
+probe.buffer_10 = 26,9
+probe.and_10 = 31,9
+probe.or_10 = 36,9
+probe.xor_10 = 41,9
+probe.not_10 = 46,9
+probe.nand_10 = 51,9
+probe.nor_10 = 56,9
+probe.xnor_10 = 61,9
+probe.and_11 = 66,9
+probe.xor_11 = 71,9
+probe.xnor_11 = 76,9
+probe.and_no_input = 81,9
+probe.nand_no_input = 86,9
+probe.xor_two_reads = 91,9
+probe.latch_from_not = 96,9
+probe.latch_two_rises = 101,9
+probe.latch_from_latch_on = 106,9
+probe.shared_read_left = 111,9
+probe.shared_read_right = 115,9
+
+......L..................L.l..L.l..L.l..L.l..L.l..L.l..L.l..L.l..L.L..L.L..L.L.............L....N...N.N...L
+......W..................W.W..W.W..W.W..W.W..W.W..W.W..W.W..W.W..W.W..W.W..W.W.............W....W...W.W...W
+......5..................5.5..5.5..5.5..5.5..5.5..5.5..5.5..5.5..5.5..5.5..5.5............555...5...5.5...5
+......R.........L........R.R..R.R..R.R..R.R..R.R..R.R..R.R..R.R..R.R..R.R..R.R............R.R...R...R.R...R
+.L....B....N....W....L...BBB..AAA..OOO..XXX..NNN..DDD..QQQ..ZZZ..AAA..XXX..ZZZ...A....D...XXX...l...lll...l
+.W....W....W....1....5....W....W....W....W....W....W....W....W....W....W....W....W....W....W....W....W....W......L
+.5....5....5....9....5....5....5....5....5....5....5....5....5....5....5....5....5....5....5....5....5....5......W
+.R....R....R....R....R....R....R....R....R....R....R....R....R....R....R....R....R....R....R....R....R....R......5
+EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEEREEE
+EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE.EEE
+EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE..EEE.EEE

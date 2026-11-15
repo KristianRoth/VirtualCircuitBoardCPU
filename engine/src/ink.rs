@@ -114,6 +114,46 @@ impl Ink {
     }
 }
 
+/// The game version every table and fixture in this crate is taken from.
+pub const GAME_VERSION: &str = "1.0.1";
+
+/// Units whose behaviour is proven by observed fixtures. A unit is added in the same commit as those fixtures.
+pub const VERIFIED: &[&str] = &[];
+/// Units that cannot match the game tick for tick and are only checked for what can be observed.
+pub const MODELLED: &[&str] = &[];
+
+impl Ink {
+    /// The gate unit this ink belongs to: the ink kind without its colour. `None` for inks without logic.
+    pub fn unit(self) -> Option<&'static str> {
+        Some(match self {
+            Empty | Annotation | Filler => return None,
+            Trace(_) => "Trace",
+            Bus(_) => "Bus",
+            Wireless(_) => "Wireless",
+            Read => "Read",
+            Write => "Write",
+            Cross => "Cross",
+            Tunnel => "Tunnel",
+            Mesh => "Mesh",
+            Buffer => "Buffer",
+            And => "AND",
+            Or => "OR",
+            Xor => "XOR",
+            Not => "NOT",
+            Nand => "NAND",
+            Nor => "NOR",
+            Xnor => "XNOR",
+            LatchOn => "Latch On",
+            LatchOff => "Latch Off",
+            Clock => "Clock",
+            Timer => "Timer",
+            Random => "Random",
+            Led => "LED",
+            Breakpoint => "Breakpoint",
+        })
+    }
+}
+
 impl fmt::Display for Ink {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
