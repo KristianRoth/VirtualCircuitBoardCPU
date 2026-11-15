@@ -25,6 +25,8 @@ pub trait Simulation {
     fn state(&self) -> &[bool];
     /// True if a Breakpoint turned on during the last tick.
     fn breakpoint_hit(&self) -> bool;
+    /// The VMem words as they are now.
+    fn vmem(&self) -> &[u32];
 
     /// Runs until a stop condition holds. `each_tick` is called for the starting state and after every tick.
     fn run_until(&mut self, stops: &StopSet, mut each_tick: impl FnMut(&Self)) -> StopReport
@@ -112,6 +114,13 @@ pub struct Engine {
     rng: Rng,
     tick: u64,
     breakpoint_hit: bool,
+    vmem: Vec<u32>,
+    /// The address the address pins held at the end of the last tick.
+    address: usize,
+    /// VMem rejects input to its pins in the tick after an address change.
+    locked: bool,
+    /// Per entity: 1 for an address pin, 2 for a content pin, 0 otherwise.
+    pin_role: Vec<u8>,
 }
 
 impl Engine {
@@ -127,7 +136,12 @@ impl Engine {
             None => 1,
         };
         let rng = Rng::new(board.settings.random_seed as u32);
-        let mut engine = Engine { on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, components };
+        let mut engine = Engine { on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, pin_role: vec![0; n], components };
+        for (role, pins) in [(1, &engine.components.address_pins), (2, &engine.components.content_pins)] {
+            for pin in pins {
+                engine.pin_role[*pin as usize] = role;
+            }
+        }
         let c = &engine.components;
         // Observed (gates board): at tick 0 every component already has the output it gets with all
         // inputs off, so Latch On and the inverting gates start on.
@@ -186,6 +200,38 @@ impl Engine {
     }
 }
 
+impl Engine {
+    /// The number held by a group of pins, bit 0 first.
+    fn pins_value(&self, pins: &[u32]) -> u32 {
+        pins.iter().enumerate().map(|(k, pin)| (self.on[*pin as usize] as u32) << k).sum()
+    }
+
+    /// After components or pins flipped: recompute the traces they write, mark the ones that rose,
+    /// and queue the readers of every trace that changed for the next tick.
+    fn propagate(&mut self, flipped: &[u32]) {
+        let c = &self.components;
+        for &e in flipped {
+            for &t in &c.writes[e as usize] {
+                let now = c.writers[t as usize].iter().any(|w| self.on[*w as usize]);
+                if now == self.on[t as usize] {
+                    continue;
+                }
+                self.on[t as usize] = now;
+                if now {
+                    self.rose[t as usize] = true;
+                    self.rose_list.push(t);
+                }
+                for &reader in &c.readers[t as usize] {
+                    if !self.queued[reader as usize] {
+                        self.queued[reader as usize] = true;
+                        self.dirty.push(reader);
+                    }
+                }
+            }
+        }
+    }
+}
+
 impl Simulation for Engine {
     fn step(&mut self) {
         self.tick += 1;
@@ -197,7 +243,13 @@ impl Simulation for Engine {
         let mut flips = Vec::new();
         for &e in &dirty {
             self.queued[e as usize] = false;
-            let Kind::Component(ink) = c.kinds[e as usize] else { unreachable!("only components are queued") };
+            let ink = match c.kinds[e as usize] {
+                Kind::Component(ink) => ink,
+                // A pin is a latch, except that VMem rejects its input while locked (the input is lost).
+                Kind::Pin if self.locked => continue,
+                Kind::Pin => Ink::LatchOff,
+                Kind::Trace => unreachable!("traces are never queued"),
+            };
             let next = if ink == Ink::Random {
                 // Observed (random recorder boards): a Random draws every time it is evaluated, that is, whenever
                 // one of its inputs changed. When an input rose the output is that draw. The draw made when the
@@ -229,24 +281,31 @@ impl Simulation for Engine {
                 self.breakpoint_hit = true;
             }
         }
-        for &e in &flips {
-            for &t in &c.writes[e as usize] {
-                let now = c.writers[t as usize].iter().any(|w| self.on[*w as usize]);
-                if now == self.on[t as usize] {
-                    continue;
-                }
-                self.on[t as usize] = now;
-                if now {
-                    self.rose[t as usize] = true;
-                    self.rose_list.push(t);
-                }
-                for &reader in &c.readers[t as usize] {
-                    if !self.queued[reader as usize] {
-                        self.queued[reader as usize] = true;
-                        self.dirty.push(reader);
+        self.propagate(&flips);
+
+        // 3. VMem (model from the manual and the facts file; questions 15, 16 and 21).
+        if !self.components.address_pins.is_empty() || !self.components.content_pins.is_empty() {
+            let flipped = |role| flips.iter().any(|e| self.pin_role[*e as usize] == role);
+            let (address_flipped, content_flipped) = (flipped(1), flipped(2));
+            // A content change goes to the address held before this tick, also when the address changes in the same tick.
+            if content_flipped {
+                self.vmem[self.address] = self.pins_value(&self.components.content_pins);
+            }
+            // Then an address change loads the new word into the content pins. Their traces change in this
+            // tick, so readers see the word on the next one.
+            if address_flipped {
+                self.address = self.pins_value(&self.components.address_pins) as usize;
+                let word = self.vmem[self.address];
+                let mut loaded = Vec::new();
+                for (k, &pin) in self.components.content_pins.iter().enumerate() {
+                    if self.on[pin as usize] != (word >> k & 1 == 1) {
+                        self.on[pin as usize] = !self.on[pin as usize];
+                        loaded.push(pin);
                     }
                 }
+                self.propagate(&loaded);
             }
+            self.locked = address_flipped;
         }
     }
 
@@ -260,5 +319,9 @@ impl Simulation for Engine {
 
     fn breakpoint_hit(&self) -> bool {
         self.breakpoint_hit
+    }
+
+    fn vmem(&self) -> &[u32] {
+        &self.vmem
     }
 }

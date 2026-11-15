@@ -11,6 +11,8 @@ pub const NONE: u32 = u32::MAX;
 pub enum Kind {
     Trace,
     Component(Ink),
+    /// A VMem address or content pin: a latch the game places at the positions in `vmem_settings`.
+    Pin,
 }
 
 pub struct Components {
@@ -26,6 +28,9 @@ pub struct Components {
     /// Trace → the components that read / write it. Empty for components.
     pub readers: Vec<Vec<u32>>,
     pub writers: Vec<Vec<u32>>,
+    /// VMem pins as entity ids, bit 0 first. Empty when VMem is disabled.
+    pub address_pins: Vec<u32>,
+    pub content_pins: Vec<u32>,
 }
 
 /// What a pixel is to the netlist builder.
@@ -40,6 +45,8 @@ enum Px {
     Cross,
     Tunnel,
     Mesh,
+    /// A VMem pin. Each pin is its own entity and never merges with a neighbour.
+    Pin,
 }
 
 impl Px {
@@ -87,7 +94,34 @@ fn union(parent: &mut [u32], a: usize, b: usize) {
 impl Components {
     pub fn build(board: &Board) -> Result<Components> {
         let (w, h) = (board.width, board.height);
-        let px: Vec<Px> = board.inks.iter().map(|ink| Px::of(*ink)).collect();
+        let mut px: Vec<Px> = board.inks.iter().map(|ink| Px::of(*ink)).collect();
+
+        // Step 1: the game replaces whatever is drawn at the pin positions with pin latches.
+        let mut pin_pixels: [Vec<usize>; 2] = Default::default();
+        if board.settings.vmem_enabled {
+            let s = &board.settings.vmem_settings;
+            for (group, name, base, max_bits) in [(0, "address", 0, 20), (1, "content", 7, 32)] {
+                let [bits, x, y, offset_x, offset_y, size_x, size_y] = s[base..base + 7] else { unreachable!() };
+                if !(0..=max_bits).contains(&bits) {
+                    return Err(format!("vmem_settings: {bits} {name} bits, expected 0 to {max_bits}"));
+                }
+                if (size_x, size_y) != (1, 1) {
+                    return Err(format!("vmem_settings: {name} pin size {size_x}x{size_y} is not supported, only 1x1 has been observed"));
+                }
+                for k in 0..bits {
+                    let (px_x, px_y) = (x - offset_x * k, y + offset_y * k);
+                    if px_x < 0 || px_y < 0 || px_x >= w as i64 || px_y >= h as i64 {
+                        return Err(format!("vmem_settings: {name} pin {k} at {px_x},{px_y} is outside the board"));
+                    }
+                    let i = px_y as usize * w + px_x as usize;
+                    if px[i] == Px::Pin {
+                        return Err(format!("vmem_settings: {name} pin {k} at {px_x},{px_y} is on top of another pin"));
+                    }
+                    px[i] = Px::Pin;
+                    pin_pixels[group].push(i);
+                }
+            }
+        }
         let mut parent: Vec<u32> = (0..(w * h) as u32).collect();
         // The pixel one step from `i` in direction `d` (0 right, 1 down, 2 left, 3 up), if it is on the board.
         let step = |i: usize, d: usize| match d {
@@ -182,6 +216,7 @@ impl Components {
         let kind_at: Vec<Option<Kind>> = px.iter().map(|p| match p {
             Px::Trace => Some(Kind::Trace),
             Px::Component(ink) => Some(Kind::Component(*ink)),
+            Px::Pin => Some(Kind::Pin),
             _ => None,
         }).collect();
 
@@ -209,7 +244,11 @@ impl Components {
             writes: vec![Vec::new(); n],
             readers: vec![Vec::new(); n],
             writers: vec![Vec::new(); n],
+            address_pins: Vec::new(),
+            content_pins: Vec::new(),
         };
+        c.address_pins = pin_pixels[0].iter().map(|i| c.entity_of[*i]).collect();
+        c.content_pins = pin_pixels[1].iter().map(|i| c.entity_of[*i]).collect();
         // Connections are found by walking each trace from its first pixel, breadth first. The order matters
         // only for Random: components are evaluated in the order their Read pixels are reached, and each draws
         // from the one generator. Observed on the random recorder boards; the walk order itself is a model (question 22).

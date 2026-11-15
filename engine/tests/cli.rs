@@ -135,3 +135,30 @@ fn render_keeps_the_colour_when_on_and_halves_it_when_off() {
     assert_eq!(at(4 * 8 + 3, 2 * 8 + 3), [0x49, 0x7f, 0x31, 0xff]); // the buffer that is off
     assert_eq!(at(4 * 8 + 3, 8 + 3), [0, 0, 0, 0]); // empty
 }
+
+#[test]
+fn watch_and_dump_show_the_memory_after_the_run() {
+    let d = dir("vmem");
+    let board = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/boards/vmem-preserve.vcb");
+    let board = board.to_str().unwrap();
+    let dump = d.join("dump.txt");
+    let run = |extra: &[&str]| vcb(&[&["run", board, "--ticks", "100", "--allow-unverified"], extra].concat());
+
+    let out = run(&["--watch", "1,0x2", "--dump-vmem", dump.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert!(text(&out.stdout).ends_with("0x00000001 = 0x00000003 (3)\n0x00000002 = 0x00000000 (0)\n"), "{}", text(&out.stdout));
+    let lines: Vec<String> = std::fs::read_to_string(&dump).unwrap().lines().map(String::from).collect();
+    assert_eq!(lines.len(), 1 << 20);
+    assert_eq!(&lines[..3], ["0x00000000 0x00000000", "0x00000001 0x00000003", "0x00000002 0x00000000"]);
+    assert_eq!(lines[(1 << 20) - 1], "0x000FFFFF 0x00000000");
+
+    let error = |out: Output| text(&out.stderr).lines().last().unwrap().to_string();
+    assert!(error(run(&["--dump-vmem", dump.to_str().unwrap()])).contains("already exists"));
+    assert!(run(&["--dump-vmem", dump.to_str().unwrap(), "--force"]).status.success());
+    assert!(error(run(&["--dump-vmem", board, "--force"])).contains("is an input file"));
+    assert!(error(run(&["--watch", "0x100000"])).contains("not a VMem address"));
+
+    // A board without VMem has nothing to watch or dump.
+    let plain = gen_two_buffers(&d);
+    assert_fails(vcb(&["run", &plain, "--ticks", "1", "--watch", "1"]), "is_vmem_enabled");
+}
