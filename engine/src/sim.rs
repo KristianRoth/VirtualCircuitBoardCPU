@@ -69,38 +69,50 @@ impl Engine {
     pub fn new(board: &Board, components: Components) -> Result<Engine> {
         let clock_interval = u64::try_from(board.settings.clock_interval).ok().filter(|n| *n > 0).ok_or("clock_interval: must be at least 1")?;
         let n = components.kinds.len();
-        let mut on = vec![false; n];
-        let mut clocks = Vec::new();
-        for (e, kind) in components.kinds.iter().enumerate() {
+        let mut engine = Engine { on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_interval, tick: 0, breakpoint_hit: false, components };
+        let c = &engine.components;
+        // Observed (gates board): at tick 0 every component already has the output it gets with all
+        // inputs off, so Latch On and the inverting gates start on.
+        for (e, kind) in c.kinds.iter().enumerate() {
             match kind {
-                Kind::Component(Ink::LatchOn) => on[e] = true,
-                Kind::Component(Ink::Clock) => clocks.push(e as u32),
+                Kind::Component(Ink::Clock) => engine.clocks.push(e as u32),
+                Kind::Component(Ink::LatchOn) => engine.on[e] = true,
+                Kind::Component(ink @ (Ink::Not | Ink::Nor | Ink::Nand | Ink::Xnor)) => engine.on[e] = engine.evaluate(e, *ink),
                 _ => {}
             }
         }
-        // A trace written by a Latch On is already on at tick 0, with no rising edge (model, question 18).
+        // Their traces are on at tick 0 too, and count as having just risen: a latch reading one toggles at tick 1.
         for e in 0..n {
-            if components.kinds[e] == Kind::Trace {
-                on[e] = components.writers[e].iter().any(|w| on[*w as usize]);
+            if c.kinds[e] == Kind::Trace && c.writers[e].iter().any(|w| engine.on[*w as usize]) {
+                engine.on[e] = true;
+                engine.rose[e] = true;
+                engine.rose_list.push(e as u32);
+                for &reader in &c.readers[e] {
+                    if !engine.queued[reader as usize] {
+                        engine.queued[reader as usize] = true;
+                        engine.dirty.push(reader);
+                    }
+                }
             }
         }
-        Ok(Engine { components, on, rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), queued: vec![false; n], clocks, clock_interval, tick: 0, breakpoint_hit: false })
+        Ok(engine)
     }
 
     /// The output a component would have after this tick, from the trace states of the previous tick.
     fn evaluate(&self, e: usize, ink: Ink) -> bool {
         let reads = &self.components.reads[e];
         let active = reads.iter().filter(|t| self.on[**t as usize]).count();
-        let any_rose = || reads.iter().any(|t| self.rose[*t as usize]);
+        let risen = || reads.iter().filter(|t| self.rose[**t as usize]).count();
         match ink {
             Ink::Buffer | Ink::Or | Ink::Led | Ink::Breakpoint => active > 0,
             Ink::Not | Ink::Nor => active == 0,
             Ink::And => active > 0 && active == reads.len(),
-            Ink::Nand => !(active > 0 && active == reads.len()),
+            // Observed: a NAND with no inputs is off, so this is not the exact inverse of AND.
+            Ink::Nand => active < reads.len(),
             Ink::Xor => active % 2 == 1,
             Ink::Xnor => active % 2 == 0,
-            // Toggles once if at least one input rose (model, question 11).
-            Ink::LatchOn | Ink::LatchOff => self.on[e] != any_rose(),
+            // Observed: toggles once per input that rose, so two inputs rising together cancel out.
+            Ink::LatchOn | Ink::LatchOff => self.on[e] != (risen() % 2 == 1),
             // Clocks flip from the schedule in `step`, never from their inputs (model, question 13).
             Ink::Clock => self.on[e],
             other => unreachable!("{other} has no component rule yet; the netlist or the gate refuses it"),
@@ -113,12 +125,7 @@ impl Simulation for Engine {
         self.tick += 1;
         let c = &self.components;
 
-        // 0. Schedule. On tick 1 every component is evaluated once (model, question 6).
-        let dirty = if self.tick == 1 {
-            (0..c.kinds.len() as u32).filter(|e| c.kinds[*e as usize] != Kind::Trace).collect()
-        } else {
-            std::mem::take(&mut self.dirty)
-        };
+        let dirty = std::mem::take(&mut self.dirty);
 
         // 1. Evaluate: decide every flip before anything changes.
         let mut flips = Vec::new();

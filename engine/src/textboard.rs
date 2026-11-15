@@ -48,6 +48,7 @@ fn number<T: std::str::FromStr>(text: &str, line: usize) -> Result<T> {
 pub fn parse(text: &str) -> Result<TextBoard> {
     let mut board = Board::new(BOARD_SIZE, BOARD_SIZE);
     let (mut probes, mut ticks, mut covers): (Vec<Probe>, Vec<u64>, Vec<String>) = Default::default();
+    let mut labels = false;
     let mut lines = text.lines().enumerate().map(|(i, l)| (i + 1, l));
 
     for (n, line) in lines.by_ref() {
@@ -71,6 +72,7 @@ pub fn parse(text: &str) -> Result<TextBoard> {
                 Some((a, b)) => ticks = (number(a, n)?..=number(b, n)?).collect(),
                 None => ticks = value.split(',').map(|t| number(t, n)).collect::<Result<_>>()?,
             },
+            "labels" => labels = value == "on",
             "covers" => covers = value.split(',').map(|c| c.trim().to_string()).collect(),
             _ => return Err(format!("line {n}: unknown key \"{key}\"")),
         }
@@ -98,7 +100,36 @@ pub fn parse(text: &str) -> Result<TextBoard> {
             return Err(format!("probe \"{}\": no ink at {},{} (relative to the art)", p.label, p.x - ORIGIN.0, p.y - ORIGIN.1));
         }
     }
+    if labels {
+        for (i, p) in probes.iter().enumerate() {
+            draw_label(&mut board, i + 1, p)?;
+        }
+    }
     Ok(TextBoard { board, probes, ticks, covers })
+}
+
+/// Draws the probe's number in Annotation ink below its LED block, so it can be read in the game.
+/// Even numbers go one row of digits lower, because neighbouring two-digit labels would overlap.
+fn draw_label(board: &mut Board, number: usize, p: &Probe) -> Result<()> {
+    let mut bottom = p.y;
+    while bottom + 1 < board.height && board.ink(p.x, bottom + 1) == board.ink(p.x, p.y) {
+        bottom += 1;
+    }
+    let text = number.to_string();
+    let top = bottom + 2 + if number % 2 == 0 { 6 } else { 0 };
+    let left = (p.x + 1).saturating_sub(text.len() * 2);
+    for (n, ch) in text.bytes().enumerate() {
+        for (row, bits) in crate::render::DIGITS[(ch - b'0') as usize].iter().enumerate() {
+            for col in (0..3).filter(|col| bits & (4 >> col) != 0) {
+                let (x, y) = (left + n * 4 + col, top + row);
+                if x >= board.width || y >= board.height || board.ink(x, y) != Ink::Empty {
+                    return Err(format!("probe \"{}\": no room for its label at {x},{y}", p.label));
+                }
+                board.set(x, y, Ink::Annotation);
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -137,5 +168,17 @@ mod tests {
         assert!(error("speed = 1\n\nL").contains("line 1: unknown key \"speed\""));
         assert!(error("probe.a = 0,0\nprobe.a = 0,0\n\nL").contains("used twice"));
         assert!(error("probe.a = 1,0\n\nL.").contains("probe \"a\": no ink at 1,0"));
+    }
+
+    #[test]
+    fn labels_are_drawn_in_annotation_ink_below_the_probe() {
+        let tb = parse("labels = on\nprobe.a = 1,0\n\nEEE\nEEE").unwrap();
+        // "1" in the 3x5 font is .#. / ##. / .#. / .#. / ###, two rows below the block, centred on the probe.
+        let row = |y: usize| (16..19).map(|x| tb.board.ink(x, 16 + y) == Ink::Annotation).collect::<Vec<_>>();
+        assert_eq!(row(2), [false; 3]);
+        assert_eq!(row(3), [false, true, false]);
+        assert_eq!(row(4), [true, true, false]);
+        assert_eq!(row(7), [true, true, true]);
+        assert!(parse("labels = on\nprobe.a = 1,0\n\nEEE\n\n\n\nLLL").is_err(), "label would overwrite art");
     }
 }
