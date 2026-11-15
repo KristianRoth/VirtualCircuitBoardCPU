@@ -1,0 +1,22 @@
+labels = on
+ticks = 0..3
+covers = AND, NAND
+probe.and_10 = 1,9
+probe.and_01 = 6,9
+probe.and_11 = 11,9
+probe.nand_10 = 16,9
+probe.and_no_input = 21,9
+probe.nand_no_input = 26,9
+probe.not_no_input = 31,9
+
+L.l..l.L..L.L..L.l
+W.W..W.W..W.W..W.W
+5.5..5.5..5.5..5.5
+R.R..R.R..R.R..R.R
+AAA..AAA..AAA..DDD...A....D....N
+.W....W....W....W....W....W....W
+.5....5....5....5....5....5....5
+.R....R....R....R....R....R....R
+EEE..EEE..EEE..EEE..EEE..EEE..EEE
+EEE..EEE..EEE..EEE..EEE..EEE..EEE
+EEE..EEE..EEE..EEE..EEE..EEE..EEE

@@ -8,7 +8,7 @@ use crate::netlist::Components;
 const MAX_BYTES: usize = 64 << 20;
 
 /// 3x5 digits, one row per byte, most significant of the low three bits on the left.
-const DIGITS: [[u8; 5]; 10] = [
+pub const DIGITS: [[u8; 5]; 10] = [
     [7, 5, 5, 5, 7], [2, 6, 2, 2, 7], [7, 1, 7, 4, 7], [7, 1, 7, 1, 7], [5, 5, 7, 1, 1],
     [7, 4, 7, 1, 7], [7, 4, 7, 5, 7], [7, 1, 1, 1, 1], [7, 5, 7, 5, 7], [7, 5, 7, 1, 7],
 ];

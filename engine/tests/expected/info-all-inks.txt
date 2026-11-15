@@ -54,4 +54,4 @@ inks: 48
   Wireless 3: 1
   Annotation: 1
   Filler: 1
-not verified yet: Cross, Tunnel, Mesh, Bus, Write, Read, Trace, Buffer, AND, OR, XOR, NOT, NAND, NOR, XNOR, Latch On, Latch Off, Clock, Timer, Random, LED, Breakpoint, Wireless
+not verified yet: Cross, Tunnel, Mesh, Bus, Latch On, Latch Off, Clock, Timer, Random, Breakpoint, Wireless

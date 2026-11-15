@@ -72,10 +72,10 @@ fn unverified_inks_are_refused_unless_allowed() {
     assert_eq!(
         text(&out.stdout),
         "tick 0: on=0 off=0\ntick 1: on=1 off=0\ntick 2: on=1 off=0\n\
-         stopped at tick 2: max-ticks (unverified: Latch On, Write, Trace, Read, Buffer, Latch Off)\n"
+         stopped at tick 2: max-ticks (unverified: Latch On, Latch Off)\n"
     );
     let stderr = text(&out.stderr);
-    assert_eq!(stderr.lines().count(), 6, "{stderr}");
+    assert_eq!(stderr.lines().count(), 2, "{stderr}");
     assert!(stderr.contains("warning: Latch On is not verified yet"));
 }
 

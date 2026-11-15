@@ -30,38 +30,38 @@ fn lit_ticks(tb: &TextBoard, ticks: u64) -> Vec<(String, Vec<u64>)> {
 
 #[test]
 fn gates_board_follows_the_model() {
-    // The tick at which each LED first lights; `None` = never. Once lit, every LED on this board stays lit.
-    let expected: [(&str, Option<u64>); 24] = [
-        ("latch_on", Some(1)),      // the Latch On trace is on at tick 0, the LED follows one tick later
-        ("buffer", Some(2)),        // one more tick per gate
-        ("not_no_input", Some(2)),  // NOT turns on at tick 1
-        ("two_colours", Some(1)),   // trace colours merge
-        ("no_write", None),         // a latch touching a trace directly drives nothing
-        ("buffer_10", Some(2)),
-        ("and_10", None),
-        ("or_10", Some(2)),
-        ("xor_10", Some(2)),
-        ("not_10", None),
-        ("nand_10", Some(2)),
-        ("nor_10", None),
-        ("xnor_10", None),
-        ("and_11", Some(2)),
-        ("xor_11", None),
-        ("xnor_11", Some(2)),
-        ("and_no_input", None),
-        ("nand_no_input", Some(2)),
-        ("xor_two_reads", Some(2)),       // two Read pixels on one trace count as one input
-        ("latch_from_not", Some(3)),      // the NOT's trace rises at tick 1, the latch toggles at tick 2
-        ("latch_two_rises", Some(3)),     // two inputs rising together toggle once
-        ("latch_from_latch_on", None),    // a trace that is on from tick 0 has no rising edge
-        ("shared_read_left", Some(1)),    // one Read pixel feeds both LEDs it touches
-        ("shared_read_right", Some(1)),
+    // The ticks at which each LED is lit.
+    let always = |from: u64| (from..=6).collect::<Vec<u64>>();
+    let expected: [(&str, Vec<u64>); 24] = [
+        ("latch_on", always(1)),          // the Latch On trace is on at tick 0, the LED follows one tick later
+        ("buffer", always(2)),            // one more tick per gate
+        ("not_no_input", always(1)),      // inverting gates are already on at tick 0
+        ("two_colours", always(1)),       // trace colours merge
+        ("no_write", vec![]),             // a latch touching a trace directly drives nothing
+        ("buffer_10", always(2)),
+        ("and_10", vec![]),
+        ("or_10", always(2)),
+        ("xor_10", always(2)),
+        ("not_10", vec![1]),              // on at tick 0, off once it sees its input
+        ("nand_10", always(1)),
+        ("nor_10", vec![1]),
+        ("xnor_10", vec![1]),
+        ("and_11", always(2)),
+        ("xor_11", vec![]),
+        ("xnor_11", always(1)),
+        ("and_no_input", vec![]),
+        ("nand_no_input", vec![]),        // off, unlike a NOT with no input
+        ("xor_two_reads", always(2)),     // two Read pixels on one trace count as one input
+        ("latch_from_not", always(2)),    // a trace that is on at tick 0 counts as a rising edge at tick 1
+        ("latch_two_rises", vec![]),      // two inputs rising together toggle twice: no change
+        ("latch_from_latch_on", always(2)),
+        ("shared_read_left", always(1)),  // one Read pixel feeds both LEDs it touches
+        ("shared_read_right", always(1)),
     ];
     let lit = lit_ticks(&load("gates.txt"), 6);
     assert_eq!(lit.len(), expected.len());
-    for ((label, ticks), (name, first)) in lit.iter().zip(expected) {
+    for ((label, ticks), (name, want)) in lit.iter().zip(expected) {
         assert_eq!(label, name);
-        let want: Vec<u64> = first.map(|t| (t..=6).collect()).unwrap_or_default();
         assert_eq!(*ticks, want, "{label}");
     }
 }

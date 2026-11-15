@@ -56,6 +56,20 @@ Changing `led_palette` probably only affects display colours; unverified.
 - The game has a step mode and a tick counter that starts at 0 (reported by the user, 2026-11-15).
 - The manual's rules for every ink are under "What the User Guide says". What is still unobserved is in questions 3 and 6.
 
+### Observed on the `gates` board (2026-11-15, `engine/boards/gates.txt`)
+The user stepped ticks 0–6 and listed the lit LEDs. Each LED is one tick behind the signal it shows.
+- **Tick 0 already has outputs.** Nothing is lit at tick 0, but Latch On and the inverting gates are already on at tick 0 and so are their traces: an LED on a Latch On trace, and an LED on a NOT with no input, both light at tick 1. (Answers questions 6 and 18.)
+- **Inverting gates start on, then react.** NOT, NOR and XNOR with one input on were lit at tick 1 only: they start on (all inputs off) and turn off one tick after seeing their input.
+- **Gate delay is one tick** per component (Latch On → Buffer → LED lights at tick 2).
+- **Trace colours merge**, and a latch touching a trace with no Write pixel drives nothing.
+- **Gate rules match the manual** for Buffer, OR, XOR, NOT, NAND, NOR, XNOR with inputs (on, off) and for AND, XOR, XNOR with (on, on).
+- **No inputs:** NOT is on; AND is off; NAND is **off**. So NAND behaves as "A < T", not as the exact inverse of AND.
+- **Connected once:** an XOR joined to one trace by two Read pixels counts one input (it was on).
+- **A trace that is on at tick 0 is a rising edge for a latch:** a Latch Off reading a Latch On's trace, or a NOT's trace, turned on at tick 1. (Question 18.)
+- **Latch, two inputs rising in the same tick:** no change. The latch toggles once per rising input. (Question 11, first case.)
+- **One Read pixel touching two LEDs** lights both. (Question 20, for Read.)
+- **Re-check** (`engine/boards/gates-recheck.txt`, same day): AND with (on, off) and with (off, on) is off; AND (on, on) is on; NAND (on, off) is on; AND and NAND with no inputs are off; NOT with no inputs is on. The first report of LED 7 on the `gates` board (AND with one input on, lit) was a slip.
+
 ## VMem
 - **Layout** (verified with `saves/all-inks.vcb.tmp`, filled by hand in the editor): 2^20 words × 32 bits, **big-endian**, so word `i` is bytes `4i..4i+3`. Total 4 MiB. The file always stores the full space; `vmem_settings` only limits which addresses the circuit's pins can reach.
 - **External VMem:** with `vmem_is_external: true`, the inline `vmem_data` is an empty blob (trailer `(2, 0)` only). The memory lives in `<project>.vcbmem` next to the `.vcb`; there is no path field. The `.vcbmem` is raw and uncompressed, 4,194,304 bytes, same layout, no trailer. Verified: a hand-written file with word i = `0x112233_0i` showed in the game's VMem editor as `11 22 33 01, 11 22 33 02, …`.
@@ -130,7 +144,7 @@ Owner: the user (in-game checks) and the engine author (research). Numbers are k
 
 3. **The newer inks** (before the ladder rung that uses them): the manual gives the rules above. What is still unobserved is split into questions 11–21. Timer is answered: real milliseconds.
 4. **`vmem_settings`** (before rung C): what a pin Size other than 1×1 does. The last two values are answered (Persistent Memory From and To). Content width under 32 bits is question 21.
-6. **First-tick behaviour** (before rung A is finished): which components the game evaluates on tick 1 (NOT, NOR, NAND, XNOR).
+6. **First-tick behaviour:** answered 2026-11-15, see "Observed on the `gates` board".
 7. **`layers[1]` and `layers[2]`:** presumably decoration. Not needed for v1; the writer emits empty layers.
 8. **VMem address 0** (before rung C): does the circuit always read address 0 as 0, and are writes to it dropped, or does only the editor hide it? Test board: write a value to address 0, read it back onto LEDs, and also preload a non-zero word 0 through `.vcbmem`.
 9. **In-game TPS** of the 32-bit board on the Windows PC (speed baseline). Needed before the v2 benchmark.
@@ -138,14 +152,14 @@ Owner: the user (in-game checks) and the engine author (research). Numbers are k
 
 Questions 11–21 come from the v1 design (`vcb-engine-v1.md` lists the interim model and the milestone for each).
 
-11. **Latch, several inputs:** two inputs rise in the same tick: one toggle or two? Also: one input rises while another is already on; one falls as another rises.
+11. **Latch, several inputs:** two inputs rising in the same tick: answered 2026-11-15, the latch toggles twice (no change). Still open: one input rises while another is already on; one falls as another rises.
 12. **"Same ink" at cross, tunnel, bus and mesh:** is matching by the colour of the touching trace pixel? Does a cross join traces of different colours? What does a Read or Write pixel touching a tunnel, bus or mesh match? The user is sure that at a bus the same ink continues.
 13. **Clock:** on which tick does a clock first flip, for intervals 1, 2 and 3? Does a clock with an input behave differently?
 14. **Random:** the toggle probability, whether there is one draw per component or per rising input, and which generator (the game is made with Godot).
 15. **VMem locking:** exactly which ticks reject input, and is a rejected toggle lost or delayed?
 16. **VMem read latency:** on which tick after an address pin flips do the content pins show the new word?
 17. **Breakpoint pause:** which counter value does the game show at the pause, relative to the tick the Breakpoint turned on?
-18. **Latch On at tick 0:** is its trace already on at tick 0, and does a latch reading that trace see a rising edge?
+18. **Latch On at tick 0:** answered 2026-11-15: its trace is on at tick 0 and a latch reading it sees a rising edge.
 19. **Assembly and memory:** does a non-empty `assembly` field overwrite `vmem_data` at simulation start? With Persistent Memory covering the program area, does a save after a run contain the assembled program? If yes, programs can be assembled by the game and no hand-encoding or separate assembler is needed.
-20. **Shared Read/Write pixel:** does one Read or Write pixel touching two components connect both?
+20. **Shared Read/Write pixel:** one Read pixel touching two components feeds both (answered 2026-11-15). A shared Write pixel is still unobserved.
 21. **Content width under 32 bits:** what does a write do to the bits above the content width?
