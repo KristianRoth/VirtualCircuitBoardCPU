@@ -112,6 +112,9 @@ fn every_verified_ink_is_on_an_observed_board() {
     for name in fixtures() {
         let board = Board::read(&fixture_file(&name, "vcb")).unwrap();
         seen.extend(board.inks.iter().filter_map(|ink| ink.unit()));
+        if board.settings.vmem_enabled {
+            seen.insert("vmem");
+        }
     }
     for unit in vcb::ink::VERIFIED.iter().chain(vcb::ink::MODELLED) {
         assert!(seen.contains(unit), "{unit} is marked verified but is on no observed board");

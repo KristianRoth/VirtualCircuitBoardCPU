@@ -141,7 +141,7 @@ A component is never on the dirty list twice. This gives the observed one-tick g
 - Address bit k and content bit k are pins at `(x − offsetX·k, y + offsetY·k)`.
 - Step 3 of the tick, in order (observed on the `vmem-timing` board, except where marked):
   1. If the address changed in the previous tick, the word at the new address is loaded into the content pins now. Pins whose value changes go through the same path as Apply: their traces are recomputed, `rose` is set, and readers are put on the dirty list.
-  2. If any content pin was flipped by the circuit in this tick's Apply, the content pins' value is written to the word at the address held at the end of the previous tick. Bits above the content width are written as 0 (model, question 21).
+  2. If any content pin was flipped by the circuit in this tick's Apply, the content pins' value is written to the word at the address held at the end of the previous tick. Bits above the content width are written as 0 (observed).
   3. If any address pin flipped in this tick's Apply, the new address takes effect, and the next tick is the locked tick: pins are not evaluated in it, so input to them is lost, and step 1 loads the new word.
 - At least 4 address bits and 4 content bits; the game raises smaller values and the engine refuses them.
 - Word 0: zeroed on load with a warning if the file had a non-zero value, until question 8 is answered.
@@ -196,7 +196,7 @@ Sources of truth: the `.txt` for layout and probe positions; the observed checkl
 
 Fixture checks (tests):
 - **Probe fixtures:** the engine's probe values equal the observed values at every listed tick.
-- **VMem fixtures:** after the stop rule, the engine's VMem equals the "after" save's VMem over the persistent region, and at least one word in that region differs between the board and its "after" save. Until the To question (10) is answered, test data stays off the To address.
+- **VMem fixtures:** after the stop rule, the engine's VMem equals the "after" save's VMem over the persistent region, and at least one word in that region differs between the board and its "after" save. The range is From..To inclusive, without word 0, which the game does not save.
 - **Reproducible boards:** each committed `.txt` parses to the same pixels and settings as the committed `.vcb`, and that file's SHA-256 equals the one in `<name>.observed.md`.
 - **Game version:** every fixture's `game_version` equals the `GAME_VERSION` constant.
 - **CPU coverage:** every pair of touching inks reported by `vcb info --adjacency` for the CPU board also occurs in an observed fixture.
@@ -264,8 +264,8 @@ Each milestone ends with a local commit once its tests pass. Commits stage expli
 | M2 | Netlist rules 3–7 and wireless; `vcb info --adjacency`; boards **routing** (cross, tunnel, bus, mesh, wireless, colour cases, and every ink pair the CPU census shows) and **general** (clock intervals 1–3, clock with an input, breakpoint counter, latch edge cases) | observe 2–3 boards | done 2026-11-15 (fixtures `routing-a`, `routing-b`, `general`, `general-1`, `latch-on`) |
 | M3 | Board **random-timer**. Exit: Timer is modelled; Random is verified or modelled after the one-session generator search. This milestone cannot block M4–M6 | observe 1 board | done 2026-11-16: Random verified (MT19937, exact), Timer modelled (fixtures `random-vmem-seed-1/2`, `random-pulse`) |
 | M4 | Rung B on one board, within the checklist budget: ring oscillator, SR latch, D flip-flop, 4-bit counter, 4-bit adder with 4 input pairs | observe 1 board | done 2026-11-16 (fixture `combinations`: 16 LEDs × 16 ticks matched; the adder adds a fixed 3 to the counter instead of using 4 input pairs) |
-| M5 | Rung C: pins, VMem write, read back, address 0, locking, content precedence, content width under 32 bits, the To-inclusive question first; `.vcbmem` reading tested without the game | run, checklist and save per board | next |
-| M6 | Rung D as described under "CPU fixtures". First: question 19 (five minutes in the game) | edit the CPU to run without clicks; run and save |  |
+| M5 | Rung C: pins, VMem write, read back, address 0, locking, content precedence, content width under 32 bits, the To-inclusive question first; `.vcbmem` reading tested without the game | run, checklist and save per board | done 2026-11-16 (fixtures `vmem-preserve`, `random-vmem-seed-1/2`, `vmem-timing`); a preloaded non-zero word 0 and pin sizes other than 1×1 are unobserved |
+| M6 | Rung D as described under "CPU fixtures". First: question 19 (five minutes in the game) | edit the CPU to run without clicks; run and save | next |
 | M7 | Address watch, `--quiescent`, TOML config, Ctrl-C, progress output | nothing |  |
 
 ## Open questions
@@ -275,8 +275,6 @@ All game questions are in the facts file. This table says which model v1 uses me
 |---|---|---|
 | 17 which state a Breakpoint pause holds | the state of the tick the Breakpoint turned on | M6 start |
 | 22 Random draw order in mixed cases | breadth-first walk of each trace; traces in the order they changed | when a board needs it |
-| 10 persistent To inclusive | compared range avoids the To address | first M5 board |
-| 21 content width under 32 bits | upper bits written as 0 | M5 done |
 | 8 a non-zero word 0 preloaded in the file | zeroed on load, warn | when a board needs it |
 | 4 pin size other than 1×1 | error | M5 done |
 | 19 assembly and Persistent Memory | the script clears `assembly` | M6 start |
@@ -317,4 +315,5 @@ Decisions still owed by the user:
 - Boards for the user → generated into `saves/pending/`, never under `engine/`.
 - M2 boards observed 2026-11-15 → every routing rule matched the model; the clock starts on at tick 0 (changed); the game's counter at a Breakpoint pause is the stop tick plus one; unmatched or nested tunnels are compile errors in the game and errors in the engine. Verified now: every ink except Timer and Random.
 - CPU coverage → every pair of touching inks in the CPU is on an observed board (test).
+- VMem (2026-11-16) → the game loads the new word one tick after an address change, in the locked tick (engine changed); at least 4 address and content bits; upper bits written as 0; To inclusive; word 0 readable at run time but not saved. VMem is verified.
 - Random (2026-11-15/16) → recorded through VMem at the user's suggestion (127 words × 32 bits per seed). At the user's request the game's executable was checked for known generator constants; it contains MT19937's. MT19937 with the board's seed, low bit, two draws per trigger reproduces every recorded bit, so Random is verified and game-exact. The game's encrypted scripts were not opened.

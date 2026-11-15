@@ -305,7 +305,7 @@ impl Simulation for Engine {
             let flipped = |role| flips.iter().any(|e| self.pin_role[*e as usize] == role);
             let (address_flipped, content_flipped) = (flipped(1), flipped(2));
             if content_flipped {
-                // Bits above the content width are written as 0 (model, question 21).
+                // Bits above the content width are written as 0 (observed).
                 self.vmem[self.address] = self.pins_value(&self.components.content_pins);
             }
             if address_flipped {

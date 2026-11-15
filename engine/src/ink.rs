@@ -125,6 +125,8 @@ pub const VERIFIED: &[&str] = &[
     "Cross", "Tunnel", "Bus", "Mesh", "Wireless", "Clock", "Breakpoint", "Latch On", "Latch Off",
     // `random-vmem-seed-1` and `-2`, recorded 2026-11-15: the engine reproduces all 2 x 4064 bits (MT19937).
     "Random",
+    // VMem: `vmem-preserve`, the random recorder saves and `vmem-timing` (ticks and save), 2026-11-16.
+    "vmem",
 ];
 /// Units that cannot match the game tick for tick and are only checked for what can be observed.
 pub const MODELLED: &[&str] = &[
