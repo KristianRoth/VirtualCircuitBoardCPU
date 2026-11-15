@@ -111,7 +111,7 @@ Joining uses a union-find. Any pattern these rules don't define is an error nami
 **Tick 0** is the reset state, matching the game's counter (observed on the `gates` board). Every component has the output it gets with all inputs off: Latch On and the inverting gates (NOT, NOR, XNOR, and NAND when it has inputs) start on, everything else off. Traces are then computed from their writers. A trace that is on at tick 0 has `rose` set and its readers are on the dirty list, so a latch reading it toggles at tick 1.
 
 **One tick**
-0. **Schedule.** If the tick number is a multiple of `clock_interval`, every Clock is marked to flip. The same for Timer with `--timer-ticks`. Clock and Timer ignore their inputs (model for question 13: the first flip is at tick `clock_interval`).
+0. **Schedule.** If the tick number is a multiple of `clock_interval`, every Clock is marked to flip. The same for Timer with `--timer-ticks`. Clocks start on at tick 0 and ignore their inputs (observed).
 1. **Evaluate.** For every component and pin on the dirty list, compute its new output from the trace states left by the previous tick. Nothing changes yet. While VMem is locked, pins are not evaluated.
 2. **Apply.** Clear every `rose` flag. Flip the components and pins whose output changed, and the scheduled clocks and timers. Recompute each trace they write and set `rose` on traces that turned on. Put the readers of every changed trace on the dirty list for the next tick. Remember which pins flipped.
 3. **VMem.** See below.
@@ -133,7 +133,7 @@ A component is never on the dirty list twice. This gives the observed one-tick g
 | Timer | flips on ticks that are multiples of `--timer-ticks`; never game-exact |
 | Random | if at least one input trace has `rose` set, draws once and toggles with probability ½ (model for question 14) |
 
-- **Breakpoint** reports a stop on the tick its own output goes from off to on. The engine's stop tick must equal the counter the game shows at the pause (question 17).
+- **Breakpoint** reports a stop on the tick its own output goes from off to on. The game's counter at the pause shows that tick plus one (observed); the fixture test checks this.
 - **Random generator:** the user records about 64 ticks of a Random pixel for seeds 1 and 2. In one session Claude tries Godot's `RandomNumberGenerator` seeded with `random_seed`, taking the low bit of `randi()`, the high bit of `randi()`, and `randf() < 0.5`. If one reproduces both sequences, Random is exact. If none does, v1 uses its own seeded generator and Random is "modelled". The result of each candidate is recorded in the facts file.
 
 ### VMem
@@ -261,8 +261,8 @@ Each milestone ends with a local commit once its tests pass. Commits stage expli
 |---|---|---|---|
 | M0 | `.gitignore` (`manual/`, `.DS_Store`, `saves/pending/`, `engine/target/`, `*.vcb.tmp`); first commit of `specs/`, the `.vcb` saves and the engine skeleton; `format` reader/writer, `ink`, `vcb info`, reader error tests | open one written board and one re-written copy of the CPU in the game and confirm they load | done 2026-11-15 |
 | M1 | `textboard`, `vcb gen`, netlist steps 2 and 5 (rules 1, 2, 8, 9, without wireless), the core, `--probe`, `--render`, the gate; board **gates**: Read/Write, connected-once rule, 8 gates, Latch On/Off, LED, first tick, tick 0 | observe 1 board | done 2026-11-15 (fixtures `gates`, `gates-recheck`) |
-| M2 | Netlist rules 3–7 and wireless; `vcb info --adjacency`; boards **routing** (cross, tunnel, bus, mesh, wireless, colour cases, and every ink pair the CPU census shows) and **general** (clock intervals 1–3, clock with an input, breakpoint counter, latch edge cases) | observe 2–3 boards | code done 2026-11-15; boards `routing-a`, `routing-b`, `general`, `general-1` wait for observation |
-| M3 | Board **random-timer**. Exit: Timer is modelled; Random is verified or modelled after the one-session generator search. This milestone cannot block M4–M6 | observe 1 board |  |
+| M2 | Netlist rules 3–7 and wireless; `vcb info --adjacency`; boards **routing** (cross, tunnel, bus, mesh, wireless, colour cases, and every ink pair the CPU census shows) and **general** (clock intervals 1–3, clock with an input, breakpoint counter, latch edge cases) | observe 2–3 boards | done 2026-11-15 (fixtures `routing-a`, `routing-b`, `general`, `general-1`, `latch-on`) |
+| M3 | Board **random-timer**. Exit: Timer is modelled; Random is verified or modelled after the one-session generator search. This milestone cannot block M4–M6 | observe 1 board | next |
 | M4 | Rung B on one board, within the checklist budget: ring oscillator, SR latch, D flip-flop, 4-bit counter, 4-bit adder with 4 input pairs | observe 1 board |  |
 | M5 | Rung C: pins, VMem write, read back, address 0, locking, content precedence, content width under 32 bits, the To-inclusive question first; `.vcbmem` reading tested without the game | run, checklist and save per board |  |
 | M6 | Rung D as described under "CPU fixtures". First: question 19 (five minutes in the game) | edit the CPU to run without clicks; run and save |  |
@@ -273,9 +273,7 @@ All game questions are in the facts file. This table says which model v1 uses me
 
 | Question | Interim model in v1 | Needed before |
 |---|---|---|
-| 12 colour at cross, tunnel, bus, mesh | the key of the touching pixel; cross joins traces of any colour | M2 done |
-| 13 clock phase, clock with an input | first flip at tick `clock_interval`; inputs ignored | M2 done |
-| 17 counter at a Breakpoint pause | equals the tick the Breakpoint turned on | M2 done |
+| 17 which state a Breakpoint pause holds | the state of the tick the Breakpoint turned on | M6 start |
 | 14 Random probability and draws | ½, one draw per component per tick | M3 done |
 | 10 persistent To inclusive | compared range avoids the To address | first M5 board |
 | 15 VMem lock ticks | the one tick after an address change; input is lost | M5 done |
@@ -319,3 +317,5 @@ Decisions still owed by the user:
 - Verified after M1 → Trace, Read, Write, Buffer, AND, OR, XOR, NOT, NAND, NOR, XNOR, LED. Latch On/Off wait for the remaining latch cases in M2.
 - Coverage test → for now it checks that every verified ink is on an observed board; the per-rule `covers` check comes with M2's routing boards.
 - Boards for the user → generated into `saves/pending/`, never under `engine/`.
+- M2 boards observed 2026-11-15 → every routing rule matched the model; the clock starts on at tick 0 (changed); the game's counter at a Breakpoint pause is the stop tick plus one; unmatched or nested tunnels are compile errors in the game and errors in the engine. Verified now: every ink except Timer and Random.
+- CPU coverage → every pair of touching inks in the CPU is on an observed board (test).

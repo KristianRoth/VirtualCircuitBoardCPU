@@ -117,15 +117,15 @@ fn routing_b_board_follows_the_model() {
 #[test]
 fn general_boards_follow_the_model() {
     assert_lit("general.txt", 10, &[
-        ("clock", &[4, 5, 6, 10]),               // interval 3: the clock flips at ticks 3, 6, 9
-        ("clock_with_input", &[4, 5, 6, 10]),    // an input changes nothing
+        ("clock", &[1, 2, 3, 7, 8, 9]),          // interval 3: on at tick 0, flips at ticks 3, 6, 9
+        ("clock_with_input", &[1, 2, 3, 7, 8, 9]), // an input changes nothing
         ("latch_second_rise", &[2, 3]),          // a second input rising later toggles it back
         ("latch_fall_and_rise", &[2]),           // a falling input does nothing; the rising one toggles
         ("shared_write_a", &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
         ("shared_write_b", &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
         ("breakpoint_chain", &[7, 8, 9, 10]),
     ]);
-    assert_lit("general-1.txt", 5, &[("clock_interval_1", &[2, 4])]);
+    assert_lit("general-1.txt", 5, &[("clock_interval_1", &[1, 3, 5])]);
 
     // The Breakpoint shares the LED's input, so the run stops on the tick the LED lights.
     let tb = load("general.txt");
@@ -145,6 +145,14 @@ fn tunnels_the_game_refuses_are_errors() {
 }
 
 #[test]
+fn latch_on_board_follows_the_model() {
+    assert_lit("latch-on.txt", 3, &[
+        ("latch_on_with_rising_input", &[1]),       // on at tick 0, toggled off at tick 1 by its input
+        ("latch_on_with_idle_input", &[1, 2, 3]),
+    ]);
+}
+
+#[test]
 fn touching_crosses_are_an_error() {
     let tb = textboard::parse("\n5++5").unwrap();
     assert!(Components::build(&tb.board).err().unwrap().contains("Cross at 17,16"));
@@ -155,16 +163,16 @@ fn clock_flips_every_interval_and_a_breakpoint_stops_the_run() {
     // Clock -> Write -> trace -> Read -> Breakpoint, interval 3.
     let tb = textboard::parse("clock_interval = 3\nprobe.clock = 0,0\nprobe.bp = 4,0\n\nCW5R!").unwrap();
     let lit = lit_ticks(&tb, 9);
-    assert_eq!(lit[0].1, [3, 4, 5, 9]);
-    assert_eq!(lit[1].1, [4, 5, 6]);
+    assert_eq!(lit[0].1, [0, 1, 2, 6, 7, 8]);
+    assert_eq!(lit[1].1, [1, 2, 3, 7, 8, 9]);
 
     let mut engine = Engine::new(&tb.board, Components::build(&tb.board).unwrap()).unwrap();
     let report = engine.run_until(&StopSet { max_ticks: 100, breakpoint: true }, |_| {});
-    assert_eq!((report.tick, report.reasons), (4, vec!["breakpoint"]));
+    assert_eq!((report.tick, report.reasons), (1, vec!["breakpoint"]));
 
     let mut engine = Engine::new(&tb.board, Components::build(&tb.board).unwrap()).unwrap();
-    let report = engine.run_until(&StopSet { max_ticks: 4, breakpoint: true }, |_| {});
-    assert_eq!((report.tick, report.reasons), (4, vec!["breakpoint", "max-ticks"]));
+    let report = engine.run_until(&StopSet { max_ticks: 1, breakpoint: true }, |_| {});
+    assert_eq!((report.tick, report.reasons), (1, vec!["breakpoint", "max-ticks"]));
 }
 
 #[test]

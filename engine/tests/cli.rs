@@ -64,19 +64,25 @@ fn gen_writes_board_checklist_and_picture() {
 #[test]
 fn unverified_inks_are_refused_unless_allowed() {
     let d = dir("gate");
+    // Verified inks run without a flag.
     let board = gen_two_buffers(&d);
-    assert_fails(vcb(&["run", &board, "--ticks", "2"]), "Latch On at 16,16 is not verified yet");
+    let out = vcb(&["run", &board, "--ticks", "2", "--probe", "20,16=on", "--probe", "20,18=off"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stdout), "tick 0: on=0 off=0\ntick 1: on=1 off=0\ntick 2: on=1 off=0\nstopped at tick 2: max-ticks\n");
+    assert!(out.stderr.is_empty());
 
-    let out = vcb(&["run", &board, "--ticks", "2", "--allow-unverified", "--probe", "20,16=on", "--probe", "20,18=off"]);
+    // Random has no observed fixture yet.
+    let source = d.join("random.txt");
+    std::fs::write(&source, "\nLW5R?\n").unwrap();
+    let random = d.join("random.vcb");
+    assert!(vcb(&["gen", source.to_str().unwrap(), "-o", random.to_str().unwrap()]).status.success());
+    let random = random.to_str().unwrap();
+    assert_fails(vcb(&["run", random, "--ticks", "2"]), "Random at 20,16 is not verified yet");
+
+    let out = vcb(&["run", random, "--ticks", "2", "--allow-unverified"]);
     assert!(out.status.success());
-    assert_eq!(
-        text(&out.stdout),
-        "tick 0: on=0 off=0\ntick 1: on=1 off=0\ntick 2: on=1 off=0\n\
-         stopped at tick 2: max-ticks (unverified: Latch On, Latch Off)\n"
-    );
-    let stderr = text(&out.stderr);
-    assert_eq!(stderr.lines().count(), 2, "{stderr}");
-    assert!(stderr.contains("warning: Latch On is not verified yet"));
+    assert_eq!(text(&out.stdout), "stopped at tick 2: max-ticks (unverified: Random)\n");
+    assert_eq!(text(&out.stderr), "warning: Random is not verified yet\n");
 }
 
 #[test]
