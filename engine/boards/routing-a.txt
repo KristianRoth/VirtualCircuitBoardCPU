@@ -1,0 +1,30 @@
+labels = on
+ticks = 0..4
+covers = rule4, rule5, rule8, Cross, Tunnel, 12
+probe.cross_vertical_off = 4,9
+probe.cross_horizontal_on = 8,9
+probe.cross_two_colours = 16,9
+probe.cross_write_read_on = 23,9
+probe.cross_other_off = 27,9
+probe.or_through_cross = 32,9
+probe.xor_through_cross = 41,9
+probe.xnor_through_cross = 50,9
+probe.and_through_cross = 59,9
+probe.tunnel_red_on = 78,9
+probe.tunnel_yellow_off = 82,9
+probe.tunnel_other_colour = 93,9
+probe.tunnel_no_exit = 101,9
+probe.read_write_inside_trace = 106,9
+probe.led_drives_led = 111,9
+
+..........................................................................................................L....L
+.....................................L........L........L........L.........................................W....W
+....l................................W........W........W........W.........................................5....5
+....W................................5........5........5........5.........................................R....R
+....9..................L.............R........R........R........R.........................................R....E
+LW22+2222...LW2+9......W........OO+OOO...XX+XXX...ZZ+ZZZ...AA+AAA.........................................W....W
+....9...2.......9...lW5+5555....W........W........W........W.......LW2T.lW9T.T2..T9...LW2T..T9...LW5T5....5....5
+....R...R.......R......R...R....R........R........R........R..................R...R..........R.......R....R....R
+...EEE.EEE.....EEE....EEE.EEE..EEE......EEE......EEE......EEE................EEE.EEE........EEE.....EEE..EEE..EEE
+...EEE.EEE.....EEE....EEE.EEE..EEE......EEE......EEE......EEE................EEE.EEE........EEE.....EEE..EEE..EEE
+...EEE.EEE.....EEE....EEE.EEE..EEE......EEE......EEE......EEE................EEE.EEE........EEE.....EEE..EEE..EEE

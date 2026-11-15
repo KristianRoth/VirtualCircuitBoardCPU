@@ -1,0 +1,27 @@
+labels = on
+ticks = 0..4
+covers = rule3, rule6, rule7, Bus, Mesh, Wireless, 12
+probe.bus_nine_off = 5,8
+probe.bus_two_on = 9,8
+probe.bus_touching_colour_differs = 18,8
+probe.bus_touching_colour_same = 22,8
+probe.bus_through_cross = 31,8
+probe.bus_through_tunnel = 42,8
+probe.and_through_bus = 47,8
+probe.xor_through_bus = 55,8
+probe.not_through_bus = 63,8
+probe.mesh_same_colour = 76,8
+probe.mesh_other_colour = 80,8
+probe.wireless_0_on = 87,8
+probe.wireless_1_off = 91,8
+
+.............L
+L.l..........W............L........L...............L.......L.......L................L
+W.W..........2............W........W...............W.......W.......W................W
+2.9..........9............2........2...............R.......R.......R................5..g...h
+uuuuuvvvvvv..wwwwwxxxxxx..yyy+zzz..uuT..Tuu....AuuuA...XuuuX...NuuuN................R..W...W
+.....9...2........2...9........2..........2....W.......W.......W......LW2M.M2..M9...g..5...5
+.....R...R........R...R........R..........R....R.......R.......R............R...R......R...R
+....EEE.EEE......EEE.EEE......EEE........EEE..EEE.....EEE.....EEE..........EEE.EEE....EEE.EEE
+....EEE.EEE......EEE.EEE......EEE........EEE..EEE.....EEE.....EEE..........EEE.EEE....EEE.EEE
+....EEE.EEE......EEE.EEE......EEE........EEE..EEE.....EEE.....EEE..........EEE.EEE....EEE.EEE
