@@ -63,7 +63,9 @@ fn engine_matches_every_observation() {
 
         let components = Components::build(&tb.board).unwrap();
         let entities: Vec<u32> = tb.probes.iter().map(|p| components.entity_at(p.x, p.y).unwrap()).collect();
-        let mut engine = Engine::new(&tb.board, components, &Default::default()).unwrap();
+        // A board with Timer ink states how long a timer interval is for the engine run.
+        let timer_ticks = field(&checklist, "- timer ticks:").map(|n| n.parse().unwrap());
+        let mut engine = Engine::new(&tb.board, components, &vcb::sim::Options { timer_ticks }).unwrap();
         let mut differences = Vec::new();
         // Boards without probes (VMem recordings) have no ticks to compare here.
         engine.run_until(&StopSet { max_ticks: tb.ticks.last().copied().unwrap_or(0), breakpoint: false }, |e| {

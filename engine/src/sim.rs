@@ -138,11 +138,8 @@ impl Engine {
                     engine.clocks.push(e as u32);
                     engine.on[e] = true;
                 }
-                // Model: a timer starts like a clock.
-                Kind::Component(Ink::Timer) => {
-                    engine.timers.push(e as u32);
-                    engine.on[e] = true;
-                }
+                // Observed (random-pulse board): unlike a clock, a timer starts off.
+                Kind::Component(Ink::Timer) => engine.timers.push(e as u32),
                 Kind::Component(Ink::LatchOn) => engine.on[e] = true,
                 Kind::Component(ink @ (Ink::Not | Ink::Nor | Ink::Nand | Ink::Xnor)) => engine.on[e] = engine.evaluate(e, *ink),
                 _ => {}
@@ -204,7 +201,7 @@ impl Simulation for Engine {
             let next = if ink == Ink::Random {
                 // Observed (random recorder boards): a Random draws every time it is evaluated, that is, whenever
                 // one of its inputs changed. When an input rose the output is that draw. The draw made when the
-                // input falls is used up without effect. Model (question 14): the output is on only while an input is on.
+                // input falls is used up without effect. The output stays on while an input stays on (observed).
                 let draw = self.rng.next_bit();
                 draw && c.reads[e as usize].iter().any(|t| self.on[*t as usize])
             } else {

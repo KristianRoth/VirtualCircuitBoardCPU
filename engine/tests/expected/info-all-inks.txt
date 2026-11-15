@@ -54,4 +54,4 @@ inks: 48
   Wireless 3: 1
   Annotation: 1
   Filler: 1
-not verified yet: Timer
+not verified yet: nothing
