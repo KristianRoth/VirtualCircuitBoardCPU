@@ -158,7 +158,8 @@ fn draw_label(board: &mut Board, number: usize, p: &Probe) -> Result<()> {
     };
     let free = |board: &Board, at: &[(usize, usize)]| at.iter().all(|(x, y)| *x < board.width && *y < board.height && board.ink(*x, *y) == Ink::Empty);
     // The side is chosen by the spot right next to the block, so odd and even labels end up on the same side.
-    let side_below = free(board, &pixels(bottom + 2));
+    // Other labels (Annotation) do not count: a neighbour's two-digit label may reach into this spot.
+    let side_below = pixels(bottom + 2).iter().all(|(x, y)| *x < board.width && *y < board.height && matches!(board.ink(*x, *y), Ink::Empty | Ink::Annotation));
     let place = if side_below { Some(pixels(bottom + 2 + stagger)) } else { (top >= 6 + stagger + ORIGIN.1).then(|| pixels(top - 6 - stagger)) };
     let place = place.filter(|at| free(board, at)).ok_or(format!("probe \"{}\": no room for its label below or above", p.label))?;
     for (x, y) in place {
