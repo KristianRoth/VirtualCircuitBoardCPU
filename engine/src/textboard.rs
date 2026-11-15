@@ -57,6 +57,16 @@ pub fn parse(text: &str) -> Result<TextBoard> {
         }
         let (key, value) = line.split_once('=').ok_or(format!("line {n}: expected `key = value`"))?;
         let (key, value) = (key.trim(), value.trim());
+        // VMem preload: word.<address> = <value>, decimal or 0x hex.
+        if let Some(address) = key.strip_prefix("word.") {
+            let parse = |text: &str| match text.strip_prefix("0x") {
+                Some(hex) => u32::from_str_radix(hex, 16).map_err(|_| format!("line {n}: \"{text}\" is not a number")),
+                None => number::<u32>(text, n),
+            };
+            let address = parse(address)? as usize;
+            *board.vmem.get_mut(address).ok_or(format!("line {n}: address {address} is outside VMem"))? = parse(value)?;
+            continue;
+        }
         if let Some(label) = key.strip_prefix("probe.") {
             let (col, row) = value.split_once(',').ok_or(format!("line {n}: expected `col,row`"))?;
             if probes.iter().any(|p| p.label == label) {
@@ -122,26 +132,36 @@ pub fn parse(text: &str) -> Result<TextBoard> {
     Ok(TextBoard { board, probes, ticks, covers })
 }
 
-/// Draws the probe's number in Annotation ink below its LED block, so it can be read in the game.
-/// Even numbers go one row of digits lower, because neighbouring two-digit labels would overlap.
+/// Draws the probe's number in Annotation ink next to its LED block, so it can be read in the game:
+/// below the block, or above it when there is no room below. Even numbers go one row of digits further
+/// out, because neighbouring two-digit labels would overlap.
 fn draw_label(board: &mut Board, number: usize, p: &Probe) -> Result<()> {
-    let mut bottom = p.y;
-    while bottom + 1 < board.height && board.ink(p.x, bottom + 1) == board.ink(p.x, p.y) {
+    let same = |board: &Board, y: usize| y < board.height && board.ink(p.x, y) == board.ink(p.x, p.y);
+    let (mut top, mut bottom) = (p.y, p.y);
+    while top > 0 && same(board, top - 1) {
+        top -= 1;
+    }
+    while same(board, bottom + 1) {
         bottom += 1;
     }
     let text = number.to_string();
-    let top = bottom + 2 + if number % 2 == 0 { 6 } else { 0 };
+    let stagger = if number % 2 == 0 { 6 } else { 0 };
     let left = (p.x + 1).saturating_sub(text.len() * 2);
-    for (n, ch) in text.bytes().enumerate() {
-        for (row, bits) in crate::render::DIGITS[(ch - b'0') as usize].iter().enumerate() {
-            for col in (0..3).filter(|col| bits & (4 >> col) != 0) {
-                let (x, y) = (left + n * 4 + col, top + row);
-                if x >= board.width || y >= board.height || board.ink(x, y) != Ink::Empty {
-                    return Err(format!("probe \"{}\": no room for its label at {x},{y}", p.label));
-                }
-                board.set(x, y, Ink::Annotation);
+    let pixels = |first_row: usize| -> Vec<(usize, usize)> {
+        let mut out = Vec::new();
+        for (n, ch) in text.bytes().enumerate() {
+            for (row, bits) in crate::render::DIGITS[(ch - b'0') as usize].iter().enumerate() {
+                out.extend((0..3).filter(|col| bits & (4 >> col) != 0).map(|col| (left + n * 4 + col, first_row + row)));
             }
         }
+        out
+    };
+    let free = |board: &Board, at: &[(usize, usize)]| at.iter().all(|(x, y)| *x < board.width && *y < board.height && board.ink(*x, *y) == Ink::Empty);
+    let below = pixels(bottom + 2 + stagger);
+    let above = (top >= 6 + stagger + ORIGIN.1).then(|| pixels(top - 6 - stagger));
+    let place = if free(board, &below) { below } else { above.filter(|at| free(board, at)).ok_or(format!("probe \"{}\": no room for its label below or above", p.label))? };
+    for (x, y) in place {
+        board.set(x, y, Ink::Annotation);
     }
     Ok(())
 }
@@ -177,6 +197,9 @@ mod tests {
         let tb = parse("vmem.address = 8,10,2,6,0\nvmem.content = 32,20,5,4,0\npersistent = 0,255\n\nL").unwrap();
         assert!(tb.board.settings.vmem_enabled);
         assert_eq!(tb.board.settings.vmem_settings, [8, 26, 18, 6, 0, 1, 1, 32, 36, 21, 4, 0, 1, 1, 0, 255]);
+
+        let tb = parse("word.1 = 0xFFFFFFF2\nword.3 = 7\n\nL").unwrap();
+        assert_eq!(tb.board.vmem[..4], [0, 0xFFFF_FFF2, 0, 7]);
     }
 
     #[test]
@@ -198,5 +221,9 @@ mod tests {
         assert_eq!(row(4), [true, true, false]);
         assert_eq!(row(7), [true, true, true]);
         assert!(parse("labels = on\nprobe.a = 1,0\n\nEEE\n\n\n\nLLL").is_err(), "label would overwrite art");
+        // With no room below, the label goes above the block (the art starts 8 rows down here).
+        let tb = parse("labels = on\nprobe.a = 1,8\n\n.\n.\n.\n.\n.\n.\n.\n.\nEEE\nLLL").unwrap();
+        assert_eq!(tb.board.ink(16, 16 + 6), Ink::Annotation); // bottom row of the "1": ###
+        assert_eq!(tb.board.ink(17, 16 + 2), Ink::Annotation); // top row: .#.
     }
 }
