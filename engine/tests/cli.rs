@@ -79,15 +79,22 @@ fn unverified_inks_are_refused_unless_allowed() {
         board.to_str().unwrap().to_string()
     };
 
-    // Timer has no observed fixture yet.
+    // Timer is modelled: it needs --timer-ticks and warns that it is not game-exact.
     let timer = gen("timer", "\nIW5RE\n");
-    assert_fails(vcb(&["run", &timer, "--ticks", "2"]), "Timer at 16,16 is not verified yet");
-    let no_ticks = vcb(&["run", &timer, "--ticks", "2", "--allow-unverified"]);
+    let no_ticks = vcb(&["run", &timer, "--ticks", "2"]);
     assert!(!no_ticks.status.success() && text(&no_ticks.stderr).contains("--timer-ticks <n> is required"));
-    let out = vcb(&["run", &timer, "--ticks", "2", "--allow-unverified", "--timer-ticks", "5"]);
+    let out = vcb(&["run", &timer, "--ticks", "2", "--timer-ticks", "5"]);
     assert!(out.status.success());
-    assert_eq!(text(&out.stdout), "stopped at tick 2: max-ticks (unverified: Timer)\n");
-    assert_eq!(text(&out.stderr), "warning: Timer is not verified yet\n");
+    assert_eq!(text(&out.stdout), "stopped at tick 2: max-ticks\n");
+    assert_eq!(text(&out.stderr), "warning: Timer is modelled, not game-exact\n");
+
+    // An unverified unit is refused: VMem, until milestone M5.
+    let vmem = gen("vmem", "vmem.address = 1,0,0,2,0\nvmem.content = 1,0,2,2,0\n\nl\n\nl\n");
+    assert_fails(vcb(&["run", &vmem, "--ticks", "2"]), "vmem is not verified yet");
+    let out = vcb(&["run", &vmem, "--ticks", "2", "--allow-unverified"]);
+    assert!(out.status.success());
+    assert_eq!(text(&out.stdout), "stopped at tick 2: max-ticks (unverified: vmem)\n");
+    assert_eq!(text(&out.stderr), "warning: vmem is not verified yet\n");
 }
 
 #[test]

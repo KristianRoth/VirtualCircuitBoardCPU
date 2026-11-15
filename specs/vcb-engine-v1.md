@@ -130,8 +130,8 @@ A component is never on the dirty list twice. This gives the observed one-tick g
 | NAND | A < T. With no inputs it is off, so it is not the exact inverse of AND (observed) |
 | Latch On / Off, pin | toggles once per input trace that has `rose` set, so two inputs rising together cancel out (observed) |
 | Clock | flips on ticks that are multiples of `clock_interval` |
-| Timer | flips on ticks that are multiples of `--timer-ticks`; never game-exact |
-| Random | every time it is evaluated (an input changed) it draws from the generator; the output is that draw while an input is on, otherwise off (draws observed; holding while the input stays on is the model for question 14) |
+| Timer | starts off (observed) and flips on ticks that are multiples of `--timer-ticks`; never game-exact |
+| Random | every time it is evaluated (an input changed) it draws from the generator; the output is that draw while an input is on, otherwise off (observed) |
 
 - **Breakpoint** reports a stop on the tick its own output goes from off to on. The game's counter at the pause shows that tick plus one (observed); the fixture test checks this.
 - **Random generator:** MT19937 seeded with `random_seed`, low bit of each draw, as in the game (the engine reproduces the recorded bits of `random-vmem-seed-1` and `-2`). Components draw in the order they are evaluated, which is the order their Read pixels are reached when a trace is walked breadth first from its first pixel (model, question 22).
@@ -262,8 +262,8 @@ Each milestone ends with a local commit once its tests pass. Commits stage expli
 | M0 | `.gitignore` (`manual/`, `.DS_Store`, `saves/pending/`, `engine/target/`, `*.vcb.tmp`); first commit of `specs/`, the `.vcb` saves and the engine skeleton; `format` reader/writer, `ink`, `vcb info`, reader error tests | open one written board and one re-written copy of the CPU in the game and confirm they load | done 2026-11-15 |
 | M1 | `textboard`, `vcb gen`, netlist steps 2 and 5 (rules 1, 2, 8, 9, without wireless), the core, `--probe`, `--render`, the gate; board **gates**: Read/Write, connected-once rule, 8 gates, Latch On/Off, LED, first tick, tick 0 | observe 1 board | done 2026-11-15 (fixtures `gates`, `gates-recheck`) |
 | M2 | Netlist rules 3–7 and wireless; `vcb info --adjacency`; boards **routing** (cross, tunnel, bus, mesh, wireless, colour cases, and every ink pair the CPU census shows) and **general** (clock intervals 1–3, clock with an input, breakpoint counter, latch edge cases) | observe 2–3 boards | done 2026-11-15 (fixtures `routing-a`, `routing-b`, `general`, `general-1`, `latch-on`) |
-| M3 | Board **random-timer**. Exit: Timer is modelled; Random is verified or modelled after the one-session generator search. This milestone cannot block M4–M6 | observe 1 board | Random verified 2026-11-16 (MT19937, exact); board `random-pulse` (holding, draw order, Timer) waits for observation |
-| M4 | Rung B on one board, within the checklist budget: ring oscillator, SR latch, D flip-flop, 4-bit counter, 4-bit adder with 4 input pairs | observe 1 board |  |
+| M3 | Board **random-timer**. Exit: Timer is modelled; Random is verified or modelled after the one-session generator search. This milestone cannot block M4–M6 | observe 1 board | done 2026-11-16: Random verified (MT19937, exact), Timer modelled (fixtures `random-vmem-seed-1/2`, `random-pulse`) |
+| M4 | Rung B on one board, within the checklist budget: ring oscillator, SR latch, D flip-flop, 4-bit counter, 4-bit adder with 4 input pairs | observe 1 board | next |
 | M5 | Rung C: pins, VMem write, read back, address 0, locking, content precedence, content width under 32 bits, the To-inclusive question first; `.vcbmem` reading tested without the game | run, checklist and save per board |  |
 | M6 | Rung D as described under "CPU fixtures". First: question 19 (five minutes in the game) | edit the CPU to run without clicks; run and save |  |
 | M7 | Address watch, `--quiescent`, TOML config, Ctrl-C, progress output | nothing |  |
@@ -274,8 +274,7 @@ All game questions are in the facts file. This table says which model v1 uses me
 | Question | Interim model in v1 | Needed before |
 |---|---|---|
 | 17 which state a Breakpoint pause holds | the state of the tick the Breakpoint turned on | M6 start |
-| 14 when a Random's output turns off | when none of its inputs is on | M3 done |
-| 22 Random draw order across traces | breadth-first walk of each trace; traces in the order they changed | M3 done |
+| 22 Random draw order in mixed cases | breadth-first walk of each trace; traces in the order they changed | when a board needs it |
 | 10 persistent To inclusive | compared range avoids the To address | first M5 board |
 | 15 VMem lock ticks | the one tick after an address change; input is lost | M5 done |
 | 16 tick the loaded word is visible | the tick after the address pins flip | M5 done |

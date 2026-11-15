@@ -161,7 +161,7 @@ fn timer_flips_every_timer_ticks_and_needs_the_setting() {
     let mut engine = build(Some(4)).unwrap();
     let mut on = Vec::new();
     engine.run_until(&StopSet { max_ticks: 12, breakpoint: false }, |e| on.push(e.state()[0]));
-    assert_eq!(on, [true, true, true, true, false, false, false, false, true, true, true, true, false]);
+    assert_eq!(on, [false, false, false, false, true, true, true, true, false, false, false, false, true]);
 }
 
 #[test]

@@ -127,7 +127,10 @@ pub const VERIFIED: &[&str] = &[
     "Random",
 ];
 /// Units that cannot match the game tick for tick and are only checked for what can be observed.
-pub const MODELLED: &[&str] = &[];
+pub const MODELLED: &[&str] = &[
+    // The game's timers follow the wall clock. `random-pulse` (2026-11-16) shows only that a timer starts off.
+    "Timer",
+];
 
 impl Ink {
     /// The gate unit this ink belongs to: the ink kind without its colour. `None` for inks without logic.
