@@ -210,24 +210,38 @@ impl Components {
             readers: vec![Vec::new(); n],
             writers: vec![Vec::new(); n],
         };
-        for i in 0..w * h {
-            let ink = board.inks[i];
-            if ink != Ink::Read && ink != Ink::Write {
+        // Connections are found by walking each trace from its first pixel, breadth first. The order matters
+        // only for Random: components are evaluated in the order their Read pixels are reached, and each draws
+        // from the one generator. Observed on the random recorder boards; the walk order itself is a model (question 22).
+        let mut visited = vec![false; w * h];
+        let mut queue = std::collections::VecDeque::new();
+        for start in 0..w * h {
+            if px[start] != Px::Trace || visited[start] {
                 continue;
             }
-            let trace = c.entity_of[i];
-            let (x, y) = (i % w, i / w);
-            let neighbours = [(x > 0).then(|| i - 1), (x + 1 < w).then(|| i + 1), (y > 0).then(|| i - w), (y + 1 < h).then(|| i + w)];
-            for j in neighbours.into_iter().flatten() {
-                let component = c.entity_of[j];
-                if component == NONE || c.kinds[component as usize] == Kind::Trace {
-                    continue;
-                }
-                // Connected at most once in each direction.
-                let (of_component, of_trace) = if ink == Ink::Read { (&mut c.reads, &mut c.readers) } else { (&mut c.writes, &mut c.writers) };
-                if !of_component[component as usize].contains(&trace) {
-                    of_component[component as usize].push(trace);
-                    of_trace[trace as usize].push(component);
+            visited[start] = true;
+            queue.push_back(start);
+            while let Some(i) = queue.pop_front() {
+                let ink = board.inks[i];
+                let trace = c.entity_of[i];
+                for j in (0..4).filter_map(|d| step(i, d)) {
+                    if px[j] == Px::Trace {
+                        if !visited[j] {
+                            visited[j] = true;
+                            queue.push_back(j);
+                        }
+                        continue;
+                    }
+                    let component = c.entity_of[j];
+                    if component == NONE || (ink != Ink::Read && ink != Ink::Write) {
+                        continue;
+                    }
+                    // Connected at most once in each direction.
+                    let (of_component, of_trace) = if ink == Ink::Read { (&mut c.reads, &mut c.readers) } else { (&mut c.writes, &mut c.writers) };
+                    if !of_component[component as usize].contains(&trace) {
+                        of_component[component as usize].push(trace);
+                        of_trace[trace as usize].push(component);
+                    }
                 }
             }
         }

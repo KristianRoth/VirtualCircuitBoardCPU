@@ -123,12 +123,11 @@ pub const VERIFIED: &[&str] = &[
     "Trace", "Read", "Write", "Buffer", "AND", "OR", "XOR", "NOT", "NAND", "NOR", "XNOR", "LED",
     // `routing-a`, `routing-b`, `general` and `general-1`, observed 2026-11-15.
     "Cross", "Tunnel", "Bus", "Mesh", "Wireless", "Clock", "Breakpoint", "Latch On", "Latch Off",
-];
-/// Units that cannot match the game tick for tick and are only checked for what can be observed.
-pub const MODELLED: &[&str] = &[
-    // `random-vmem-seed-1` and `-2`, recorded 2026-11-15: fair coin flips, but the game's generator is unknown.
+    // `random-vmem-seed-1` and `-2`, recorded 2026-11-15: the engine reproduces all 2 x 4064 bits (MT19937).
     "Random",
 ];
+/// Units that cannot match the game tick for tick and are only checked for what can be observed.
+pub const MODELLED: &[&str] = &[];
 
 impl Ink {
     /// The gate unit this ink belongs to: the ink kind without its colour. `None` for inks without logic.
