@@ -66,6 +66,82 @@ fn gates_board_follows_the_model() {
     }
 }
 
+/// Asserts each probe of a board is on at exactly the given ticks (model expectations).
+fn assert_lit(board: &str, ticks: u64, expected: &[(&str, &[u64])]) {
+    let lit = lit_ticks(&load(board), ticks);
+    assert_eq!(lit.len(), expected.len(), "{board}: number of probes");
+    for ((label, got), (name, want)) in lit.iter().zip(expected) {
+        assert_eq!(label, name, "{board}");
+        assert_eq!(got, want, "{board}: {label}");
+    }
+}
+
+#[test]
+fn routing_a_board_follows_the_model() {
+    assert_lit("routing-a.txt", 4, &[
+        ("cross_vertical_off", &[]),             // the crossing traces stay separate
+        ("cross_horizontal_on", &[1, 2, 3, 4]),
+        ("cross_two_colours", &[1, 2, 3, 4]),    // a cross joins traces of different colours
+        ("cross_write_read_on", &[1, 2, 3, 4]),  // Write and Read pixels are trace pixels at a cross
+        ("cross_other_off", &[]),
+        ("or_through_cross", &[2, 3, 4]),        // both halves of a gate split by a cross are one gate
+        ("xor_through_cross", &[2, 3, 4]),
+        ("xnor_through_cross", &[1]),            // on at tick 0, off once the far half sees its input
+        ("and_through_cross", &[2, 3, 4]),
+        ("tunnel_red_on", &[1, 2, 3, 4]),        // skips the tunnel that has another colour behind it
+        ("tunnel_yellow_off", &[]),
+        ("tunnel_other_colour", &[]),            // colour 2 in, colour 9 out: not joined
+        ("tunnel_no_exit", &[]),                 // trace, tunnel, trace with no second tunnel: not joined
+        ("read_write_inside_trace", &[1, 2, 3, 4]),
+        ("led_drives_led", &[2, 3, 4]),
+    ]);
+}
+
+#[test]
+fn routing_b_board_follows_the_model() {
+    assert_lit("routing-b.txt", 4, &[
+        ("bus_nine_off", &[]),                   // a bus matches traces by colour, not by position
+        ("bus_two_on", &[1, 2, 3, 4]),
+        ("bus_touching_colour_differs", &[]),    // the colour that counts is the pixel touching the bus
+        ("bus_touching_colour_same", &[1, 2, 3, 4]),
+        ("bus_through_cross", &[1, 2, 3, 4]),
+        ("bus_through_tunnel", &[1, 2, 3, 4]),
+        ("and_through_bus", &[2, 3, 4]),         // gates of the same ink touching one bus are one gate
+        ("xor_through_bus", &[2, 3, 4]),
+        ("not_through_bus", &[1]),
+        ("mesh_same_colour", &[1, 2, 3, 4]),
+        ("mesh_other_colour", &[]),
+        ("wireless_0_on", &[2, 3, 4]),
+        ("wireless_1_off", &[]),
+    ]);
+}
+
+#[test]
+fn general_boards_follow_the_model() {
+    assert_lit("general.txt", 10, &[
+        ("clock", &[4, 5, 6, 10]),               // interval 3: the clock flips at ticks 3, 6, 9
+        ("clock_with_input", &[4, 5, 6, 10]),    // an input changes nothing
+        ("latch_second_rise", &[2, 3]),          // a second input rising later toggles it back
+        ("latch_fall_and_rise", &[2]),           // a falling input does nothing; the rising one toggles
+        ("shared_write_a", &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+        ("shared_write_b", &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+        ("breakpoint_chain", &[7, 8, 9, 10]),
+    ]);
+    assert_lit("general-1.txt", 5, &[("clock_interval_1", &[2, 4])]);
+
+    // The Breakpoint shares the LED's input, so the run stops on the tick the LED lights.
+    let tb = load("general.txt");
+    let mut engine = Engine::new(&tb.board, Components::build(&tb.board).unwrap()).unwrap();
+    let report = engine.run_until(&StopSet { max_ticks: 100, breakpoint: true }, |_| {});
+    assert_eq!((report.tick, report.reasons), (7, vec!["breakpoint"]));
+}
+
+#[test]
+fn touching_crosses_are_an_error() {
+    let tb = textboard::parse("\n5++5").unwrap();
+    assert!(Components::build(&tb.board).err().unwrap().contains("Cross at 17,16"));
+}
+
 #[test]
 fn clock_flips_every_interval_and_a_breakpoint_stops_the_run() {
     // Clock -> Write -> trace -> Read -> Breakpoint, interval 3.

@@ -17,7 +17,12 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Print the size, settings and ink counts of a board.
-    Info { board: PathBuf },
+    Info {
+        board: PathBuf,
+        /// List how often each pair of inks touches, for pairs involving Read, Write, Cross, Tunnel, Mesh or Bus.
+        #[arg(long)]
+        adjacency: bool,
+    },
     /// Turn a text-art board into a .vcb, a blank checklist and a picture with numbered probes.
     Gen {
         source: PathBuf,
@@ -61,7 +66,12 @@ struct RunArgs {
 
 fn main() -> ExitCode {
     let result = match Cli::parse().command {
-        Command::Info { board } => Board::read(&board).map(|b| print!("{}", vcb::info(&b))),
+        Command::Info { board, adjacency: false } => Board::read(&board).map(|b| print!("{}", vcb::info(&b))),
+        Command::Info { board, adjacency: true } => Board::read(&board).map(|b| {
+            for ((a, b), n) in vcb::adjacency(&b) {
+                println!("{a} + {b}: {n}");
+            }
+        }),
         Command::Gen { source, output, force } => gen(&source, &output, force),
         Command::Run(args) => run(args),
     };

@@ -1,0 +1,13 @@
+labels = on
+clock_interval = 1
+ticks = 0..5
+covers = Clock, 13
+probe.clock_interval_1 = 1,5
+
+.C
+.W
+.5
+.R
+EEE
+EEE
+EEE

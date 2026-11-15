@@ -104,7 +104,7 @@ impl Engine {
         let active = reads.iter().filter(|t| self.on[**t as usize]).count();
         let risen = || reads.iter().filter(|t| self.rose[**t as usize]).count();
         match ink {
-            Ink::Buffer | Ink::Or | Ink::Led | Ink::Breakpoint => active > 0,
+            Ink::Buffer | Ink::Or | Ink::Led | Ink::Breakpoint | Ink::Wireless(_) => active > 0,
             Ink::Not | Ink::Nor => active == 0,
             Ink::And => active > 0 && active == reads.len(),
             // Observed: a NAND with no inputs is off, so this is not the exact inverse of AND.

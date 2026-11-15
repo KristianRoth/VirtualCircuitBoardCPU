@@ -84,3 +84,21 @@ pub fn checklist(name: &str, vcb_text: &str, tb: &textboard::TextBoard) -> Strin
     writeln!(out, "- Anything unexpected: ").unwrap();
     out
 }
+
+/// How often each pair of inks touches, for pairs that involve a flow-control or space-optimization ink.
+/// These are the patterns the netlist rules must get right; trace colours are not distinguished.
+pub fn adjacency(board: &Board) -> BTreeMap<(&'static str, &'static str), usize> {
+    const ROUTING: [&str; 6] = ["Read", "Write", "Cross", "Tunnel", "Mesh", "Bus"];
+    let mut pairs = BTreeMap::new();
+    let (w, h) = (board.width, board.height);
+    for i in 0..w * h {
+        let Some(a) = board.inks[i].unit() else { continue };
+        for j in [(i % w + 1 < w).then_some(i + 1), (i + w < w * h).then_some(i + w)].into_iter().flatten() {
+            let Some(b) = board.inks[j].unit() else { continue };
+            if ROUTING.contains(&a) || ROUTING.contains(&b) {
+                *pairs.entry((a.min(b), a.max(b))).or_default() += 1;
+            }
+        }
+    }
+    pairs
+}
