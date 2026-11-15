@@ -131,7 +131,7 @@ A component is never on the dirty list twice. This gives the observed one-tick g
 | Latch On / Off, pin | toggles once per input trace that has `rose` set, so two inputs rising together cancel out (observed) |
 | Clock | flips on ticks that are multiples of `clock_interval` |
 | Timer | flips on ticks that are multiples of `--timer-ticks`; never game-exact |
-| Random | if at least one input trace has `rose` set, draws once and toggles with probability ½ (model for question 14) |
+| Random | if at least one input trace has `rose` set, the output becomes a fresh coin flip (observed). It turns off when no input is on any more (model for question 14) |
 
 - **Breakpoint** reports a stop on the tick its own output goes from off to on. The game's counter at the pause shows that tick plus one (observed); the fixture test checks this.
 - **Random generator:** the user records about 64 ticks of a Random pixel for seeds 1 and 2. In one session Claude tries Godot's `RandomNumberGenerator` seeded with `random_seed`, taking the low bit of `randi()`, the high bit of `randi()`, and `randf() < 0.5`. If one reproduces both sequences, Random is exact. If none does, v1 uses its own seeded generator and Random is "modelled". The result of each candidate is recorded in the facts file.
@@ -262,7 +262,7 @@ Each milestone ends with a local commit once its tests pass. Commits stage expli
 | M0 | `.gitignore` (`manual/`, `.DS_Store`, `saves/pending/`, `engine/target/`, `*.vcb.tmp`); first commit of `specs/`, the `.vcb` saves and the engine skeleton; `format` reader/writer, `ink`, `vcb info`, reader error tests | open one written board and one re-written copy of the CPU in the game and confirm they load | done 2026-11-15 |
 | M1 | `textboard`, `vcb gen`, netlist steps 2 and 5 (rules 1, 2, 8, 9, without wireless), the core, `--probe`, `--render`, the gate; board **gates**: Read/Write, connected-once rule, 8 gates, Latch On/Off, LED, first tick, tick 0 | observe 1 board | done 2026-11-15 (fixtures `gates`, `gates-recheck`) |
 | M2 | Netlist rules 3–7 and wireless; `vcb info --adjacency`; boards **routing** (cross, tunnel, bus, mesh, wireless, colour cases, and every ink pair the CPU census shows) and **general** (clock intervals 1–3, clock with an input, breakpoint counter, latch edge cases) | observe 2–3 boards | done 2026-11-15 (fixtures `routing-a`, `routing-b`, `general`, `general-1`, `latch-on`) |
-| M3 | Board **random-timer**. Exit: Timer is modelled; Random is verified or modelled after the one-session generator search. This milestone cannot block M4–M6 | observe 1 board | next |
+| M3 | Board **random-timer**. Exit: Timer is modelled; Random is verified or modelled after the one-session generator search. This milestone cannot block M4–M6 | observe 1 board | Random modelled 2026-11-15; board `random-pulse` (when a Random turns off, Timer) waits for observation |
 | M4 | Rung B on one board, within the checklist budget: ring oscillator, SR latch, D flip-flop, 4-bit counter, 4-bit adder with 4 input pairs | observe 1 board |  |
 | M5 | Rung C: pins, VMem write, read back, address 0, locking, content precedence, content width under 32 bits, the To-inclusive question first; `.vcbmem` reading tested without the game | run, checklist and save per board |  |
 | M6 | Rung D as described under "CPU fixtures". First: question 19 (five minutes in the game) | edit the CPU to run without clicks; run and save |  |
@@ -274,7 +274,7 @@ All game questions are in the facts file. This table says which model v1 uses me
 | Question | Interim model in v1 | Needed before |
 |---|---|---|
 | 17 which state a Breakpoint pause holds | the state of the tick the Breakpoint turned on | M6 start |
-| 14 Random probability and draws | ½, one draw per component per tick | M3 done |
+| 14 when a Random's output turns off | when none of its inputs is on | M3 done |
 | 10 persistent To inclusive | compared range avoids the To address | first M5 board |
 | 15 VMem lock ticks | the one tick after an address change; input is lost | M5 done |
 | 16 tick the loaded word is visible | the tick after the address pins flip | M5 done |
@@ -319,3 +319,4 @@ Decisions still owed by the user:
 - Boards for the user → generated into `saves/pending/`, never under `engine/`.
 - M2 boards observed 2026-11-15 → every routing rule matched the model; the clock starts on at tick 0 (changed); the game's counter at a Breakpoint pause is the stop tick plus one; unmatched or nested tunnels are compile errors in the game and errors in the engine. Verified now: every ink except Timer and Random.
 - CPU coverage → every pair of touching inks in the CPU is on an observed board (test).
+- Random (2026-11-15) → recorded through VMem at the user's suggestion (127 words × 32 bits per seed). Each trigger is a fresh fair coin flip and the output does not hold. The generator search (list in the facts file) found no match, so Random is modelled with the engine's own seeded generator.

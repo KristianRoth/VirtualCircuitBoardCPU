@@ -56,8 +56,8 @@ pub struct Options {
     pub timer_ticks: Option<u64>,
 }
 
-/// The engine's own generator for Random ink (splitmix64). It is repeatable per seed.
-/// Whether it matches the game's sequence is facts question 14.
+/// The engine's own generator for Random ink (splitmix64). It is repeatable per seed, but it is not the
+/// game's generator: none of the candidates tried reproduced the game's sequence (facts question 14).
 struct Rng(u64);
 
 impl Rng {
@@ -176,13 +176,20 @@ impl Simulation for Engine {
         for &e in &dirty {
             self.queued[e as usize] = false;
             let Kind::Component(ink) = c.kinds[e as usize] else { unreachable!("only components are queued") };
-            let flip = if ink == Ink::Random {
-                // Model (question 14): one draw per component per tick in which an input rose; toggles with probability 1/2.
-                c.reads[e as usize].iter().any(|t| self.rose[*t as usize]) && self.rng.next_bit()
+            let next = if ink == Ink::Random {
+                // Observed (random recorder boards): each time an input rises the output is a fresh coin flip,
+                // and it does not stay on until the next draw. Model for when it turns off (question 14):
+                // when no input is on any more.
+                let reads = &c.reads[e as usize];
+                if reads.iter().any(|t| self.rose[*t as usize]) {
+                    self.rng.next_bit()
+                } else {
+                    self.on[e as usize] && reads.iter().any(|t| self.on[*t as usize])
+                }
             } else {
-                self.evaluate(e as usize, ink) != self.on[e as usize]
+                self.evaluate(e as usize, ink)
             };
-            if flip {
+            if next != self.on[e as usize] {
                 flips.push(e);
             }
         }

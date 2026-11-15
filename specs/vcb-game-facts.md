@@ -92,6 +92,14 @@ Boards `routing-a`, `routing-b`, `general` (clock interval 3) and `general-1` (c
 - **Latch On with an input** (`latch-on` board): it is on at tick 0 and is toggled off at tick 1 by an input that is on from the start; with an idle input it stays on. Latch On toggles like Latch Off.
 - **Read and Write pixels inside a trace** are just trace. An LED can drive another component through a Write pixel.
 
+### Random, recorded through VMem (2026-11-15)
+Boards `random-vmem-seed-1` and `-2` (`engine/boards/`): a counter on the VMem address pins steps every 24 ticks, and 32 Random pixels wired to the content pins are triggered once per step. Each board ran to address 128 and was saved after returning to edit mode. The saves are `engine/tests/boards/random-vmem-seed-N.after.vcb`: words 1–127 hold 32 bits each, word 0 is 0.
+- **Each trigger is a fresh, fair coin flip.** 50% of the bits are 1, and a bit that was 1 is 1 again in the next word 25% of the time, for both seeds. The two seeds give different words.
+- **The output does not hold.** The user saw that a Random's output is only on briefly after it is triggered: a write pulse delayed by 12 buffers came too late to catch it. The manual's "toggles randomly" does not describe a held state. When exactly it turns off is not yet known (question 14).
+- **The generator was not identified.** Tried against both recordings, with the order of the 32 components left open by comparing the number of ones per word: Godot's PCG32 with Godot 3 and Godot 4 seeding, reference PCG32, MT19937 (32 and 64 bit), the MSVC `rand`, minstd (16807 and 48271), xorshift32/64 and splitmix64; taking the low bit, the high bit, bits 14, 15, 30 and 32, `% 100 < 50`; every draw, every second and every third; seeds from seed−2 to seed+2; plain and inverted. Also one generator per component with seeds 0–2999. Nothing matched. The engine therefore uses its own seeded generator and Random is "modelled, not game-exact".
+- **This run also confirmed VMem behaviour** with 8 address bits and 32 content bits: a content pin toggled by its input writes the word at the current address; an address change loads the new word (0) into the content pins; an 8-bit counter whose pins all toggle in the same tick steps the address cleanly. The write that went to address 0 does not show in the save.
+- **Saving:** both saves landed in `<name>.vcb.tmp` when the user saved over the open file.
+
 ## VMem
 - **Layout** (verified with `saves/all-inks.vcb.tmp`, filled by hand in the editor): 2^20 words × 32 bits, **big-endian**, so word `i` is bytes `4i..4i+3`. Total 4 MiB. The file always stores the full space; `vmem_settings` only limits which addresses the circuit's pins can reach.
 - **External VMem:** with `vmem_is_external: true`, the inline `vmem_data` is an empty blob (trailer `(2, 0)` only). The memory lives in `<project>.vcbmem` next to the `.vcb`; there is no path field. The `.vcbmem` is raw and uncompressed, 4,194,304 bytes, same layout, no trailer. Verified: a hand-written file with word i = `0x112233_0i` showed in the game's VMem editor as `11 22 33 01, 11 22 33 02, …`.
@@ -177,7 +185,7 @@ Questions 11–21 come from the v1 design (`vcb-engine-v1.md` lists the interim 
 11. **Latch, several inputs:** answered 2026-11-15: the latch toggles once per rising input, whatever the other inputs do; falling inputs do nothing.
 12. **"Same ink" at cross, tunnel, bus and mesh:** answered 2026-11-15: matching is by the colour of the touching pixel at a tunnel, bus and mesh; a cross joins traces of any colour. Still unobserved: a Read or Write pixel touching a tunnel, bus or mesh (the CPU has none).
 13. **Clock:** answered 2026-11-15: on at tick 0, flips at multiples of the interval; inputs are ignored.
-14. **Random:** the toggle probability, whether there is one draw per component or per rising input, and which generator (the game is made with Godot).
+14. **Random:** a fresh fair coin flip per trigger (answered 2026-11-15); the generator was not identified. Still open: when the output turns off (after one tick, or when its input goes off), and whether two inputs rising give one draw or two.
 15. **VMem locking:** exactly which ticks reject input, and is a rejected toggle lost or delayed?
 16. **VMem read latency:** on which tick after an address pin flips do the content pins show the new word?
 17. **Breakpoint pause:** the counter shows the tick the Breakpoint turned on, plus one (answered 2026-11-15). Still open, before the CPU rung: does the paused game hold the state of that tick or of the next one (does VMem written in the extra tick show)?
