@@ -102,8 +102,9 @@ impl Components {
             let s = &board.settings.vmem_settings;
             for (group, name, base, max_bits) in [(0, "address", 0, 20), (1, "content", 7, 32)] {
                 let [bits, x, y, offset_x, offset_y, size_x, size_y] = s[base..base + 7] else { unreachable!() };
-                if !(0..=max_bits).contains(&bits) {
-                    return Err(format!("vmem_settings: {bits} {name} bits, expected 0 to {max_bits}"));
+                // Observed: the game raises a smaller bit count to 4 when it loads the file, which moves the pins.
+                if !(4..=max_bits).contains(&bits) {
+                    return Err(format!("vmem_settings: {bits} {name} bits, expected 4 to {max_bits}"));
                 }
                 if (size_x, size_y) != (1, 1) {
                     return Err(format!("vmem_settings: {name} pin size {size_x}x{size_y} is not supported, only 1x1 has been observed"));

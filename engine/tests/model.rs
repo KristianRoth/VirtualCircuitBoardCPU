@@ -201,6 +201,15 @@ fn random_recorder_counts_to_address_128_and_stops() {
 }
 
 #[test]
+fn vmem_settings_the_engine_cannot_honour_are_errors() {
+    let error = |header: &str| Components::build(&textboard::parse(&format!("{header}\n\nl")).unwrap().board).err().unwrap();
+    assert!(error("vmem.address = 2,6,0,2,0\nvmem.content = 4,6,2,2,0").contains("2 address bits, expected 4 to 20"));
+    assert!(error("vmem.address = 4,6,0,2,0\nvmem.content = 33,70,2,2,0").contains("33 content bits"));
+    assert!(error("vmem.address = 4,2,0,20,0\nvmem.content = 4,6,2,2,0").contains("outside the board"));
+    assert!(error("vmem.address = 4,6,0,2,0\nvmem.content = 4,8,0,2,0").contains("on top of another pin"));
+}
+
+#[test]
 fn touching_crosses_are_an_error() {
     let tb = textboard::parse("\n5++5").unwrap();
     assert!(Components::build(&tb.board).err().unwrap().contains("Cross at 17,16"));

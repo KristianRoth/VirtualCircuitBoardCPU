@@ -89,7 +89,7 @@ fn unverified_inks_are_refused_unless_allowed() {
     assert_eq!(text(&out.stderr), "warning: Timer is modelled, not game-exact\n");
 
     // An unverified unit is refused: VMem, until milestone M5.
-    let vmem = gen("vmem", "vmem.address = 1,0,0,2,0\nvmem.content = 1,0,2,2,0\n\nl\n\nl\n");
+    let vmem = gen("vmem", "vmem.address = 4,6,0,2,0\nvmem.content = 4,6,2,2,0\n\nl.l.l.l\n\nl.l.l.l\n");
     assert_fails(vcb(&["run", &vmem, "--ticks", "2"]), "vmem is not verified yet");
     let out = vcb(&["run", &vmem, "--ticks", "2", "--allow-unverified"]);
     assert!(out.status.success());
