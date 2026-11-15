@@ -88,13 +88,9 @@ fn unverified_inks_are_refused_unless_allowed() {
     assert_eq!(text(&out.stdout), "stopped at tick 2: max-ticks\n");
     assert_eq!(text(&out.stderr), "warning: Timer is modelled, not game-exact\n");
 
-    // An unverified unit is refused: VMem, until milestone M5.
-    let vmem = gen("vmem", "vmem.address = 4,6,0,2,0\nvmem.content = 4,6,2,2,0\n\nl.l.l.l\n\nl.l.l.l\n");
-    assert_fails(vcb(&["run", &vmem, "--ticks", "2"]), "vmem is not verified yet");
-    let out = vcb(&["run", &vmem, "--ticks", "2", "--allow-unverified"]);
-    assert!(out.status.success());
-    assert_eq!(text(&out.stdout), "stopped at tick 2: max-ticks (unverified: vmem)\n");
-    assert_eq!(text(&out.stderr), "warning: vmem is not verified yet\n");
+    // Everything is verified or modelled now, so the refusal is checked on a unit list of its own.
+    let board = vcb::Board::read(Path::new(&gen("vmem", "vmem.address = 4,6,0,2,0\nvmem.content = 4,6,2,2,0\n\nl.l.l.l\n\nl.l.l.l\n"))).unwrap();
+    assert!(vcb::unverified_units(&board).is_empty());
 }
 
 #[test]

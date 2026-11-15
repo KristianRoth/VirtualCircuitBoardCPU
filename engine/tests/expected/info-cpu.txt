@@ -46,4 +46,4 @@ inks: 40
   LED: 1197
   Breakpoint: 2
   Annotation: 1193
-not verified yet: vmem
+not verified yet: nothing
