@@ -53,6 +53,38 @@ fn day_1_part_1_assembles_to_the_games_memory() {
     assert_eq!(assemble(&changed, "aoc1p1", &mut again, false).unwrap().replaced, 1);
 }
 
+/// Day 1 part 2: the game's save made straight after entering simulation holds the assembled program untouched
+/// (Persistent Memory 0-65535). It shows `@ name;`, an indented label, and the words both pointers store.
+#[test]
+fn day_1_part_2_assembles_to_the_games_memory() {
+    let game = fixture("cpu-aoc1p2.assembled.vcb");
+    let mut board = fixture("cpu-aoc1p2.vcb");
+    assert!(board.inks == game.inks && board.assembly == game.assembly);
+    assert!(std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/boards/cpu-aoc1p2.asm-observed.md")).unwrap().contains("Observed by: "));
+    let report = assemble(&game.assembly, "aoc1p2", &mut board, false).unwrap();
+    assert!(report.unverified.is_empty());
+    let wrong = (1..=65535).filter(|a| board.vmem[*a] != game.vmem[*a]).count();
+    assert_eq!(wrong, 0, "words that differ from the game's memory");
+    assert_eq!((game.vmem[0x100], game.vmem[0x101]), (0, 0x1000), "the pointer words, straight from the game");
+    assert!(report.names.iter().any(|(n, _)| n == "SKIP_DEC") && report.names.iter().any(|(n, _)| n == "SKIP_INC"));
+}
+
+/// Part 2 run by the engine on the CPU with its run switch on. 5831 is the accepted Advent of Code answer.
+///   cargo test --release -- --ignored
+#[test]
+#[ignore]
+fn day_1_part_2_runs_to_the_right_answer() {
+    use vcb::netlist::Components;
+    use vcb::sim::{Engine, Simulation, StopSet};
+    let mut board = fixture("cpu-aoc1p1.vcb");
+    board.vmem = fixture("cpu-32bit-manual-start.vcb").vmem;
+    assemble(&fixture("cpu-aoc1p2.assembled.vcb").assembly, "aoc1p2", &mut board, false).unwrap();
+    let mut engine = Engine::new(&board, Components::build(&board).unwrap(), &Default::default()).unwrap();
+    let report = engine.run_until(&StopSet { max_ticks: 500_000_000, breakpoint: true, ..Default::default() }, |_| {});
+    assert_eq!(report.reasons, vec!["breakpoint"]);
+    assert_eq!(engine.vmem()[0x100], 0x16C7, "count");
+}
+
 /// Each unverified feature: a gate hit naming it without the flag; with the flag, the manual's word.
 #[test]
 fn unverified_features_need_the_flag_and_follow_the_manual() {
@@ -145,8 +177,6 @@ fn undefined_cases_are_always_gate_hits() {
         ("p", "symbol a 1; origin a"),
         ("p", "origin 0x10\n1|2"),
         ("q", "origin 0x10\n@ L 5"),
-        ("q", "origin 0x10\n@ L;\n5"),
-        ("q", "origin 0x10\n\t@ L\n5"),
         ("q", "Symbol a 1"),
         ("q", "origin 0X10"),
         ("q", "origin 0xff"),
