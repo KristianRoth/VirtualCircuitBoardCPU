@@ -29,7 +29,7 @@ export SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
 vcb info <board.vcb>               size, settings, pixel count per ink, what is not verified
 vcb info --adjacency <board.vcb>   which inks touch (for pairs involving Read, Write, Cross, Tunnel, Mesh, Bus)
 vcb gen <board.txt> -o <out.vcb>   text-art board -> .vcb, plus <out>.checklist.md and <out>.png
-vcb asm <board.vcb> --asm <prog>   assemble a program into the board's memory (see "Running a new program")
+vcb asm <board.vcb> --asm <prog>   assemble a program into the board's memory without running (see "Running a new program")
 vcb run <board.vcb> --ticks <n>    simulate
 ```
 
@@ -52,7 +52,9 @@ vcb run <board.vcb> --ticks <n>    simulate
 | `--timer-ticks <n>` | Ticks per Timer interval. Required when the board has Timer ink. |
 | `--stats` | Ticks, time and ticks per second at the end; a progress line every 5 seconds. |
 | `--force` | Allow overwriting output files. |
-| `--allow-unverified` | Run even if the board uses something with no observed fixture. |
+| `--allow-unverified` | Run even if the board uses something with no observed fixture, and let the assembler use features only the manual states. |
+| `--asm <file.vcbasm>` | Assemble this program before tick 0 instead of the board's own. |
+| `--no-asm` | Assemble nothing; run the memory as the file holds it. |
 | `--engine v1` | Only v1 exists. |
 
 The run ends on the first tick where a stop condition holds and prints every one that held, for example `stopped at tick 7: breakpoint, max-ticks`. Ctrl-C stops after the current tick with reason `interrupted` and still writes the requested outputs.
@@ -65,24 +67,23 @@ Example: the CPU fixture.
 
 ## Running a new program on the CPU
 
-`vcb asm` assembles a program into a board's memory as the game does (spec: `../specs/vcb-assembler.md`). `vcb run` does not assemble yet, so it is two commands:
+`vcb run` assembles the board's program into its memory before tick 0, as the game does when a simulation starts (spec: `../specs/vcb-assembler.md`). The program is, in this order: the file given with `--asm`; `<board>.vcbasm` when the board has External Editing on; the board's Assembly Editor text. `--no-asm` assembles nothing and runs the memory as the file holds it. The input files are never changed.
 
 ```
-./target/release/vcb asm <cpu board> --asm <program.vcbasm> -o run.vcb
-./target/release/vcb run run.vcb --ticks <n> --watch <addresses>
+./target/release/vcb run <cpu board> --asm <program.vcbasm> --ticks <n> --watch <addresses>
 ```
 
-Other outputs of `vcb asm`: `--dump-vmem <file>`, `--listing <file>` (`-` prints it: address, word, line and statement of every stored word, then the labels and pointers). With no output it only checks the program.
+For example, Advent of Code day 1 part 2 on the CPU (about 12 s; `AoC2025/` is a separate repository nested in this folder):
 
-The assembler accepts only what a game save has shown. A feature that only the manual states needs `--allow-unverified`; anything else is refused with a letter of question 23 in `../specs/vcb-game-facts.md`. All such problems are listed in one run.
+```
+./target/release/vcb run ../AoC2025/cpu-32bit-autorun-aoc1p1.vcb --asm ../AoC2025/days/day1/part2.vcbasm --ticks 500000000 --watch 0x100
+```
 
-The older way still works: the game assembles when a simulation starts, and a save made afterwards contains the assembled program if Persistent Memory covers it.
+`vcb asm <board> [--asm <program>]` assembles without running. `-o <new.vcb>` writes the board with the assembled memory and the program as its Assembly Editor text, `--dump-vmem <file>` the memory, `--listing <file>` (`-` prints it) the address, word, line and statement of every stored word, then the labels and pointers. With no output it only checks the program.
 
-1. Put the assembly in the CPU file (`AoC2025/cpu-32bit-autorun-aoc1p1.vcb` is the CPU with its run switch fixed on; `AoC2025/` is a separate repository nested in this folder).
-2. In the game: set Persistent Memory From 0 To 65535, enter simulation mode, return to edit mode, Save As a new file. Leaving simulation mode right away gives the program before it runs.
-3. `vcb run <that file> --ticks <n> --watch <addresses>`. The `assembly` text in the file is ignored by the engine.
+The assembler accepts only what a game save has shown. A feature that only the manual states needs `--allow-unverified`; anything else is refused with a letter of question 23 in `../specs/vcb-game-facts.md`. All such problems are listed in one run. A `.vcbasm` file may have Windows line ends.
 
-A save made after a full run can also be used: set the words the program changes back to their starting values (see how `cpu-aoc1p1.vcb` was made in the facts file).
+Assemble onto a clean board: words of an earlier program that the new one does not overwrite stay, and the `assembled` line then says how many words it replaced.
 
 ## Layout
 

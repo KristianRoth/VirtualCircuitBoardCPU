@@ -273,7 +273,7 @@ Each milestone ends with a local commit once all tests pass.
 |---|---|---|
 | A0 | `saves/pending/cpu-aoc1p2.vcb` (two fields of the manual-start board changed); the save imported as `cpu-aoc1p2.assembled.vcb` with its checklist | one save in the game, a minute. Done 2026-11-16: the game's memory equals the engine's in words 1–65535 |
 | A1a | The typed fields; `asm.rs` with the gate; the part 1 and part 2 tests; `vcb asm`. `vcb run` unchanged | nothing (part 2's criteria wait for A0). Done 2026-11-16: part 1 and part 2 match the game in every word; part 2 runs to the Breakpoint at tick 70,339,472 with `0x100` = `0x16C7` |
-| A1b | `vcb run` assembles by default, `--asm`, `--no-asm`; documents (below) | nothing |
+| A1b | `vcb run` assembles by default, `--asm`, `--no-asm`; documents (below) | nothing. Done 2026-11-16: `vcb run AoC2025/cpu-32bit-autorun-aoc1p1.vcb --asm AoC2025/days/day1/part2.vcbasm --ticks 500000000 --watch 0x100` prints `0x16C7` |
 | A2 | `vcb gen` keys; the five probe boards and checklists in `saves/pending/` | run five boards in the game |
 | A3 | Import: fixtures, classes moved, facts file and this spec updated | nothing |
 
