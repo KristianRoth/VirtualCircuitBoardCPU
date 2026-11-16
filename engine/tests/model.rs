@@ -18,7 +18,7 @@ fn lit_ticks(tb: &TextBoard, ticks: u64) -> Vec<(String, Vec<u64>)> {
     let entities: Vec<u32> = tb.probes.iter().map(|p| components.entity_at(p.x, p.y).unwrap()).collect();
     let mut lit: Vec<(String, Vec<u64>)> = tb.probes.iter().map(|p| (p.label.clone(), Vec::new())).collect();
     let mut engine = Engine::new(&tb.board, components, &Default::default()).unwrap();
-    engine.run_until(&StopSet { max_ticks: ticks, breakpoint: false }, |e| {
+    engine.run_until(&StopSet { max_ticks: ticks, breakpoint: false, ..Default::default() }, |e| {
         for (i, entity) in entities.iter().enumerate() {
             if e.state()[*entity as usize] {
                 lit[i].1.push(e.tick());
@@ -130,7 +130,7 @@ fn general_boards_follow_the_model() {
     // The Breakpoint shares the LED's input, so the run stops on the tick the LED lights.
     let tb = load("general.txt");
     let mut engine = Engine::new(&tb.board, Components::build(&tb.board).unwrap(), &Default::default()).unwrap();
-    let report = engine.run_until(&StopSet { max_ticks: 100, breakpoint: true }, |_| {});
+    let report = engine.run_until(&StopSet { max_ticks: 100, breakpoint: true, ..Default::default() }, |_| {});
     assert_eq!((report.tick, report.reasons), (7, vec!["breakpoint"]));
 }
 
@@ -160,7 +160,7 @@ fn timer_flips_every_timer_ticks_and_needs_the_setting() {
     assert!(build(Some(0)).err().unwrap().contains("--timer-ticks"));
     let mut engine = build(Some(4)).unwrap();
     let mut on = Vec::new();
-    engine.run_until(&StopSet { max_ticks: 12, breakpoint: false }, |e| on.push(e.state()[0]));
+    engine.run_until(&StopSet { max_ticks: 12, breakpoint: false, ..Default::default() }, |e| on.push(e.state()[0]));
     assert_eq!(on, [false, false, false, false, true, true, true, true, false, false, false, false, true]);
 }
 
@@ -190,7 +190,7 @@ fn random_recorder_counts_to_address_128_and_stops() {
     let pins: Vec<u32> = (0..8).map(|k| components.entity_at((s[1] - s[3] * k) as usize, s[2] as usize).unwrap()).collect();
     let mut engine = Engine::new(&tb.board, components, &Default::default()).unwrap();
     let mut addresses = vec![0u32];
-    let report = engine.run_until(&StopSet { max_ticks: 5000, breakpoint: true }, |e| {
+    let report = engine.run_until(&StopSet { max_ticks: 5000, breakpoint: true, ..Default::default() }, |e| {
         let address = pins.iter().enumerate().map(|(k, pin)| (e.state()[*pin as usize] as u32) << k).sum();
         if address != *addresses.last().unwrap() {
             addresses.push(address);
@@ -224,11 +224,11 @@ fn clock_flips_every_interval_and_a_breakpoint_stops_the_run() {
     assert_eq!(lit[1].1, [1, 2, 3, 7, 8, 9]);
 
     let mut engine = Engine::new(&tb.board, Components::build(&tb.board).unwrap(), &Default::default()).unwrap();
-    let report = engine.run_until(&StopSet { max_ticks: 100, breakpoint: true }, |_| {});
+    let report = engine.run_until(&StopSet { max_ticks: 100, breakpoint: true, ..Default::default() }, |_| {});
     assert_eq!((report.tick, report.reasons), (1, vec!["breakpoint"]));
 
     let mut engine = Engine::new(&tb.board, Components::build(&tb.board).unwrap(), &Default::default()).unwrap();
-    let report = engine.run_until(&StopSet { max_ticks: 1, breakpoint: true }, |_| {});
+    let report = engine.run_until(&StopSet { max_ticks: 1, breakpoint: true, ..Default::default() }, |_| {});
     assert_eq!((report.tick, report.reasons), (1, vec!["breakpoint", "max-ticks"]));
 }
 
@@ -238,7 +238,7 @@ fn two_runs_give_the_same_state_every_tick() {
     let run = || {
         let mut states = Vec::new();
         let mut engine = Engine::new(&tb.board, Components::build(&tb.board).unwrap(), &Default::default()).unwrap();
-        engine.run_until(&StopSet { max_ticks: 20, breakpoint: false }, |e| states.push(e.state().to_vec()));
+        engine.run_until(&StopSet { max_ticks: 20, breakpoint: false, ..Default::default() }, |e| states.push(e.state().to_vec()));
         states
     };
     assert!(run() == run());

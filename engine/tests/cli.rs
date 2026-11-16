@@ -158,3 +158,98 @@ fn watch_and_dump_show_the_memory_after_the_run() {
     let plain = gen_two_buffers(&d);
     assert_fails(vcb(&["run", &plain, "--ticks", "1", "--watch", "1"]), "is_vmem_enabled");
 }
+
+fn fixture(name: &str) -> String {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/boards").join(name).to_str().unwrap().to_string()
+}
+
+/// The last line the command printed to stdout or stderr.
+fn last_line(out: &Output, of_stderr: bool) -> String {
+    text(if of_stderr { &out.stderr } else { &out.stdout }).lines().last().unwrap_or("").to_string()
+}
+
+#[test]
+fn stop_conditions_fire_on_the_right_tick() {
+    // vmem-timing: address 1 is selected at tick 3 and loaded at tick 4; written at tick 6; the last write is at tick 15.
+    let timing = fixture("vmem-timing.vcb");
+    let stop = |extra: &[&str]| last_line(&vcb(&[&["run", &timing, "--ticks", "100"], extra].concat()), false);
+    assert_eq!(stop(&["--break-addr", "1"]), "stopped at tick 4: address-watch 0x00000001");
+    assert_eq!(stop(&["--break-addr", "1:fetch"]), "stopped at tick 4: address-watch 0x00000001");
+    assert_eq!(stop(&["--break-addr", "1:write"]), "stopped at tick 6: address-watch 0x00000001");
+    assert_eq!(stop(&["--break-addr", "0x1:any"]), "stopped at tick 4: address-watch 0x00000001");
+    assert_eq!(stop(&["--break-addr", "3:write"]), "stopped at tick 14: address-watch 0x00000003");
+    assert_eq!(stop(&["--quiescent", "10"]), "stopped at tick 25: quiescent");
+    assert_eq!(stop(&[]), "stopped at tick 100: max-ticks");
+
+    // general: its Breakpoint turns on at tick 7.
+    let general = fixture("general.vcb");
+    let stop = |args: &[&str]| last_line(&vcb(&[&["run", &general], args].concat()), false);
+    assert_eq!(stop(&["--ticks", "50"]), "stopped at tick 7: breakpoint");
+    assert_eq!(stop(&["--ticks", "7"]), "stopped at tick 7: breakpoint, max-ticks");
+    assert_eq!(stop(&["--ticks", "9", "--no-breakpoint"]), "stopped at tick 9: max-ticks");
+}
+
+#[test]
+fn stop_and_engine_arguments_are_checked() {
+    let timing = fixture("vmem-timing.vcb");
+    let error = |args: &[&str]| last_line(&vcb(&[&["run", &timing], args].concat()), true);
+    assert!(error(&[]).contains("--ticks is required"));
+    assert!(error(&["--ticks", "5", "--break-addr", "1:read"]).contains("expected fetch, write or any"));
+    assert!(error(&["--ticks", "5", "--break-addr", "0x100000"]).contains("not a VMem address"));
+    assert!(error(&["--ticks", "5", "--engine", "v2"]).contains("v2 engine does not exist yet"));
+    assert!(error(&["--ticks", "5", "--engine", "v3"]).contains("expected v1 or v2"));
+    assert!(vcb(&["run", &timing, "--ticks", "5", "--engine", "v1"]).status.success());
+    // No VMem, nothing to stop on.
+    let d = dir("stops");
+    let plain = gen_two_buffers(&d);
+    assert_fails(vcb(&["run", &plain, "--ticks", "1", "--quiescent", "5"]), "is_vmem_enabled");
+}
+
+#[test]
+fn config_file_is_overridden_by_flags_and_overrides_the_board() {
+    let d = dir("config");
+    let source = d.join("clock.txt");
+    std::fs::write(&source, "clock_interval = 1\n\nCW5RE\n").unwrap();
+    let board = d.join("clock.vcb");
+    assert!(vcb(&["gen", source.to_str().unwrap(), "-o", board.to_str().unwrap()]).status.success());
+    let board = board.to_str().unwrap();
+    let config = d.join("run.toml");
+    std::fs::write(&config, "ticks = 6\nclock-interval = 3\nprobe = [\"16,16=clock\"]\n").unwrap();
+    let config = config.to_str().unwrap();
+    // The clock is on at tick 0 and flips at every multiple of its interval.
+    let clock = |args: &[&str]| -> String {
+        let out = vcb(&[&["run", board], args].concat());
+        assert!(out.status.success(), "{}", text(&out.stderr));
+        text(&out.stdout).lines().filter_map(|l| l.strip_prefix("tick ")?.split_once("clock=").map(|(_, v)| v.to_string())).collect()
+    };
+    assert_eq!(clock(&["--ticks", "6", "--probe", "16,16=clock"]), "1010101", "the board's interval, 1");
+    assert_eq!(clock(&["--config", config]), "1110001", "the config file's interval, 3");
+    assert_eq!(clock(&["--config", config, "--clock-interval", "5"]), "1111100", "the flag's interval, 5");
+    assert_eq!(clock(&["--config", config, "--ticks", "3"]), "1110", "the flag's tick limit");
+
+    std::fs::write(d.join("bad.toml"), "ticks = 6\nspeed = 2\n").unwrap();
+    assert_fails(vcb(&["run", board, "--config", d.join("bad.toml").to_str().unwrap()]), "unknown key \"speed\"");
+    std::fs::write(d.join("bad.toml"), "ticks = \"six\"\n").unwrap();
+    assert_fails(vcb(&["run", board, "--config", d.join("bad.toml").to_str().unwrap()]), "ticks: expected a whole number");
+}
+
+#[test]
+fn ctrl_c_stops_the_run_and_still_writes_the_outputs() {
+    let d = dir("interrupt");
+    let dump = d.join("dump.txt");
+    let child = Command::new(env!("CARGO_BIN_EXE_vcb"))
+        .args(["run", &fixture("random-vmem-seed-1.vcb"), "--ticks", "1000000000000", "--no-breakpoint", "--watch", "1", "--dump-vmem", dump.to_str().unwrap()])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(3000));
+    assert!(Command::new("kill").args(["-INT", &child.id().to_string()]).status().unwrap().success());
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let stdout = text(&out.stdout);
+    assert!(stdout.contains(": interrupted\n"), "{stdout}");
+    // The watched word and the dump are written after the interrupt and agree with each other.
+    let watched = stdout.lines().find_map(|l| l.strip_prefix("0x00000001 = ")).expect("the --watch line").split(' ').next().unwrap().to_string();
+    assert_eq!(std::fs::read_to_string(&dump).unwrap().lines().nth(1), Some(format!("0x00000001 {watched}").as_str()));
+}

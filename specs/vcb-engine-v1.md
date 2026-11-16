@@ -266,7 +266,7 @@ Each milestone ends with a local commit once its tests pass. Commits stage expli
 | M4 | Rung B on one board, within the checklist budget: ring oscillator, SR latch, D flip-flop, 4-bit counter, 4-bit adder with 4 input pairs | observe 1 board | done 2026-11-16 (fixture `combinations`: 16 LEDs × 16 ticks matched; the adder adds a fixed 3 to the counter instead of using 4 input pairs) |
 | M5 | Rung C: pins, VMem write, read back, address 0, locking, content precedence, content width under 32 bits, the To-inclusive question first; `.vcbmem` reading tested without the game | run, checklist and save per board | done 2026-11-16 (fixtures `vmem-preserve`, `random-vmem-seed-1/2`, `vmem-timing`); a preloaded non-zero word 0 and pin sizes other than 1×1 are unobserved |
 | M6 | Rung D as described under "CPU fixtures". First: question 19 (five minutes in the game) | edit the CPU to run without clicks; run and save | done 2026-11-16: the CPU ran AoC day 1 part 1 to its Breakpoint at the game's tick with identical memory (fixture `cpu-aoc1p1`, run with `cargo test --release -- --ignored`). The program was assembled by the game, not hand-encoded; the first-fetch probe fixture was not needed |
-| M7 | Address watch, `--quiescent`, TOML config, Ctrl-C, progress output | nothing | next |
+| M7 | Address watch, `--quiescent`, TOML config, Ctrl-C, progress output | nothing | done 2026-11-16 |
 
 ## Open questions
 All game questions are in the facts file. This table says which model v1 uses meanwhile and when the answer is needed.
@@ -278,8 +278,8 @@ All game questions are in the facts file. This table says which model v1 uses me
 | 4 pin size other than 1×1 | error | M5 done |
 
 Decisions still owed by the user:
-- **ALU on its own** (framework rung D): add an ALU-only board before the CPU, or rely on the first-fetch fixture and the bisect procedure? Decide at M6 start.
-- **Licence** for the engine code in the public repo. Decide before the first commit of `engine/`.
+- **ALU on its own** (framework rung D): not needed; the whole CPU matched the game on the first run.
+- **Licence** for the engine code in the public repo. Still not chosen; `engine/` is committed locally. Decide before pushing.
 
 ## Decision log
 - Split the spec → `vcb-game-facts.md` (game), `vcb-engine.md` (framework), this file (v1 design).
@@ -313,6 +313,8 @@ Decisions still owed by the user:
 - Boards for the user → generated into `saves/pending/`, never under `engine/`.
 - M2 boards observed 2026-11-15 → every routing rule matched the model; the clock starts on at tick 0 (changed); the game's counter at a Breakpoint pause is the stop tick plus one; unmatched or nested tunnels are compile errors in the game and errors in the engine. Verified now: every ink except Timer and Random.
 - CPU coverage → every pair of touching inks in the CPU is on an observed board (test).
+- M7 (2026-11-16) → address watch (`fetch` = the tick the word is loaded into the content pins, `write` = the tick a content change is written), `--quiescent`, `--config` (TOML, flags win), Ctrl-C (`interrupted`, outputs still written), progress every 5 s with `--stats`, `--engine v1`. v1 is complete.
+- Kept for later sessions → `CLAUDE.md` at the repo root (state, rules, workflow, pitfalls), `engine/README.md` (build, commands, layout), the board generators in `engine/tools/board-generators/` and the random-generator search in `engine/tools/random-search/`.
 - CPU (2026-11-16) → the user fixed the CPU's run switch in ink and ran AoC day 1 part 1 in the game with Persistent Memory over all of VMem. That save gave both the assembled program and the result, so no assembler and no hand-encoded test programs were needed. The engine matches the Breakpoint tick and every memory word, at about 5.7 million ticks per second in a release build.
 - VMem (2026-11-16) → the game loads the new word one tick after an address change, in the locked tick (engine changed); at least 4 address and content bits; upper bits written as 0; To inclusive; word 0 readable at run time but not saved. VMem is verified.
 - Random (2026-11-15/16) → recorded through VMem at the user's suggestion (127 words × 32 bits per seed). At the user's request the game's executable was checked for known generator constants; it contains MT19937's. MT19937 with the board's seed, low bit, two draws per trigger reproduces every recorded bit, so Random is verified and game-exact. The game's encrypted scripts were not opened.

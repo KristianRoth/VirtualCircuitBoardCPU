@@ -5,16 +5,36 @@ use crate::format::Result;
 use crate::ink::Ink;
 use crate::netlist::{Components, Kind};
 
+/// Which kind of VMem access an address watch reacts to.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Access {
+    /// The word at the address is loaded into the content pins (the tick after the address pins change).
+    Fetch,
+    /// A content change is written to the address.
+    Write,
+    Any,
+}
+
 /// What ends a run.
+#[derive(Default)]
 pub struct StopSet {
     pub max_ticks: u64,
     pub breakpoint: bool,
+    /// Stop on the tick VMem accesses one of these addresses.
+    pub watch: Vec<(usize, Access)>,
+    /// Stop once VMem has not changed for this many ticks.
+    pub quiescent: Option<u64>,
+    /// Set from outside (Ctrl-C) to stop after the current tick.
+    pub interrupt: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 pub struct StopReport {
     pub tick: u64,
-    /// Every condition that held on the final tick, in the framework spec's order.
+    /// Every condition that held on the final tick, in this order:
+    /// breakpoint, address-watch, quiescent, max-ticks, interrupted.
     pub reasons: Vec<&'static str>,
+    /// The address that fired, when "address-watch" is among the reasons.
+    pub watch_address: Option<usize>,
 }
 
 pub trait Simulation {
@@ -27,23 +47,45 @@ pub trait Simulation {
     fn breakpoint_hit(&self) -> bool;
     /// The VMem words as they are now.
     fn vmem(&self) -> &[u32];
+    /// The address VMem loaded from during the last tick, and the address it wrote to, if any.
+    fn vmem_access(&self) -> (Option<usize>, Option<usize>);
+    /// True if a VMem word changed during the last tick.
+    fn vmem_changed(&self) -> bool;
 
     /// Runs until a stop condition holds. `each_tick` is called for the starting state and after every tick.
     fn run_until(&mut self, stops: &StopSet, mut each_tick: impl FnMut(&Self)) -> StopReport
     where
         Self: Sized,
     {
+        let mut last_change = self.tick();
         loop {
             each_tick(self);
             let mut reasons = Vec::new();
             if stops.breakpoint && self.breakpoint_hit() {
                 reasons.push("breakpoint");
             }
+            let (fetched, written) = self.vmem_access();
+            let watch_address = stops.watch.iter().find_map(|(address, access)| {
+                let hit = (*access != Access::Write && fetched == Some(*address)) || (*access != Access::Fetch && written == Some(*address));
+                hit.then_some(*address)
+            });
+            if watch_address.is_some() {
+                reasons.push("address-watch");
+            }
+            if self.vmem_changed() {
+                last_change = self.tick();
+            }
+            if stops.quiescent.is_some_and(|n| self.tick() - last_change >= n) {
+                reasons.push("quiescent");
+            }
             if self.tick() >= stops.max_ticks {
                 reasons.push("max-ticks");
             }
+            if stops.interrupt.as_ref().is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed)) {
+                reasons.push("interrupted");
+            }
             if !reasons.is_empty() {
-                return StopReport { tick: self.tick(), reasons };
+                return StopReport { tick: self.tick(), reasons, watch_address };
             }
             self.step();
         }
@@ -121,6 +163,10 @@ pub struct Engine {
     locked: bool,
     /// The word at the new address is loaded into the content pins in that same locked tick.
     load_pending: bool,
+    /// What VMem did in the last tick: the address loaded from, the address written to, and whether a word changed.
+    fetched: Option<usize>,
+    written: Option<usize>,
+    vmem_changed: bool,
     /// Per entity: 1 for an address pin, 2 for a content pin, 0 otherwise.
     pin_role: Vec<u8>,
 }
@@ -138,7 +184,7 @@ impl Engine {
             None => 1,
         };
         let rng = Rng::new(board.settings.random_seed as u32);
-        let mut engine = Engine { on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, pin_role: vec![0; n], components };
+        let mut engine = Engine { on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
         for (role, pins) in [(1, &engine.components.address_pins), (2, &engine.components.content_pins)] {
             for pin in pins {
                 engine.pin_role[*pin as usize] = role;
@@ -289,9 +335,11 @@ impl Simulation for Engine {
         //   tick T:   address pins flip. A content change in the same tick still goes to the old address.
         //   tick T+1: VMem is locked: input to any pin is rejected and lost. The word at the new address
         //             appears on the content pins in this tick, so readers see it at T+2.
+        (self.fetched, self.written, self.vmem_changed) = (None, None, false);
         if !self.components.address_pins.is_empty() || !self.components.content_pins.is_empty() {
             if self.load_pending {
                 self.load_pending = false;
+                self.fetched = Some(self.address);
                 let word = self.vmem[self.address];
                 let mut loaded = Vec::new();
                 for (k, &pin) in self.components.content_pins.iter().enumerate() {
@@ -306,7 +354,10 @@ impl Simulation for Engine {
             let (address_flipped, content_flipped) = (flipped(1), flipped(2));
             if content_flipped {
                 // Bits above the content width are written as 0 (observed).
-                self.vmem[self.address] = self.pins_value(&self.components.content_pins);
+                let value = self.pins_value(&self.components.content_pins);
+                self.written = Some(self.address);
+                self.vmem_changed = self.vmem[self.address] != value;
+                self.vmem[self.address] = value;
             }
             if address_flipped {
                 self.address = self.pins_value(&self.components.address_pins) as usize;
@@ -330,5 +381,13 @@ impl Simulation for Engine {
 
     fn vmem(&self) -> &[u32] {
         &self.vmem
+    }
+
+    fn vmem_access(&self) -> (Option<usize>, Option<usize>) {
+        (self.fetched, self.written)
+    }
+
+    fn vmem_changed(&self) -> bool {
+        self.vmem_changed
     }
 }
