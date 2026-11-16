@@ -230,7 +230,7 @@ No target. `--stats` reports TPS so the CPU's v1 speed is known when v2 starts.
 
 ## Acceptance criteria
 Reader, writer, tools
-- [ ] `vcb info` on `AoC2025/cpu-32bit-manual-start.vcb` and on `engine/tests/boards/all-inks.vcb` equals a committed expected output (2048×2048; 40 and 48 colours).
+- [ ] `vcb info` on `engine/tests/boards/cpu-32bit-manual-start.vcb` and on `engine/tests/boards/all-inks.vcb` equals a committed expected output (2048×2048; 40 and 48 colours).
 - [ ] Writing a `Board` and reading it back gives an equal `Board`, including trace and bus colours. `engine/tests/boards/all-inks.vcb` read and re-written has an identical logic layer.
 - [ ] The framework's "Reader and errors" criteria pass. Each new error message above has a test for a non-zero exit, exactly one stderr line, and the named item.
 - [ ] A board with `vmem_is_external: true` and a `.vcbmem` next to it loads that memory: `--dump-vmem` at `--ticks 0` equals the file's words, except word 0.

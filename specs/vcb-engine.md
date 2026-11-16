@@ -1,7 +1,7 @@
 # VCB simulation engine
 
 ## Problem & goal
-The user has a 32-bit computer built in Virtual Circuit Board (VCB, Steam app 1885690), saved as `AoC2025/cpu-32bit-manual-start.vcb`, and wants to solve this year's Advent of Code with it. The game's simulator is too slow for that. openVCB (cloned in `openVCB/`) only reads the 2022 Godot `.tres` save format, not the current one. The goal is a new, fast simulation engine that loads current `.vcb` files and runs them **tick-exactly** like the game.
+The user has a 32-bit computer built in Virtual Circuit Board (VCB, Steam app 1885690), saved as `engine/tests/boards/cpu-32bit-manual-start.vcb`, and wants to solve this year's Advent of Code with it. The game's simulator is too slow for that. openVCB (cloned in `openVCB/`) only reads the 2022 Godot `.tres` save format, not the current one. The goal is a new, fast simulation engine that loads current `.vcb` files and runs them **tick-exactly** like the game.
 
 **Status (2026-11-16):** v1 is complete (milestones M0–M7 in `vcb-engine-v1.md`), including the final boss in a first form: the CPU runs AoC day 1 part 1 exactly like the game, with the program assembled by the game. Still Later: the assembler, v2, VInput/VDisplay, a viewer, the openVCB patch and benchmark.
 
@@ -70,7 +70,7 @@ A single user (the author) runs it locally from the CLI. There is no auth or mul
 
 ## Data
 - **Formats:** the blob format, logic layer, colour→ink table, VMem layout, external VMem and pin layout are in the facts file.
-- **VMem size exception:** a VMem blob of 4,194,305 bytes (seen in `AoC2025/cpu-32bit-manual-start.vcb`) is accepted, and the extra byte is ignored.
+- **VMem size exception:** a VMem blob of 4,194,305 bytes (seen in `engine/tests/boards/cpu-32bit-manual-start.vcb`) is accepted, and the extra byte is ignored.
 - **VMem word 0:** until facts question 8 is answered, the engine sets word 0 to 0 on load and warns if the file had a non-zero value there.
 - **No live state:** saves never contain component state, so every run starts from reset. VMem written by the circuit is saved only inside the Persistent Memory region (see the facts file); VMem fixtures use such saves as ground truth.
 - **Input:** `.vcb` v2 JSON. The engine never changes the input file.
@@ -171,7 +171,7 @@ Speed and v2
 0. **Prerequisites in the game (owner: the user):**
    - ~~Check step-and-save~~ and ~~assemble-and-save~~: **done 2026-11-13.** Neither works, so ground truth comes from observation in the game and programs go in by script (open questions 1 and 2).
    - Record the in-game TPS of the 32-bit board on the Windows PC (still open).
-1. **Format check:** decode every field of `AoC2025/cpu-32bit-manual-start.vcb`, list every colour found, and identify the trailer fields.
+1. **Format check:** decode every field of `engine/tests/boards/cpu-32bit-manual-start.vcb`, list every colour found, and identify the trailer fields.
 2. **Colour→ink table:** from the User Guide and wiki, confirmed with ladder rung A.
 3. **v1 engine**, built up the ladder one rung at a time. Each rung's boards are built by the user in the game and committed as fixtures:
    - **A. One ink per board:** a trace plus a single gate for each gate type; latch, clock (including mid-period), timer, random, breakpoint and LED; bus, tunnel, mesh and wireless; the load-convention board (open question 6).

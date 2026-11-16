@@ -166,7 +166,7 @@ impl Board {
         } else {
             let (mut bytes, _) = decode_blob(str_field(&json, "vmem_data")?, 1, "vmem_data")?;
             if bytes.len() == VMEM_BYTES + 1 {
-                bytes.pop(); // seen in AoC2025/cpu-32bit-manual-start.vcb; the extra byte is ignored
+                bytes.pop(); // seen in the CPU board (tests/boards/cpu-32bit-manual-start.vcb); the extra byte is ignored
             }
             if bytes.len() != VMEM_BYTES {
                 return Err(format!("vmem_data: is {} bytes, expected {VMEM_BYTES}", bytes.len()));

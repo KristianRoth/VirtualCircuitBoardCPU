@@ -3,7 +3,7 @@
 A 32-bit CPU built in the Steam game Virtual Circuit Board (VCB), and `engine/`: a Rust engine that runs VCB saves tick for tick like the game. The aim is to solve Advent of Code on the CPU, faster than the game allows.
 
 ## Read these first
-- `AoC2025/README.md`: the CPU board files. `AoC2025/cpu-32bit-manual-start.vcb` is the CPU as built (formerly `32-bit-alu-try.vcb`); `AoC2025/cpu-32bit-autorun-aoc1p1.vcb` runs by itself and carries the AoC day 1 part 1 assembly (formerly `CPU.vcb`).
+- `AoC2025/` and `AoC2026/` are **separate git repositories nested in this folder** and git-ignored here (the user's choice, 2026-11-16). `AoC2025/` holds the CPU boards (`cpu-32bit-manual-start.vcb`, formerly `32-bit-alu-try.vcb`; `cpu-32bit-autorun-aoc1p1.vcb`, formerly `CPU.vcb`) and the programs in `days/day1/part1.vcbasm` and `part2.vcbasm`; see its README. Commit there with `git -C AoC2025 …`, never from this repo. The engine does not depend on them: its tests use their own copy of the CPU board in `engine/tests/boards/cpu-32bit-manual-start.vcb`.
 - `specs/vcb-engine-v1.md`: the v1 design, the milestone table with status (Rollout), open questions, and the decision log. This is the plan being followed.
 - `specs/vcb-game-facts.md`: everything observed about the game and the `.vcb` format, and every open question about the game. New facts about the game go here, with the date and the board that showed them.
 - `specs/vcb-engine.md`: the framework spec (goals, CLI, stop rules). The v1 spec lists where it overrides this.

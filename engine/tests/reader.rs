@@ -61,7 +61,7 @@ fn written_board_reads_back_equal() {
 
 #[test]
 fn game_saves_survive_a_rewrite() {
-    for file in ["engine/tests/boards/all-inks.vcb", "AoC2025/cpu-32bit-manual-start.vcb"] {
+    for file in ["engine/tests/boards/all-inks.vcb", "engine/tests/boards/cpu-32bit-manual-start.vcb"] {
         let board = Board::read(&repo(file)).unwrap();
         let again = Board::parse(&board.to_vcb(), no_vcbmem).unwrap();
         assert!(again == board, "{file} changed when re-written");
@@ -78,7 +78,7 @@ fn all_inks_save_has_one_pixel_of_each_ink() {
 
 #[test]
 fn info_matches_expected_output() {
-    for (file, expected) in [("AoC2025/cpu-32bit-manual-start.vcb", "info-cpu.txt"), ("engine/tests/boards/all-inks.vcb", "info-all-inks.txt")] {
+    for (file, expected) in [("engine/tests/boards/cpu-32bit-manual-start.vcb", "info-cpu.txt"), ("engine/tests/boards/all-inks.vcb", "info-all-inks.txt")] {
         let board = Board::read(&repo(file)).unwrap();
         let expected = std::fs::read_to_string(repo("engine/tests/expected").join(expected)).unwrap();
         assert_eq!(vcb::info(&board), expected, "{file}");

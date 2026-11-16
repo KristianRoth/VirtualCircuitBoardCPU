@@ -16,16 +16,16 @@ What is known about Virtual Circuit Board (Steam app 1885690) and its `.vcb` sav
 Used by the layers and by `vmem_data`: base64 text, decoding to a zstd frame followed by a trailer of (tag, value) pairs. Each pair is two little-endian i32 values, and the tag is always `2`.
 - Layers have three pairs (24 bytes): `(2, height, 2, width, 2, size)`, e.g. `(2, 2048, 2, 2048, 2, 16777216)`.
 - `vmem_data` has one pair (8 bytes): `(2, size)`.
-- `size` equals the decompressed length. One exception seen: `AoC2025/cpu-32bit-manual-start.vcb` has a VMem size of 4,194,305, one byte more than normal.
+- `size` equals the decompressed length. One exception seen: `engine/tests/boards/cpu-32bit-manual-start.vcb` has a VMem size of 4,194,305, one byte more than normal.
 - `zstd -dc` decompresses a blob but warns about the trailing bytes.
 
 ## Logic layer
-- Width×height RGBA pixels (2048×2048 in `AoC2025/cpu-32bit-manual-start.vcb`). The alpha channel is always `ff`; `00000000` is empty.
+- Width×height RGBA pixels (2048×2048 in `engine/tests/boards/cpu-32bit-manual-start.vcb`). The alpha channel is always `ff`; `00000000` is empty.
 - **Pixels are ink types, not state** (verified with `engine/tests/evidence/first-stopped.vcb` against `engine/tests/evidence/first_2.vcb`, the same sample saved stopped and running): the logic layer and `vmem_data` were byte-identical.
 - **Generated files load in the game:** a `.vcb` written by script opened in the game, and the game's re-save had identical pixels.
 
 ### Colour→ink table
-Complete for Update 1.0.1. Confirmed by the user against `engine/tests/boards/all-inks.vcb` (one pixel of each of the 48 inks), consistent with the 2-bit counter sample, and it covers all 40 colours in `AoC2025/cpu-32bit-manual-start.vcb`.
+Complete for Update 1.0.1. Confirmed by the user against `engine/tests/boards/all-inks.vcb` (one pixel of each of the 48 inks), consistent with the 2-bit counter sample, and it covers all 40 colours in `engine/tests/boards/cpu-32bit-manual-start.vcb`.
 
 | Colour(s) | Ink |
 |---|---|
@@ -76,7 +76,7 @@ The game refused to simulate the board and listed these in the Event Log:
 - **"Unexpected tunnel entrance. While looking for a tunnel exit another entrance for the SAME ink was found."** Reported when a right-to-left scan for colour 9 reached another colour-9 entrance first. Scans run along the whole row, so tunnels of unrelated circuits on one row see each other.
 - A tunnel pixel with ink on one side is an entrance for the direction away from that ink. The error's coordinates are the ink pixel behind the entrance (unmatched) or the entrance that was found (unexpected).
 - A colour-2 pair with a colour-9 entrance between its two tunnels gave no error.
-- All tunnels in `AoC2025/cpu-32bit-manual-start.vcb` satisfy these rules (the engine's netlist builds it with the same checks).
+- All tunnels in `engine/tests/boards/cpu-32bit-manual-start.vcb` satisfy these rules (the engine's netlist builds it with the same checks).
 
 ### Observed on the routing and general boards (2026-11-15)
 Boards `routing-a`, `routing-b`, `general` (clock interval 3) and `general-1` (clock interval 1), sources in `engine/boards/`. Every LED matched the model except the clock's starting state.
@@ -132,7 +132,7 @@ Boards `random-vmem-seed-1` and `-2` (`engine/boards/`): a counter on the VMem a
   - Content and address toggled in the same tick: the content pins show the toggled value for one tick, then the word at the new address. This fits "the write goes to the old address first".
   - The engine matches all four LEDs at every tick.
   - **The save after that run** (Persistent Memory 0–3; words 1–3 preloaded as `0xFFFFFFF2`, `2`, `0xABCD0003`): word 1 = `0x00000003`, word 2 = `2`, word 3 = `0`, word 0 = `0`. So a write through 4 content pins **sets the upper 28 bits to 0**; the **To address is included** in the copy; and word 0 is not saved, although the circuit had written 1 there.
-- **`AoC2025/cpu-32bit-manual-start.vcb`:** only a 17-byte test pattern is non-zero (words 1–5). It holds no program.
+- **`engine/tests/boards/cpu-32bit-manual-start.vcb`:** only a 17-byte test pattern is non-zero (words 1–5). It holds no program.
 
 ## Saves and assembly
 - **Persistent Memory captures VMem written by the circuit** (verified 2026-11-15, `engine/tests/boards/vmem-preserve.vcb` and `engine/tests/boards/vmem-preserve.after.vcb`, made from `vmem-test3`): with Persistent Memory From `0x0` To `0xF`, simulating until word 1 = 3, returning to edit mode and saving gave a `vmem_data` with word 1 = 3. The "before" save, made with the same settings but before simulating, was all zeros. Whether To is inclusive is untested.
