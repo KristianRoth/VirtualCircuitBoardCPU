@@ -66,6 +66,9 @@ struct RunArgs {
     /// Print these VMem words at the end, as hex and unsigned decimal: addr[,addr...]. Hex needs 0x.
     #[arg(long, value_delimiter = ',')]
     watch: Vec<String>,
+    /// Print every change to a watched VMem word as it happens, with its tick. Without --watch, every VMem change.
+    #[arg(long)]
+    verbose: bool,
     /// Write all of VMem to a file at the end, one `0xADDRESS 0xVALUE` line per word.
     #[arg(long)]
     dump_vmem: Option<PathBuf>,
@@ -197,6 +200,7 @@ fn apply_config(args: &mut RunArgs, path: &Path) -> Result<()> {
             "no-breakpoint" => args.no_breakpoint |= flag()?,
             "allow-unverified" => args.allow_unverified |= flag()?,
             "stats" => args.stats |= flag()?,
+            "verbose" => args.verbose |= flag()?,
             "force" => args.force |= flag()?,
             "break-addr" if args.break_addr.is_empty() => args.break_addr = list(key, value)?,
             "watch" if args.watch.is_empty() => args.watch = list(key, value)?,
@@ -301,7 +305,7 @@ fn run(mut args: RunArgs) -> Result<()> {
         };
         break_addresses.push((parse_address(address, board.vmem.len()).ok_or(format!("--break-addr {spec}: not a VMem address"))?, access));
     }
-    if !board.settings.vmem_enabled && (!watch.is_empty() || args.dump_vmem.is_some() || !break_addresses.is_empty() || args.quiescent.is_some()) {
+    if !board.settings.vmem_enabled && (!watch.is_empty() || args.dump_vmem.is_some() || !break_addresses.is_empty() || args.quiescent.is_some() || args.verbose) {
         return Err("is_vmem_enabled: is false, so there is no VMem to watch, dump or stop on".into());
     }
 
@@ -323,6 +327,14 @@ fn run(mut args: RunArgs) -> Result<()> {
             let speed = (engine.tick() - last_progress.1) as f64 / last_progress.0.elapsed().as_secs_f64();
             eprintln!("tick {}  TPS: {speed:.0}", engine.tick());
             last_progress = (Instant::now(), engine.tick());
+        }
+        if args.verbose && engine.vmem_changed() {
+            if let (_, Some(address)) = engine.vmem_access() {
+                if watch.is_empty() || watch.contains(&address) {
+                    let value = engine.vmem()[address];
+                    println!("tick {}: {address:#010X} = {value:#010X} ({value})", engine.tick());
+                }
+            }
         }
         if !probes.is_empty() {
             let values: Vec<String> = probes.iter().map(|(label, e)| format!("{label}={}", engine.state()[*e as usize] as u8)).collect();
