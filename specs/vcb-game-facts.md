@@ -4,7 +4,7 @@ What is known about Virtual Circuit Board (Steam app 1885690) and its `.vcb` sav
 
 **Game version:** everything here is from VCB **Update 1.0.1** (confirmed in the game on 2026-11-13). A game update means re-checking these facts and every fixture.
 
-**Ground truth comes from the game in two ways.** For VMem: set a Persistent Memory region, run, return to edit mode and save; the save then holds the words the circuit wrote (see Saves). For everything else (component on/off states, tick timing): the user steps the simulation and records what they see. Save files hold no other simulation state. openVCB (cloned in `openVCB/`, pinned at commit `4903fa8`) reads only the 2022 Godot `.tres` format and is an untrusted second opinion.
+**Ground truth comes from the game in two ways.** For VMem: set a Persistent Memory region, run, return to edit mode and save; the save then holds the words the circuit wrote (see Saves). For everything else (component on/off states, tick timing): the user steps the simulation and records what they see. Save files hold no other simulation state.
 
 ## File container
 - A `.vcb` is JSON with `file_type: "RF_VCB_PROJECT"` and `file_version: 2`.
