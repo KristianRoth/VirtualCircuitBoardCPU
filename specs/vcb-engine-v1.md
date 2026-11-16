@@ -28,7 +28,6 @@ Where the two disagree, this list wins for v1:
 - `--timer-ticks` replaces `--timer-interval`. The file's `timer_interval` (milliseconds) is read and not used.
 - External VMem (`.vcbmem`) is supported.
 - VMem fixtures use an "after" save, not VMem words typed into the TOML.
-- The openVCB patch and benchmark script come after v1.
 - Address watch, `--quiescent`, the TOML config file, Ctrl-C handling and progress output are milestone M7, after the CPU rung.
 - `state()` covers traces, components and pins, in canonical entity order.
 - Rung C drops "a counter that stores into VMem" (rung D covers it) and adds locking, content precedence and narrow content width.
@@ -54,7 +53,6 @@ Where the two disagree, this list wins for v1:
 ### Out of scope
 - Everything the framework spec lists as out of scope or Later (assembler, v2, VInput, VDisplay, viewer, `.tres`).
 - Rung E (AoC).
-- The openVCB patch and benchmark script.
 - Decoration layers, `led_palette` colours, blueprint strings.
 
 ## Design

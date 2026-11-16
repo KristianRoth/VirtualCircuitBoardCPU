@@ -1,9 +1,9 @@
 # VCB simulation engine
 
 ## Problem & goal
-The user has a 32-bit computer built in Virtual Circuit Board (VCB, Steam app 1885690), saved as `engine/tests/boards/cpu-32bit-manual-start.vcb`, and wants to solve this year's Advent of Code with it. The game's simulator is too slow for that. openVCB (cloned in `openVCB/`) only reads the 2022 Godot `.tres` save format, not the current one. The goal is a new, fast simulation engine that loads current `.vcb` files and runs them **tick-exactly** like the game.
+The user has a 32-bit computer built in Virtual Circuit Board (VCB, Steam app 1885690), saved as `engine/tests/boards/cpu-32bit-manual-start.vcb`, and wants to solve this year's Advent of Code with it. The game's simulator is too slow for that. The goal is a new, fast simulation engine that loads current `.vcb` files and runs them **tick-exactly** like the game.
 
-**Status (2026-11-16):** v1 is complete (milestones M0–M7 in `vcb-engine-v1.md`), including the final boss in a first form: the CPU runs AoC day 1 part 1 exactly like the game, with the program assembled by the game. Still Later: the assembler, v2, VInput/VDisplay, a viewer, the openVCB patch and benchmark.
+**Status (2026-11-16):** v1 is complete (milestones M0–M7 in `vcb-engine-v1.md`), including the final boss in a first form: the CPU runs AoC day 1 part 1 exactly like the game, with the program assembled by the game. Still Later: the assembler, v2, VInput/VDisplay, a viewer.
 
 **Game facts:** the file format, colour→ink table, VMem layout and timing, and everything observed in the game live in [`vcb-game-facts.md`](vcb-game-facts.md) ("the facts file"). This spec is the framework: goals, scope, interface, test ladder and rollout. The detailed design of the v1 engine is in `vcb-engine-v1.md`.
 
@@ -12,7 +12,7 @@ The user has a 32-bit computer built in Virtual Circuit Board (VCB, Steam app 18
 Priorities, in order:
 1. **Correct:** the engine produces the same state as the game, proven on a ladder of circuits that grow in complexity. The last rung (the "final boss") is the AoC program running on the 32-bit CPU.
 2. **Learning:** understanding VCB internals is part of the value; the code should stay readable.
-3. **Speed:** beat openVCB, which claims 2–4x the game's speed. There is no fixed TPS target and no minimum speed for v1.
+3. **Speed:** run faster than the game. There is no fixed TPS target and no minimum speed for v1.
 4. **Viewer:** later, out of scope.
 
 ## Users & roles
@@ -28,13 +28,12 @@ A single user (the author) runs it locally from the CLI. There is no auth or mul
 - Stop conditions: max ticks, Breakpoint ink, address watch, and VMem quiescent for N ticks (a debug aid).
 - Outputs, each configurable: print watched VMem addresses, dump all of VMem to a file, stats (ticks, wall time, TPS), and progress output while running. Writing state back to a `.vcb` was dropped, because the game neither saves nor loads live state (see Data).
 - Configuration layers: settings in the `.vcb`, overridden by a TOML run file, overridden by CLI flags.
-- A minimal openVCB patch: CMake build on macOS plus a v2 JSON reader for the basic inks it already knows. Its correctness is unverified, so it is **an untrusted second opinion, never an oracle**. It is used for speed comparison and as a hint when a basic-gate fixture fails.
 - The test-circuit ladder (see Rollout), built in the game by the user.
 
 ### Out of scope
 - An assembler (`assembly` field / `.vcbasm`) is a separate later project. The game assembles only at simulation start and never saves the result, so v1 runs whatever is in `vmem_data`. Test programs are written into `vmem_data` by script.
 - The old `.tres` format in the new engine. It is detected by its `[gd_resource` header and rejected with a clear message.
-- A graphical viewer or editor. A viewer may come later. openVCB's licence forbids shipping openVCB code together with an editor; the engine does not copy openVCB code, so this does not bind the engine.
+- A graphical viewer or editor. A viewer may come later.
 
 ### Later / TODO
 - VInput (keyboard) and VDisplay.
@@ -112,7 +111,6 @@ Library:
   - `state() -> Vec<bool>` in canonical component order. Used by the v1/v2 differential tests.
 
 ## Integrations
-- **openVCB:** the engine may read openVCB's source to understand the format and algorithms, but must not copy it. The engine is the user's own code under its own licence. The openVCB patch is GPL-3 and lives outside `./engine` as `tools/openvcb.patch`, pinned to openVCB commit `4903fa8`.
 - **Ink semantics:** the in-game User Guide, the VCB wiki and community docs, confirmed by the user's test boards. Those boards are the only source of ground truth.
 - **Crates:** `serde_json`, `base64`, `zstd`, `clap`, `toml`.
 
@@ -126,7 +124,7 @@ Input files are trusted local files. The engine still decodes with bounds: check
 
 ## Performance
 - v1: no speed target. Correctness comes first.
-- v2: as fast as possible. It is compared with the patched openVCB and the game, and `--stats` reports TPS.
+- v2: as fast as possible. It is compared with v1 and the game, and `--stats` reports TPS.
 - Benchmark method: the median of 5 runs of 10⁶ ticks on a named fixture.
 
 ## Acceptance criteria
@@ -164,7 +162,6 @@ Stops and outputs
 
 Speed and v2
 - [ ] `--stats` reports ticks, time and TPS.
-- [ ] The patched openVCB builds on macOS and the benchmark script records its TPS.
 - [ ] (v2) A seeded random-board generator produces at least 1000 boards. On those, plus every fixture, v1 and v2 states are equal after every tick for 10,000 ticks, and a failing case prints its seed.
 
 ## Rollout
@@ -179,8 +176,7 @@ Speed and v2
    - **C. VMem boards:** write a value to an address; read it back; write to and read from address 0 (open question 8); a counter that stores into VMem. These pin down VMem timing and the meaning of `vmem_settings`.
    - **D. CPU subsets:** the ALU on its own, then the CPU running tiny hand-encoded programs (store a constant; a loop of 10), written into `vmem_data` by script.
    - **E. Final boss:** the AoC day 1 board. This needs the assembler project (Later), or a hand-written encoding of the program.
-4. **openVCB patch** (`tools/openvcb.patch`) and the benchmark script.
-5. **Later:** the v2 engine with differential tests, then VInput/VDisplay, the assembler and a viewer.
+4. **Later:** the v2 engine with differential tests, then VInput/VDisplay, the assembler and a viewer.
 
 ## Open questions
 All open questions are about the game and live in the facts file (questions 3, 4, 6–21). References to "open question N" in this spec mean that list. Questions 1, 2 and 5 are answered there.
@@ -188,7 +184,6 @@ All open questions are about the game and live in the facts file (questions 3, 4
 ## Decision log
 - Success metric → correct results, proven up a ladder of circuits with the AoC program as the final boss; then learning, then speed, then a viewer.
 - Language → Rust: C-level speed with readable, safe code (C, Zig and Go were considered).
-- openVCB → the engine may read its code but must not copy it. The user first chose truly clean-room, then relaxed it to no copying, because the openVCB patch stays in scope.
 - Spec split (2026-11-15) → game facts moved to `vcb-game-facts.md`; the v1 design and its decisions are in `vcb-engine-v1.md`.
 - Assembler → out of scope. First plan: the user assembles in the game and saves. That turned out impossible (2026-11-13), so programs go into `vmem_data` by script and the assembler stays a later project.
 - Halt → max ticks, Breakpoint ink, address watch, plus VMem-quiescent as a debug aid. The engine stays a general circuit simulator.
@@ -198,10 +193,9 @@ All open questions are about the game and live in the facts file (questions 3, 4
 - Components → every current logic ink plus VMem. VInput and VDisplay go on the TODO list.
 - Ink semantics → User Guide, wiki and docs, plus user-built test boards.
 - Oracle → still to be checked in the game (open question 2); the fallback is to compare end states only.
-- Speed target → beat openVCB. No v1 floor; the review proposed one and the user declined.
+- Speed target → faster than the game. No v1 floor; the review proposed one and the user declined.
 - Location → `./engine/` in this repo.
 - Interface → library crate plus a thin CLI.
-- openVCB test bed → minimal patch: macOS build plus a v2 reader. Treated as an untrusted second opinion, never an oracle.
 - Configuration → CLI flags plus a TOML run file, over the `.vcb` settings.
 - Performance strategy → v1 is a simple single-threaded event-driven engine; v2 is optimised and multithreaded behind the same CLI.
 - v1 vs v2 → differential tests.
