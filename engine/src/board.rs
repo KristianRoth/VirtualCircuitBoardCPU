@@ -27,6 +27,10 @@ pub struct Board {
     pub inks: Vec<Ink>,
     pub vmem: Vec<u32>,
     pub settings: Settings,
+    /// The Assembly Editor's text. The assembler (`asm`) turns it into VMem words; loading does not.
+    pub assembly: String,
+    /// The game's External Editing switch: the program is in `<board>.vcbasm`, not in `assembly`.
+    pub assembly_is_external: bool,
     /// Every other field of the file, kept so a re-written file still opens in the game.
     pub(crate) json: Map<String, Value>,
 }

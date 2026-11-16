@@ -29,6 +29,7 @@ export SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
 vcb info <board.vcb>               size, settings, pixel count per ink, what is not verified
 vcb info --adjacency <board.vcb>   which inks touch (for pairs involving Read, Write, Cross, Tunnel, Mesh, Bus)
 vcb gen <board.txt> -o <out.vcb>   text-art board -> .vcb, plus <out>.checklist.md and <out>.png
+vcb asm <board.vcb> --asm <prog>   assemble a program into the board's memory (see "Running a new program")
 vcb run <board.vcb> --ticks <n>    simulate
 ```
 
@@ -64,7 +65,18 @@ Example: the CPU fixture.
 
 ## Running a new program on the CPU
 
-The engine has no assembler. The game assembles when a simulation starts, and a save made afterwards contains the assembled program if Persistent Memory covers it.
+`vcb asm` assembles a program into a board's memory as the game does (spec: `../specs/vcb-assembler.md`). `vcb run` does not assemble yet, so it is two commands:
+
+```
+./target/release/vcb asm <cpu board> --asm <program.vcbasm> -o run.vcb
+./target/release/vcb run run.vcb --ticks <n> --watch <addresses>
+```
+
+Other outputs of `vcb asm`: `--dump-vmem <file>`, `--listing <file>` (`-` prints it: address, word, line and statement of every stored word, then the labels and pointers). With no output it only checks the program.
+
+The assembler accepts only what a game save has shown. A feature that only the manual states needs `--allow-unverified`; anything else is refused with a letter of question 23 in `../specs/vcb-game-facts.md`. All such problems are listed in one run.
+
+The older way still works: the game assembles when a simulation starts, and a save made afterwards contains the assembled program if Persistent Memory covers it.
 
 1. Put the assembly in the CPU file (`AoC2025/cpu-32bit-autorun-aoc1p1.vcb` is the CPU with its run switch fixed on; `AoC2025/` is a separate repository nested in this folder).
 2. In the game: set Persistent Memory From 0 To 65535, enter simulation mode, return to edit mode, Save As a new file. Leaving simulation mode right away gives the program before it runs.
@@ -82,11 +94,12 @@ A save made after a full run can also be used: set the words the program changes
 | `src/netlist.rs` | Board → entities and connections (traces, components, buses, pins; cross, tunnel, mesh, bus rules) |
 | `src/sim.rs` | The engine: dirty list + recompute, clocks, Random (MT19937), VMem, stop conditions |
 | `src/render.rs` | PNG snapshots |
+| `src/asm.rs` | The assembler and its gate (`VERIFIED` lists the manual-only features a game save has since shown) |
 | `src/main.rs` | Command line |
 | `boards/*.txt` | Text-art sources of the test boards |
 | `tests/boards/` | Observed fixtures: `<name>.vcb`, `<name>.observed.md` (the checklist the user filled in), `<name>.after.vcb` (the game's save after a run) |
 | `tests/evidence/` | Game saves that back a fact in the facts file but are not used by a test |
-| `tests/` | `reader.rs`, `cli.rs`, `model.rs` (engine against the spec's rules), `fixtures.rs` (engine against the game) |
+| `tests/` | `reader.rs`, `cli.rs`, `model.rs` (engine against the spec's rules), `fixtures.rs` (engine against the game), `asm.rs` (assembler against the game's day 1 memory, and its gate) |
 | `tools/board-generators/` | Python scripts that wrote the larger `boards/*.txt` files. Run from `engine/`. |
 | `tools/random-search/` | The scripts that identified the game's random generator from the recordings. Run from the repo root. |
 | `examples/diff_boards.rs` | Shows the pixels that differ between two boards |

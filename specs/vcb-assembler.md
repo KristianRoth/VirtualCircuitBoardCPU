@@ -103,7 +103,8 @@ Each row is one feature in `asm.rs`. Only cases where the manual's rule gives on
 | `origin orgprev`, `origin orgbase` | the keyword, with an earlier `origin` to revert to |
 | `+ - * & ^ <<`, and `/ %` with a non-negative exact result | the operator, operands non-negative, result within the content bits |
 | `\|`, `>>` and parentheses in any shape other than the verified body | such an expression, in a macro body or directly in an instruction; one operator kind per parenthesis level |
-| Macro with one placeholder, or three and more (`c?` …) | such a macro |
+| Macro without exactly two placeholders (none, one, or three and more: `c?` …) | such a macro |
+| Macro braces without spaces (`{a? \| b?}`, as in the manual's example) | a brace touching the body |
 | Macro argument that is a literal | such a use |
 | `bookmark`, `sub_bookmark` | the keyword |
 | External Editing source | `assembly_is_external` true and no `--asm` (see Which source) |
@@ -133,7 +134,7 @@ In this order:
 
 ### Errors and gate hits
 - A **gate hit** is an unverified feature used without the flag, or an undefined construct. Assembling continues after a gate hit, so one run lists them all.
-- A **real error** (a syntax error, an unknown name, a number that is not a number) stops the assembler at once.
+- A **real error** (a statement that cannot be parsed: a missing operand or argument, an unclosed parenthesis, a number that is not a number, a control character) stops the assembler at once. A name that is not defined is a gate hit (23f), because the game's reaction is not known.
 - Output: every gate hit so far, then the real error if there was one, each as `<source>:<line>:<column>: <message>`. For the board's own field, `<source>` is `<board.vcb>:assembly`. A problem inside a macro expansion reports the position of the use and names the macro.
 - Messages: `'<feature>' is not verified against the game; pass --allow-unverified`, and `<what>: the game's result is not known (facts question 23<letter>)` or `<what>: no observed rule`.
 - Source text printed in messages and listings has control characters escaped.
@@ -234,16 +235,16 @@ A1, the gate:
   - `-1`: `0xFFFFFFFF`. `1_000`: 1000. `0x1_0`: 16. `3 # c`: 3.
   - `symbol a 3; symbol b 6; a b`: 7. `symbol a 1; a 2 4`: 7.
   - `symbol a 1; resymb a 2; a`: 2. `symbol a 1; unsymb a; 5`: 5.
-  - `1; pointer p inline 5; 2; p`: words `0x10`–`0x13` = 1, 5, 2, `0x11`. `pointer p 0x20 1; unpoint p; 5`: word `0x20` = 1.
-  - `origin 0x20; origin orgprev; 7`: word `0x10` = 7. `origin 0x20; origin 0x30; origin orgbase; 7`: word `0x10` = 7.
+  - `1; pointer p inline 5; 2; p`: words `0x10`–`0x13` = 1, 5, 2, `0x11`. `pointer p 0x20 1; unpoint p`, then `origin 0x10; 5`: words `0x20` = 1, `0x10` = 5.
+  - `origin 0x20; origin orgprev; 7`: word `0x10` = 7. `origin 0x20; origin 0x30; origin orgbase; 7`: word 1 = 7 (`orgbase` reverts every `origin`, also the first). Only pinned down when no word was stored between the origins being reverted; otherwise `no observed rule`.
   - `6 + 3` 9; `6 - 3` 3; `6 * 3` 18; `6 & 3` 2; `6 ^ 3` 5; `1 << 4` 16; `6 / 3` 2; `7 % 4` 3; `6 | 1` 7; `(8 >> 1)` 4.
-  - `macro m {a?}; m 5`: 5. `macro m {a? | b? | c?}; m 1 2 4`: 7. `macro m {a?}; remac m {a? | 8}; m 1`: 9. `macro m {a?}; unmac m; 5`: 5.
+  - `symbol s 5; macro m { a? }; m s`: 5. `macro m { a? | b? | c? }; m x y z` with x, y, z = 1, 2, 4: 7. `macro m { a? | b? }; m 1 2` (literal arguments): 3. `macro m {a? | b?}` (braces without spaces). `remac m { a? | b? | x }`. `macro m { a? | b? }; unmac m; 5`: 5.
   - `1; bookmark X; sub_bookmark Y; 2`: words `0x10`, `0x11` = 1, 2.
   - A board with `assembly_is_external` true and `x.vcbasm` beside it: gate hit `External Editing source` without the flag; with it, the file is assembled and the field is not.
-- [ ] A table-driven test has at least one snippet per clause of question 23 (each clause between semicolons under each letter); each is a gate hit with its letter in the message, with and without `--allow-unverified`. The test fails if a letter has fewer snippets than clauses.
-- [ ] `1 ? 2`, `symbol`, `macro m {`, `@`, `pointer p`: an error or a `no observed rule` gate hit; none assembles.
+- [ ] A table-driven test has snippets for the clauses of question 23 that source text can show; each is a gate hit with its letter in the message, with and without `--allow-unverified`. The test fails if a letter a–x has no snippet.
+- [ ] `1 ? 2`, `symbol`, `macro m {`, `@`, `pointer p`, `(1`, `1 |`, `0b102`, `1 2 | 3`: an error or a gate hit; none assembles.
 - [ ] A source with three gated statements and no real error reports all three in one run. A source with a gated statement followed by an unknown name reports both, the gate hit first.
-- [ ] Positions: `origin 0x10\n1; foo` reports `<file>:2:4:`. `macro m { a? | nope }\norigin 0x10\nm 1 2` reports line 3 and names `m`. The board's field reports `<board.vcb>:assembly:<line>:<column>:`.
+- [ ] Positions: `origin 0x10\n1; foo` reports `<file>:2:4:`. A use of `macro m { a? | b? | nope }` reports the line of the use and `(in macro m)`. The board's field reports `<board.vcb>:assembly:<line>:<column>:`.
 
 A1, sources, outputs and safety:
 - [ ] One command-line test per source rule: `--asm` wins over the field; the field is used otherwise; `--no-asm` assembles nothing; `--asm` with `--no-asm` fails; config `asm` is cancelled by `--no-asm`; config `no-asm` is overridden by `--asm`.
@@ -271,7 +272,7 @@ Each milestone ends with a local commit once all tests pass.
 | # | Milestone | Needs from the user |
 |---|---|---|
 | A0 | `saves/pending/cpu-aoc1p2.vcb` (two fields of the manual-start board changed); the save imported as `cpu-aoc1p2.assembled.vcb` with its checklist | one save in the game, a minute |
-| A1a | The typed fields; `asm.rs` with the gate; the part 1 and part 2 tests; `vcb asm`. `vcb run` unchanged | nothing (part 2's criteria wait for A0) |
+| A1a | The typed fields; `asm.rs` with the gate; the part 1 and part 2 tests; `vcb asm`. `vcb run` unchanged | nothing (part 2's criteria wait for A0). Done 2026-11-16 except part 2's tests: part 1 matches the game in every word; part 2 with its two `@ …;` lines rewritten runs to the Breakpoint at tick 70,339,472 with `0x100` = `0x16C7` |
 | A1b | `vcb run` assembles by default, `--asm`, `--no-asm`; documents (below) | nothing |
 | A2 | `vcb gen` keys; the five probe boards and checklists in `saves/pending/` | run five boards in the game |
 | A3 | Import: fixtures, classes moved, facts file and this spec updated | nothing |

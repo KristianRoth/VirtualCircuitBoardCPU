@@ -1,6 +1,7 @@
 //! Tick-exact simulation engine for Virtual Circuit Board `.vcb` files.
 //! Specs: ../specs/vcb-engine.md, vcb-engine-v1.md and vcb-game-facts.md.
 
+pub mod asm;
 pub mod board;
 pub mod format;
 pub mod ink;

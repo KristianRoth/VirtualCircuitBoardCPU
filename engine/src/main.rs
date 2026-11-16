@@ -36,6 +36,31 @@ enum Command {
     },
     /// Simulate a board.
     Run(RunArgs),
+    /// Assemble a program into a board's memory, as the game does when a simulation starts.
+    Asm(AsmArgs),
+}
+
+#[derive(clap::Args)]
+struct AsmArgs {
+    board: PathBuf,
+    /// The program. Default: the board's own (its Assembly Editor text, or <board>.vcbasm with External Editing).
+    #[arg(long)]
+    asm: Option<PathBuf>,
+    /// Write the board with the assembled memory, and the program as its Assembly Editor text.
+    #[arg(short, long)]
+    output: Option<PathBuf>,
+    /// Write all of VMem after assembling, one `0xADDRESS 0xVALUE` line per word.
+    #[arg(long)]
+    dump_vmem: Option<PathBuf>,
+    /// Write address, word, line and statement of every stored word, then the labels and pointers. "-" prints it.
+    #[arg(long)]
+    listing: Option<PathBuf>,
+    /// Use language features that the manual states but no game save shows yet.
+    #[arg(long)]
+    allow_unverified: bool,
+    /// Allow overwriting existing output files.
+    #[arg(long)]
+    force: bool,
 }
 
 #[derive(clap::Args)]
@@ -104,6 +129,7 @@ fn main() -> ExitCode {
         }),
         Command::Gen { source, output, force } => gen(&source, &output, force),
         Command::Run(args) => run(args),
+        Command::Asm(args) => asm(args),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -140,6 +166,87 @@ fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".part");
     std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, path)).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+const EXTERNAL_SOURCE: &str = "External Editing source";
+
+/// The program a board is assembled from: (text, name for messages, the file it came from).
+/// `None` when there is nothing to assemble. A file's CRLF line ends are read as LF: the file stands for the
+/// text as the game's Assembly Editor holds it.
+fn read_source(board_path: &Path, board: &Board, asm: Option<&Path>, allow_unverified: bool) -> Result<Option<(String, String, Option<PathBuf>)>> {
+    let file = match asm {
+        Some(file) => Some(file.to_path_buf()),
+        None if board.assembly_is_external => {
+            if !allow_unverified {
+                return Err(format!("{}: '{EXTERNAL_SOURCE}' is not verified against the game; pass --allow-unverified, or --asm <file>", board_path.display()));
+            }
+            let file = board_path.with_extension("vcbasm");
+            if !file.exists() {
+                return Err(format!("{}: External Editing is on and this file is missing: the game's result is not known (facts question 23r)", file.display()));
+            }
+            Some(file)
+        }
+        None => None,
+    };
+    let (text, name) = match &file {
+        Some(file) => {
+            let bytes = std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
+            let text = String::from_utf8(bytes).map_err(|_| format!("{}: is not valid UTF-8", file.display()))?;
+            (text.replace("\r\n", "\n"), file.display().to_string())
+        }
+        None => (board.assembly.clone(), format!("{}:assembly", board_path.display())),
+    };
+    Ok((!text.trim().is_empty()).then_some((text, name, file)))
+}
+
+fn vmem_dump(vmem: &[u32]) -> String {
+    let mut text = String::with_capacity(vmem.len() * 22);
+    for (address, value) in vmem.iter().enumerate() {
+        text += &format!("{address:#010X} {value:#010X}\n");
+    }
+    text
+}
+
+fn asm(args: AsmArgs) -> Result<()> {
+    let mut board = Board::read(&args.board)?;
+    let source = read_source(&args.board, &board, args.asm.as_deref(), args.allow_unverified)?;
+
+    // Check every output against every file this command reads, before anything is written.
+    let listing_file = args.listing.as_deref().filter(|p| *p != Path::new("-"));
+    let outputs: Vec<&Path> = [args.output.as_deref(), args.dump_vmem.as_deref(), listing_file].into_iter().flatten().collect();
+    let (vcbmem, vcbasm) = (args.board.with_extension("vcbmem"), args.board.with_extension("vcbasm"));
+    let mut inputs: Vec<&Path> = vec![&args.board, &vcbmem, &vcbasm];
+    inputs.extend(args.asm.as_deref());
+    check_outputs(&inputs, &outputs)?;
+    for path in &outputs {
+        check_overwrite(path, args.force)?;
+    }
+
+    let mut report = vcb::asm::Report::default();
+    if let Some((text, name, file)) = &source {
+        report = vcb::asm::assemble(text, name, &mut board, args.allow_unverified)?;
+        if file.is_some() && args.asm.is_none() {
+            report.unverified.push(EXTERNAL_SOURCE);
+        }
+        for feature in &report.unverified {
+            eprintln!("warning: asm {feature} is not verified against the game");
+        }
+        println!("{}", report.summary(name));
+        board.assembly = text.clone();
+        board.assembly_is_external = false;
+    }
+    if let Some(path) = &args.output {
+        write_file(path, board.to_vcb().as_bytes())?;
+    }
+    if let Some(path) = &args.dump_vmem {
+        write_file(path, vmem_dump(&board.vmem).as_bytes())?;
+    }
+    match (&args.listing, listing_file) {
+        (Some(_), None) => print!("{}", report.listing()),
+        (_, Some(path)) => write_file(path, report.listing().as_bytes())?,
+        _ => {}
+    }
+    Ok(())
 }
 
 fn gen(source: &Path, output: &Path, force: bool) -> Result<()> {
@@ -365,11 +472,7 @@ fn run(mut args: RunArgs) -> Result<()> {
         println!("{address:#010X} = {value:#010X} ({value})");
     }
     if let Some(path) = &args.dump_vmem {
-        let mut text = String::with_capacity(engine.vmem().len() * 22);
-        for (address, value) in engine.vmem().iter().enumerate() {
-            text += &format!("{address:#010X} {value:#010X}\n");
-        }
-        write_file(path, text.as_bytes())?;
+        write_file(path, vmem_dump(engine.vmem()).as_bytes())?;
     }
     if let Some((tick, path)) = renders.iter().find(|(tick, _)| *tick > report.tick) {
         return Err(format!("--render {tick}:{}: the run stopped at tick {} before that tick", path.display(), report.tick));
