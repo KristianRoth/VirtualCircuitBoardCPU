@@ -253,3 +253,19 @@ fn ctrl_c_stops_the_run_and_still_writes_the_outputs() {
     let watched = stdout.lines().find_map(|l| l.strip_prefix("0x00000001 = ")).expect("the --watch line").split(' ').next().unwrap().to_string();
     assert_eq!(std::fs::read_to_string(&dump).unwrap().lines().nth(1), Some(format!("0x00000001 {watched}").as_str()));
 }
+
+#[test]
+fn verbose_prints_changes_to_watched_words_as_they_happen() {
+    // vmem-timing writes 1 to address 0 at tick 2, 3 to address 1 at tick 6, then 2 and 0 to address 3 at ticks 14 and 15.
+    let timing = fixture("vmem-timing.vcb");
+    let out = vcb(&["run", &timing, "--ticks", "20", "--watch", "1,3", "--verbose"]);
+    assert_eq!(
+        text(&out.stdout),
+        "tick 6: 0x00000001 = 0x00000003 (3)\ntick 14: 0x00000003 = 0x00000002 (2)\ntick 15: 0x00000003 = 0x00000000 (0)\n\
+         stopped at tick 20: max-ticks\n0x00000001 = 0x00000003 (3)\n0x00000003 = 0x00000000 (0)\n"
+    );
+    // Without --watch it prints every change.
+    let out = vcb(&["run", &timing, "--ticks", "20", "--verbose"]);
+    assert_eq!(text(&out.stdout).lines().count(), 5);
+    assert!(text(&out.stdout).starts_with("tick 2: 0x00000000 = 0x00000001 (1)\n"));
+}

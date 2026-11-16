@@ -42,6 +42,7 @@ vcb run <board.vcb> --ticks <n>    simulate
 | `--quiescent <n>` | Stop once VMem has not changed for n ticks. |
 | `--no-breakpoint` | Ignore Breakpoint ink. |
 | `--watch <addr>[,<addr>…]` | Print these VMem words at the end, as hex and decimal. |
+| `--verbose` | Print every change to a watched word as it happens, with its tick. Without `--watch`, every VMem change. |
 | `--dump-vmem <file>` | Write all of VMem at the end, one `0xADDRESS 0xVALUE` line per word. |
 | `--probe <x,y>[=<label>]` | Print the on/off state of the entity at that pixel every tick. Repeatable. |
 | `--render <tick>:<file.png>` | Picture of the board after that tick; entities that are off are darkened. Repeatable. |
