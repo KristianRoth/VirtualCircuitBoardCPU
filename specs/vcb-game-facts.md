@@ -10,7 +10,7 @@ What is known about Virtual Circuit Board (Steam app 1885690) and its `.vcb` sav
 - A `.vcb` is JSON with `file_type: "RF_VCB_PROJECT"` and `file_version: 2`.
 - The old format is a Godot resource starting with `[gd_resource`.
 - `layers` holds 3 base64 blobs. `layers[0]` is the logic layer. `layers[1]` and `layers[2]` were empty in every test and are presumably decoration (open question 7).
-- Other fields seen: `vmem_data`, `vmem_settings`, `is_vmem_enabled`, `vmem_is_external`, `vinput_is_enabled`, `vdisplay_is_enabled`, `clock_interval`, `timer_interval`, `random_seed`, `random_is_time_seed`, `simulation_speed_ticks` (the game's UI speed setting), `led_palette`, `assembly`.
+- Other fields seen: `vmem_data`, `vmem_settings`, `is_vmem_enabled`, `vmem_is_external`, `vinput_is_enabled`, `vdisplay_is_enabled`, `clock_interval`, `timer_interval`, `random_seed`, `random_is_time_seed`, `simulation_speed_ticks` (the game's UI speed setting), `led_palette`, `assembly` (the Assembly Editor's text), `assembly_is_external` (bool; the External Editing switch, false in every file seen).
 
 ## Blob format
 Used by the layers and by `vmem_data`: base64 text, decoding to a zstd frame followed by a trailer of (tag, value) pairs. Each pair is two little-endian i32 values, and the tag is always `2`.
@@ -139,6 +139,9 @@ Boards `random-vmem-seed-1` and `-2` (`engine/boards/`): a counter on the VMem a
 - **Without a persistent region, saves never capture runtime state.** Pixels hold no state, and memory written by the circuit isn't saved: `engine/tests/evidence/vmem-test3_2.vcb` was saved while running with word 1 = 3 on screen, and its `vmem_data` is all zeros. Saves hold only what is set in the editor.
 - External VMem doesn't help (`engine/tests/evidence/vmem-ext.vcb`): the game wrote neither the existing `.vcbmem` while running nor a new one on Save As.
 - **The game assembles only at simulation start** (a "compiling assembly" loading bar) and never saves the result. A `.vcb` never contains an assembled program.
+- **Assembly errors:** the game shows the first error it finds, and only that one, in the editor, before the simulation starts (reported by the user from experience, 2026-11-16; no save backs it).
+- **What the game's assembler is known to do:** only what `cpu-aoc1p1` shows. The text the game assembled is the `assembly` field of `engine/tests/boards/cpu-aoc1p1.after.vcb`. `vcb-assembler.md` writes the forms it contains as a grammar ("Verified: the shapes the game has assembled"). Three words of `cpu-aoc1p1.vcb` were set back by hand after the run (`0x100`, `0x101`, `0xE000`), so the two pointer words are inferred from the tick-exact run, not read from a save. Words 1–5 (the old test pattern, not defined by the program) are intact in the after-save: **assembling keeps words the program does not define** (this part of question 19 is answered). Everything else is question 23.
+- **The user's `.vcbasm` files have CRLF line ends** (`AoC2025/days/day1/part1.vcbasm`, `part2.vcbasm`; checked 2026-11-16), and the `assembly` field of every board seen has LF only. The files equal the board texts once CRLF is read as LF: part 1 the after-save above, part 2 `engine/tests/evidence/AOC1P2_asm.vcb` and `timer-and-random.vcb` (both with VMem disabled). The game has only been seen to assemble the LF text.
 - **Under Wine (Mac):** overwriting an existing save can leave the new content in `<name>.vcb.tmp`. Saving to a new filename works normally.
 
 ## What the User Guide says
@@ -215,3 +218,33 @@ Questions 11–21 come from the v1 design (`vcb-engine-v1.md` lists the interim 
 20. **Shared Read/Write pixel:** one Read pixel touching two components feeds both (answered 2026-11-15). A shared Write pixel also connects both (observed on `general`).
 21. **Content width under 32 bits:** answered 2026-11-16: a write sets the bits above the content width to 0.
 22. **Random draw order:** two cases observed and matched by the engine: Randoms along one trace draw in the order a walk from the trace's first pixel reaches them, and Randoms on separate traces that turn on in the same tick draw in board order (left to right on `random-pulse`). The general rule for mixed cases is not known.
+23. **The assembler** (manual chapter 8 does not say; each case is an error in the engine's assembler until observed, see `vcb-assembler.md`). Owner: the user runs the probe boards of that spec's milestone A2.
+    - a. Operator precedence when different operators meet without parentheses.
+    - b. A value wider than the content bits, or wider than 32 bits, including a negative result of an expression.
+    - c. Division or modulo by zero; a negative shift count or one of 32 or more.
+    - d. Defining a name twice (a symbol, pointer or macro without the re- keyword; a label twice).
+    - e. One name used for two kinds (symbol, pointer, label, macro), or a keyword used as a name.
+    - f. Using a name that is not defined, or was undefined with `unsymb`, `unpoint` or `unmac`.
+    - g. Using a symbol or pointer before its definition.
+    - h. A macro used with fewer or more arguments than it has placeholders.
+    - i. A macro argument that is an expression or more than one token.
+    - j. A macro use together with other primitives in one statement.
+    - k. A macro body over several lines; a macro inside a macro.
+    - l. Where `pointer <name> <address> <value>` and `repoint` leave the current address.
+    - m. Two statements that store to the same address.
+    - n. An address beyond the address bits; address 0.
+    - o. `origin orgprev` or `origin orgbase` with nothing to revert.
+    - p. An expression inside a directive; an operator without spaces around it.
+    - p also covers: a symbol or pointer value that is not a literal.
+    - q. A label definition and an instruction on one line; a label followed by `;`, and an indented label (both occur in day 1 part 2; answered by the assembler spec's A0 save); letter case of keywords, `0X`/`0B` and hex digits; literal forms such as `+5`.
+    - r. A carriage return in the `assembly` field, and how the game reads a CRLF external file; External Editing on with no `.vcbasm` file (not planned to be observed); whether a board with VMem disabled and assembly text starts.
+    - s. A label followed by `origin`, by a `pointer`, or by the end of the source.
+    - t. A `;` inside a comment.
+    - u. `~` (at which width); `/` and `%` with an inexact or negative result; an operator with a negative operand.
+    - v. The arguments of `repoint`.
+    - w. A chain of one operator other than `|` without parentheses (`a >> 2 >> 1`, `a - b - c`).
+    - x. Characters in a name other than letters, digits and underscore; a name starting with a digit.
+    
+    Not planned to be observed: whether the assembler can write address 0 (part of n; Persistent Memory does not save word 0).
+    
+    Also unobserved, though the manual states them (the assembler's "unverified" class): the first instruction goes to address 1; negative literals in two's complement; `resymb`, `unsymb`, `repoint`, `unpoint`, `inline`, `orgprev`, `orgbase`, `remac`, `unmac`, bookmarks; the operators other than `|` and `>>`; OR of values that share a bit; External Editing (`<board>.vcbasm` is used and the field ignored); and question 19's remaining part (preloaded words between program words). The full list with triggers is the assembler spec's "Unverified at the start" table.

@@ -3,7 +3,7 @@
 ## Problem & goal
 The user has a 32-bit computer built in Virtual Circuit Board (VCB, Steam app 1885690), saved as `engine/tests/boards/cpu-32bit-manual-start.vcb`, and wants to solve this year's Advent of Code with it. The game's simulator is too slow for that. The goal is a new, fast simulation engine that loads current `.vcb` files and runs them **tick-exactly** like the game.
 
-**Status (2026-11-16):** v1 is complete (milestones M0–M7 in `vcb-engine-v1.md`), including the final boss in a first form: the CPU runs AoC day 1 part 1 exactly like the game, with the program assembled by the game. Still Later: the assembler, v2, VInput/VDisplay, a viewer.
+**Status (2026-11-16):** v1 is complete (milestones M0–M7 in `vcb-engine-v1.md`), including the final boss in a first form: the CPU runs AoC day 1 part 1 exactly like the game, with the program assembled by the game. The assembler is specified in `vcb-assembler.md` (not built yet). Still Later: v2, VInput/VDisplay, a viewer.
 
 **Game facts:** the file format, colour→ink table, VMem layout and timing, and everything observed in the game live in [`vcb-game-facts.md`](vcb-game-facts.md) ("the facts file"). This spec is the framework: goals, scope, interface, test ladder and rollout. The detailed design of the v1 engine is in `vcb-engine-v1.md`.
 
@@ -31,7 +31,7 @@ A single user (the author) runs it locally from the CLI. There is no auth or mul
 - The test-circuit ladder (see Rollout), built in the game by the user.
 
 ### Out of scope
-- An assembler (`assembly` field / `.vcbasm`) is a separate later project. The game assembles only at simulation start and never saves the result, so v1 runs whatever is in `vmem_data`. Test programs are written into `vmem_data` by script.
+- The assembler (`assembly` field / `.vcbasm`) is not part of this spec: it has its own, `vcb-assembler.md` (2026-11-16). Until it is built, the engine runs whatever is in `vmem_data`.
 - The old `.tres` format in the new engine. It is detected by its `[gd_resource` header and rejected with a clear message.
 - A graphical viewer or editor. A viewer may come later.
 
@@ -97,7 +97,7 @@ vcb run <board.vcb>
   --stats                        # final stats plus progress every 5 s
   --engine v1|v2                 # v2 is an error until it exists
 ```
-The v1 spec adds `vcb info`, `vcb gen`, `--probe`, `--render`, `--timer-ticks` and `--allow-unverified`, and lists where v1 overrides this spec ("Overrides of the framework spec").
+The assembler spec adds `vcb asm`, and `--asm <file>` and `--no-asm` on `vcb run`: once it is built, `vcb run` assembles the board's assembly text before tick 0, as the game does. The v1 spec adds `vcb info`, `vcb gen`, `--probe`, `--render`, `--timer-ticks` and `--allow-unverified`, and lists where v1 overrides this spec ("Overrides of the framework spec").
 - `run.toml` uses the long flag names as keys.
 - Fields that can be overridden from the `.vcb`: `clock_interval`, `timer_interval`, `random_seed` and `random_is_time_seed`. `simulation_speed_ticks` is ignored, because it is the game's UI speed setting.
 
@@ -146,7 +146,7 @@ Reader and errors
 Correctness ladder (each rung's fixtures pass before the next rung starts)
 - [ ] Every fixture of every ladder rung matches its `expected.toml`. Each fixture's ground truth comes from the game (Update 1.0.1).
 - [ ] With a fixed seed, two runs produce identical state and VMem.
-- [ ] (After the assembler project) Final boss: the AoC board, with the program and input named in its fixture and written into `vmem_data`, produces the `count` value at `0x0100` recorded from the game. It stops using the stop rule recorded in its fixture.
+- [ ] Final boss: the AoC board, with the program and input named in its fixture and written into `vmem_data`, produces the `count` value at `0x0100` recorded from the game (met for day 1 part 1 by fixture `cpu-aoc1p1`, with the program assembled by the game; `vcb-assembler.md` has the criteria for assembling it in the engine). It stops using the stop rule recorded in its fixture.
 
 Stops and outputs
 - [ ] For each of `--break-addr` in `fetch`, `write` and `any` mode, a fixture stops at its known tick and prints `address-watch 0x…`.
@@ -175,17 +175,18 @@ Speed and v2
    - **B. Small combinations:** ring oscillator, SR latch, D flip-flop, 4-bit counter, 4-bit adder.
    - **C. VMem boards:** write a value to an address; read it back; write to and read from address 0 (open question 8); a counter that stores into VMem. These pin down VMem timing and the meaning of `vmem_settings`.
    - **D. CPU subsets:** the ALU on its own, then the CPU running tiny hand-encoded programs (store a constant; a loop of 10), written into `vmem_data` by script.
-   - **E. Final boss:** the AoC day 1 board. This needs the assembler project (Later), or a hand-written encoding of the program.
-4. **Later:** the v2 engine with differential tests, then VInput/VDisplay, the assembler and a viewer.
+   - **E. Final boss:** the AoC day 1 board. Done 2026-11-16 with the program assembled by the game.
+4. **The assembler:** `vcb-assembler.md`, milestones A1–A3.
+5. **Later:** the v2 engine with differential tests, then VInput/VDisplay and a viewer.
 
 ## Open questions
-All open questions are about the game and live in the facts file (questions 3, 4, 6–21). References to "open question N" in this spec mean that list. Questions 1, 2 and 5 are answered there.
+All open questions are about the game and live in the facts file (questions 3, 4, 6–23). References to "open question N" in this spec mean that list. Questions 1, 2 and 5 are answered there.
 
 ## Decision log
 - Success metric → correct results, proven up a ladder of circuits with the AoC program as the final boss; then learning, then speed, then a viewer.
 - Language → Rust: C-level speed with readable, safe code (C, Zig and Go were considered).
 - Spec split (2026-11-15) → game facts moved to `vcb-game-facts.md`; the v1 design and its decisions are in `vcb-engine-v1.md`.
-- Assembler → out of scope. First plan: the user assembles in the game and saves. That turned out impossible (2026-11-13), so programs go into `vmem_data` by script and the assembler stays a later project.
+- Assembler → out of scope. First plan: the user assembles in the game and saves. That turned out impossible (2026-11-13), so programs go into `vmem_data` by script and the assembler stays a later project. On 2026-11-16 the assembler got its own spec, `vcb-assembler.md`.
 - Halt → max ticks, Breakpoint ink, address watch, plus VMem-quiescent as a debug aid. The engine stays a general circuit simulator.
 - Outputs → watched addresses, VMem dump and stats, all configurable. Write-back was dropped later (see below).
 - Baseline → the user builds test boards in the game.

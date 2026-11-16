@@ -51,7 +51,7 @@ Where the two disagree, this list wins for v1:
 - M7: the remaining framework features (see Overrides).
 
 ### Out of scope
-- Everything the framework spec lists as out of scope or Later (assembler, v2, VInput, VDisplay, viewer, `.tres`).
+- Everything the framework spec lists as out of scope or Later (v2, VInput, VDisplay, viewer, `.tres`), and the assembler, which has its own spec (`vcb-assembler.md`).
 - Rung E (AoC).
 - Decoration layers, `led_palette` colours, blueprint strings.
 
@@ -176,7 +176,7 @@ vcb run <board.vcb> ...
 
 ### Text-art boards
 - A text file: header lines `key = value`, a blank line, then the art with one character per pixel. The art is placed at board position 16,16 on a 2048×2048 board.
-- Header keys: `labels = on` (draws each probe's number below its LED block in Annotation ink, so it can be read in the game), `clock_interval`, `random_seed`, `vmem` (address and content pin settings), `persistent` (From, To), `word.<address>` (VMem preload), `probe.<label> = col,row` (relative to the art), `ticks = …` (the ticks the checklist asks for), `covers = …`. The writer always sets `random_is_time_seed` to false and leaves `assembly` empty.
+- Header keys: `labels = on` (draws each probe's number below its LED block in Annotation ink, so it can be read in the game), `clock_interval`, `random_seed`, `vmem` (address and content pin settings), `persistent` (From, To), `word.<address>` (VMem preload), `probe.<label> = col,row` (relative to the art), `ticks = …` (the ticks the checklist asks for), `covers = …`. The writer always sets `random_is_time_seed` to false and leaves `assembly` empty (the assembler spec adds an `assembly = <file>` key).
 - The character legend is one table in `textboard`, with a character for every ink in the colour table (test). An unknown character is an error naming the line and column.
 - Sources live in `engine/boards/` and are committed when written.
 

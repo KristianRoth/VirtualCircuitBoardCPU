@@ -7,6 +7,7 @@ A 32-bit CPU built in the Steam game Virtual Circuit Board (VCB), and `engine/`:
 - `specs/vcb-engine-v1.md`: the v1 design, the milestone table with status (Rollout), open questions, and the decision log. This is the plan being followed.
 - `specs/vcb-game-facts.md`: everything observed about the game and the `.vcb` format, and every open question about the game. New facts about the game go here, with the date and the board that showed them.
 - `specs/vcb-engine.md`: the framework spec (goals, CLI, stop rules). The v1 spec lists where it overrides this.
+- `specs/vcb-assembler.md`: the assembler's spec (written 2026-11-16, not built yet): milestones A1–A3, the verified/unverified/undefined gate, the probe boards. Its game questions are question 23 in the facts file.
 - `engine/README.md`: build, commands, layout, how to run a program on the CPU.
 - `manual/*.md`: the game's User Guide, transcribed. Git-ignored on purpose (the game's copyrighted text, public repo). Do not commit it.
 
