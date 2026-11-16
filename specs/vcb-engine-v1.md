@@ -71,7 +71,7 @@ Where the two disagree, this list wins for v1:
 | `render` | PNG snapshot |
 | `main` | CLI only: argument parsing, output |
 
-`Ink` keeps the colour: `Trace(0–15)`, `Bus(0–5)`, `Wireless(0–3)`. The facts file's colour table is canonical; a test checks the `ink` table against `saves/all-inks.vcb`.
+`Ink` keeps the colour: `Trace(0–15)`, `Bus(0–5)`, `Wireless(0–3)`. The facts file's colour table is canonical; a test checks the `ink` table against `engine/tests/boards/all-inks.vcb`.
 
 ### Netlist
 Every rule below is a **model** until a fixture observes it. Pixels connect only to their four direct neighbours.
@@ -230,8 +230,8 @@ No target. `--stats` reports TPS so the CPU's v1 speed is known when v2 starts.
 
 ## Acceptance criteria
 Reader, writer, tools
-- [ ] `vcb info` on `32-bit-alu-try.vcb` and on `saves/all-inks.vcb` equals a committed expected output (2048×2048; 40 and 48 colours).
-- [ ] Writing a `Board` and reading it back gives an equal `Board`, including trace and bus colours. `saves/all-inks.vcb` read and re-written has an identical logic layer.
+- [ ] `vcb info` on `AoC2025/cpu-32bit-manual-start.vcb` and on `engine/tests/boards/all-inks.vcb` equals a committed expected output (2048×2048; 40 and 48 colours).
+- [ ] Writing a `Board` and reading it back gives an equal `Board`, including trace and bus colours. `engine/tests/boards/all-inks.vcb` read and re-written has an identical logic layer.
 - [ ] The framework's "Reader and errors" criteria pass. Each new error message above has a test for a non-zero exit, exactly one stderr line, and the named item.
 - [ ] A board with `vmem_is_external: true` and a `.vcbmem` next to it loads that memory: `--dump-vmem` at `--ticks 0` equals the file's words, except word 0.
 - [ ] `vcb gen` on a sample board gives each legend character's ink at `16+col, 16+row`, the header's settings, and each probe at the expected board pixel.
@@ -249,7 +249,7 @@ Engine
 - [ ] Every fixture check listed under "Fixture checks" passes.
 - [ ] Observed fixtures exist for: a gate joined to one trace by two Read pixels counting as one input; a trace crossing a component at a Cross; a bus through a Cross and through a Tunnel; a two-colour trace on one bus; three tunnel pixels in a row; a no-input AND and NAND; a Write pixel touching two components; Latch On driving a Buffer and a Latch from tick 0; a Breakpoint behind a buffer chain of known length with the counter at the pause recorded.
 - [ ] With a fixed seed, two runs of every fixture and of the CPU board for 10,000 ticks give identical `state()` after every tick and identical VMem.
-- [ ] `saves/vmem-preserve-before.vcb` and `saves/vmem-preserve-after.vcb` are the first VMem pair fixture (word 1 = 3).
+- [ ] `engine/tests/boards/vmem-preserve.vcb` and `engine/tests/boards/vmem-preserve.after.vcb` are the first VMem pair fixture (word 1 = 3).
 - [ ] VMem timing fixtures also have probe checklists on the address pins, the content pins and a Buffer behind a content pin, around an address change, a write while locked, and a simultaneous address and content toggle.
 - [ ] Rung D: the first-fetch probe fixture passes, and at least two test programs (store a constant; a loop of 10) stop on `breakpoint` at the tick recorded from the game with equal memory over the persistent region.
 - [ ] M7: the framework's "Stops and outputs" criteria pass.

@@ -127,7 +127,7 @@ fn every_ink_pair_touching_in_the_cpu_is_on_an_observed_board() {
     for name in fixtures() {
         observed.extend(vcb::adjacency(&Board::read(&fixture_file(&name, "vcb")).unwrap()).into_keys());
     }
-    let cpu = Board::read(&engine_dir().join("../32-bit-alu-try.vcb")).unwrap();
+    let cpu = Board::read(&engine_dir().join("../AoC2025/cpu-32bit-manual-start.vcb")).unwrap();
     let missing: Vec<_> = vcb::adjacency(&cpu).into_keys().filter(|pair| !observed.contains(pair)).collect();
     assert!(missing.is_empty(), "the CPU has touching inks that no observed board covers: {missing:?}");
 }
