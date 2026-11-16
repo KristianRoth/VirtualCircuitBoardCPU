@@ -100,9 +100,17 @@ struct RunArgs {
     /// Ignore Breakpoint inks.
     #[arg(long)]
     no_breakpoint: bool,
-    /// Run even if the board uses inks that have no observed fixture yet.
+    /// Run even if the board uses inks that have no observed fixture yet, and let the assembler use
+    /// language features that the manual states but no game save shows yet.
     #[arg(long)]
     allow_unverified: bool,
+    /// Assemble this program into the board's memory before tick 0. Default: the board's own program
+    /// (its Assembly Editor text, or <board>.vcbasm with External Editing), as the game does.
+    #[arg(long)]
+    asm: Option<PathBuf>,
+    /// Assemble nothing: run the memory as the file holds it.
+    #[arg(long)]
+    no_asm: bool,
     #[arg(long)]
     clock_interval: Option<i64>,
     /// Seed for Random ink. Overrides the board's seed and its time-seed setting.
@@ -281,6 +289,8 @@ fn apply_config(args: &mut RunArgs, path: &Path) -> Result<()> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let table: toml::Table = text.parse().map_err(|e: toml::de::Error| format!("{}: {}", path.display(), e.message()))?;
     let bad = |key: &str, want: &str| format!("{}: {key}: expected {want}", path.display());
+    // A command-line --asm or --no-asm overrides both keys of the config file.
+    let asm_on_command_line = args.asm.is_some() || args.no_asm;
     let list = |key: &str, value: &toml::Value| -> Result<Vec<String>> {
         let text = |v: &toml::Value| match v {
             toml::Value::String(s) => Ok(s.clone()),
@@ -304,6 +314,10 @@ fn apply_config(args: &mut RunArgs, path: &Path) -> Result<()> {
             "timer-ticks" => args.timer_ticks = args.timer_ticks.or(Some(number()? as u64)),
             "engine" => args.engine = args.engine.take().or(Some(word()?)),
             "dump-vmem" => args.dump_vmem = args.dump_vmem.take().or(Some(word()?.into())),
+            "asm" if !asm_on_command_line => args.asm = Some(word()?.into()),
+            "no-asm" if !asm_on_command_line => args.no_asm = flag()?,
+            "asm" => drop(word()?),
+            "no-asm" => drop(flag()?),
             "no-breakpoint" => args.no_breakpoint |= flag()?,
             "allow-unverified" => args.allow_unverified |= flag()?,
             "stats" => args.stats |= flag()?,
@@ -337,6 +351,9 @@ fn run(mut args: RunArgs) -> Result<()> {
     if let Some(config) = args.config.clone() {
         apply_config(&mut args, &config)?;
     }
+    if args.asm.is_some() && args.no_asm {
+        return Err("--asm and --no-asm cannot be used together".into());
+    }
     let max_ticks = args.ticks.ok_or("--ticks is required (or `ticks` in the config file), so a cut-off run cannot look like a finished one")?;
     match args.engine.as_deref() {
         None | Some("v1") => {}
@@ -358,6 +375,28 @@ fn run(mut args: RunArgs) -> Result<()> {
             println!("seed: {}", board.settings.random_seed);
         }
         None => {}
+    }
+
+    // The program is assembled into the board's memory before tick 0, as the game does when a simulation starts.
+    let mut unverified_asm: Vec<&'static str> = Vec::new();
+    if args.no_asm {
+    } else if !board.settings.vmem_enabled {
+        if args.asm.is_some() {
+            return Err("--asm: is_vmem_enabled is false, so there is no VMem to assemble into".into());
+        }
+        if board.assembly_is_external || !board.assembly.trim().is_empty() {
+            println!("assembly text not assembled: VMem is disabled");
+        }
+    } else if let Some((text, name, file)) = read_source(&args.board, &board, args.asm.as_deref(), args.allow_unverified)? {
+        let report = vcb::asm::assemble(&text, &name, &mut board, args.allow_unverified)?;
+        unverified_asm = report.unverified.clone();
+        if file.is_some() && args.asm.is_none() {
+            unverified_asm.push(EXTERNAL_SOURCE);
+        }
+        for feature in &unverified_asm {
+            eprintln!("warning: asm {feature} is not verified against the game");
+        }
+        println!("{}", vcb::asm::Report { unverified: unverified_asm.clone(), ..report }.summary(&name));
     }
 
     // The gate: refuse inks nobody has observed in the game yet.
@@ -418,7 +457,10 @@ fn run(mut args: RunArgs) -> Result<()> {
 
     let mut output_paths: Vec<&Path> = renders.iter().map(|(_, p)| p.as_path()).collect();
     output_paths.extend(args.dump_vmem.as_deref());
-    check_outputs(&[&args.board, &args.board.with_extension("vcbmem")], &output_paths)?;
+    let (vcbmem, vcbasm) = (args.board.with_extension("vcbmem"), args.board.with_extension("vcbasm"));
+    let mut input_paths: Vec<&Path> = vec![&args.board, &vcbmem, &vcbasm];
+    input_paths.extend(args.asm.as_deref());
+    check_outputs(&input_paths, &output_paths)?;
     for path in &output_paths {
         check_overwrite(path, args.force)?;
     }
@@ -462,8 +504,8 @@ fn run(mut args: RunArgs) -> Result<()> {
         _ => reason.to_string(),
     }).collect();
     let mut line = format!("stopped at tick {}: {}", report.tick, reasons.join(", "));
-    if !unverified.is_empty() {
-        let units: Vec<&str> = unverified.iter().map(|(unit, _)| *unit).collect();
+    if !unverified.is_empty() || !unverified_asm.is_empty() {
+        let units: Vec<String> = unverified.iter().map(|(unit, _)| unit.to_string()).chain(unverified_asm.iter().map(|f| format!("asm {f}"))).collect();
         line += &format!(" (unverified: {})", units.join(", "));
     }
     println!("{line}");

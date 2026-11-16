@@ -10,10 +10,10 @@ fn fixture(name: &str) -> Board {
 
 /// A board with VMem on: 16 address bits and `content_bits` content bits.
 fn board(content_bits: i64) -> Board {
-    let mut board = Board::new(4, 4);
+    let mut board = Board::new(40, 4);
     board.settings.vmem_enabled = true;
-    board.settings.vmem_settings[0] = 16;
-    board.settings.vmem_settings[7] = content_bits;
+    // Address pins along row 0 and content pins along row 2 (leftwards from x = 39), so the board also runs.
+    board.settings.vmem_settings = [16, 39, 0, 1, 0, 1, 1, content_bits, 39, 2, 1, 0, 1, 1, 0, 0];
     board
 }
 
@@ -390,4 +390,73 @@ fn vcb_asm_external_editing_is_gated() {
     let (ok, said) = run(true);
     assert!(ok && said.contains("(unverified: asm External Editing source)") && said.contains("warning: asm External Editing source"), "{said}");
     assert_eq!(std::fs::read_to_string(&listing).unwrap(), "0x00010 0x00000002  2  2\n\n");
+}
+
+// ---- `vcb run` assembles before tick 0 ----
+
+#[test]
+fn vcb_run_assembles_the_boards_program_like_the_game() {
+    let d = dir("run-asm");
+    let b = write_board(&d, "origin 0x10\n1");
+    let p = |name: &str| d.join(name).to_str().unwrap().to_string();
+    std::fs::write(p("prog.vcbasm"), "origin 0x10\r\n2\r\n").unwrap();
+    let before = std::fs::read(&b).unwrap();
+    let run = |extra: &[&str]| {
+        let mut args = vec!["run", b.as_str(), "--ticks", "1", "--watch", "0x10"];
+        args.extend(extra);
+        let out = vcb(&args);
+        (out.status.success(), text(&out.stdout), text(&out.stderr))
+    };
+    let stopped = |value: u32| format!("stopped at tick 1: max-ticks\n0x00000010 = {value:#010X} ({value})\n");
+
+    // The board's own text by default; --asm wins; --no-asm assembles nothing.
+    assert_eq!(run(&[]), (true, format!("assembled 1 words from {b}:assembly\n{}", stopped(1)), String::new()));
+    assert_eq!(run(&["--asm", &p("prog.vcbasm")]).1, format!("assembled 1 words from {}\n{}", p("prog.vcbasm"), stopped(2)));
+    assert_eq!(run(&["--no-asm"]).1, stopped(0));
+    let (ok, _, stderr) = run(&["--asm", &p("prog.vcbasm"), "--no-asm"]);
+    assert!(!ok && stderr.contains("--asm and --no-asm cannot be used together"), "{stderr}");
+
+    // The config file can name both; a command-line flag overrides it. Paths are relative to the working directory.
+    std::fs::write(p("asm.toml"), format!("asm = {:?}\n", p("prog.vcbasm"))).unwrap();
+    std::fs::write(p("no.toml"), "no-asm = true\n").unwrap();
+    assert_eq!(run(&["--config", &p("asm.toml")]).1, format!("assembled 1 words from {}\n{}", p("prog.vcbasm"), stopped(2)));
+    assert_eq!(run(&["--config", &p("asm.toml"), "--no-asm"]).1, stopped(0));
+    assert_eq!(run(&["--config", &p("no.toml")]).1, stopped(0));
+    assert_eq!(run(&["--config", &p("no.toml"), "--asm", &p("prog.vcbasm")]).1, format!("assembled 1 words from {}\n{}", p("prog.vcbasm"), stopped(2)));
+    std::fs::write(p("both.toml"), format!("asm = {:?}\nno-asm = true\n", p("prog.vcbasm"))).unwrap();
+    assert!(!run(&["--config", &p("both.toml")]).0);
+
+    // A gate hit stops the run before tick 0; with the flag the feature is named on both lines.
+    std::fs::write(p("neg.vcbasm"), "origin 0x10\n-1\n").unwrap();
+    let (ok, stdout, stderr) = run(&["--asm", &p("neg.vcbasm")]);
+    assert!(!ok && stdout.is_empty() && stderr.contains("neg.vcbasm:2:1: 'negative literal' is not verified"), "{stderr}");
+    let (ok, stdout, stderr) = run(&["--asm", &p("neg.vcbasm"), "--allow-unverified"]);
+    assert!(ok && stderr.contains("warning: asm negative literal is not verified"), "{stderr}");
+    assert!(stdout.contains("(unverified: asm negative literal)\nstopped at tick 1: max-ticks (unverified: asm negative literal)\n"), "{stdout}");
+
+    // The program file cannot be an output, and no input is changed.
+    let (ok, _, stderr) = run(&["--asm", &p("prog.vcbasm"), "--dump-vmem", &p("prog.vcbasm"), "--force"]);
+    assert!(!ok && stderr.contains("is an input file"), "{stderr}");
+    assert_eq!(before, std::fs::read(&b).unwrap());
+    assert_eq!(std::fs::read(p("prog.vcbasm")).unwrap(), b"origin 0x10\r\n2\r\n");
+}
+
+#[test]
+fn vcb_run_with_vmem_disabled_runs_without_assembling() {
+    let d = dir("run-asm-novmem");
+    let mut b = board(32);
+    b.settings.vmem_enabled = false;
+    b.assembly = "origin 0x10\n1".to_string();
+    let path = d.join("b.vcb");
+    std::fs::write(&path, b.to_vcb()).unwrap();
+    let run = |extra: &[&str]| {
+        let mut args = vec!["run", path.to_str().unwrap(), "--ticks", "1"];
+        args.extend(extra);
+        let out = vcb(&args);
+        (out.status.success(), text(&out.stdout))
+    };
+    assert_eq!(run(&[]), (true, "assembly text not assembled: VMem is disabled\nstopped at tick 1: max-ticks\n".to_string()));
+    assert_eq!(run(&["--no-asm"]), (true, "stopped at tick 1: max-ticks\n".to_string()));
+    std::fs::write(d.join("p.vcbasm"), "origin 0x10\n1\n").unwrap();
+    assert!(!run(&["--asm", d.join("p.vcbasm").to_str().unwrap()]).0);
 }
