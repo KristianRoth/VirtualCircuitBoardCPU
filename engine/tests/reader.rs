@@ -61,7 +61,7 @@ fn written_board_reads_back_equal() {
 
 #[test]
 fn game_saves_survive_a_rewrite() {
-    for file in ["saves/all-inks.vcb", "32-bit-alu-try.vcb"] {
+    for file in ["engine/tests/boards/all-inks.vcb", "AoC2025/cpu-32bit-manual-start.vcb"] {
         let board = Board::read(&repo(file)).unwrap();
         let again = Board::parse(&board.to_vcb(), no_vcbmem).unwrap();
         assert!(again == board, "{file} changed when re-written");
@@ -70,7 +70,7 @@ fn game_saves_survive_a_rewrite() {
 
 #[test]
 fn all_inks_save_has_one_pixel_of_each_ink() {
-    let board = Board::read(&repo("saves/all-inks.vcb")).unwrap();
+    let board = Board::read(&repo("engine/tests/boards/all-inks.vcb")).unwrap();
     for (_, ink) in vcb::ink::COLOURS {
         assert_eq!(board.inks.iter().filter(|i| **i == ink).count(), 1, "{ink}");
     }
@@ -78,7 +78,7 @@ fn all_inks_save_has_one_pixel_of_each_ink() {
 
 #[test]
 fn info_matches_expected_output() {
-    for (file, expected) in [("32-bit-alu-try.vcb", "info-cpu.txt"), ("saves/all-inks.vcb", "info-all-inks.txt")] {
+    for (file, expected) in [("AoC2025/cpu-32bit-manual-start.vcb", "info-cpu.txt"), ("engine/tests/boards/all-inks.vcb", "info-all-inks.txt")] {
         let board = Board::read(&repo(file)).unwrap();
         let expected = std::fs::read_to_string(repo("engine/tests/expected").join(expected)).unwrap();
         assert_eq!(vcb::info(&board), expected, "{file}");
@@ -180,7 +180,7 @@ fn cli_reports_a_reader_error_on_one_line() {
 
 #[test]
 fn cli_info_prints_the_board() {
-    let out = Command::new(env!("CARGO_BIN_EXE_vcb")).arg("info").arg(repo("saves/all-inks.vcb")).output().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_vcb")).arg("info").arg(repo("engine/tests/boards/all-inks.vcb")).output().unwrap();
     assert!(out.status.success());
     assert!(String::from_utf8(out.stdout).unwrap().contains("inks: 48"));
 }

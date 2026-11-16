@@ -3,6 +3,7 @@
 A 32-bit CPU built in the Steam game Virtual Circuit Board (VCB), and `engine/`: a Rust engine that runs VCB saves tick for tick like the game. The aim is to solve Advent of Code on the CPU, faster than the game allows.
 
 ## Read these first
+- `AoC2025/README.md`: the CPU board files. `AoC2025/cpu-32bit-manual-start.vcb` is the CPU as built (formerly `32-bit-alu-try.vcb`); `AoC2025/cpu-32bit-autorun-aoc1p1.vcb` runs by itself and carries the AoC day 1 part 1 assembly (formerly `CPU.vcb`).
 - `specs/vcb-engine-v1.md`: the v1 design, the milestone table with status (Rollout), open questions, and the decision log. This is the plan being followed.
 - `specs/vcb-game-facts.md`: everything observed about the game and the `.vcb` format, and every open question about the game. New facts about the game go here, with the date and the board that showed them.
 - `specs/vcb-engine.md`: the framework spec (goals, CLI, stop rules). The v1 spec lists where it overrides this.
@@ -12,7 +13,7 @@ A 32-bit CPU built in the Steam game Virtual Circuit Board (VCB), and `engine/`:
 ## State (2026-11-16)
 - Milestones M0–M7 of v1 are done. Every ink and VMem is verified against the game; Timer is "modelled".
 - The CPU runs AoC day 1 part 1 to its Breakpoint at the game's tick with identical memory: `cargo test --release -- --ignored`, about 8 s, about 5.5 million ticks per second.
-- Candidates for what comes next (the user decides): an assembler in the engine (the game's assembly language is in `manual/08-assembly.md`), so programs need not be run in the game first; the v2 engine (optimised, checked against v1 with differential tests); AoC day 1 part 2 (`AOC1P2.vcbasm`); the openVCB patch and benchmark; choosing a licence for `engine/` before pushing.
+- Candidates for what comes next (the user decides): an assembler in the engine (the game's assembly language is in `manual/08-assembly.md`), so programs need not be run in the game first; the v2 engine (optimised, checked against v1 with differential tests); AoC day 1 part 2 (`AoC2025/days/day1/part2.vcbasm`); the openVCB patch and benchmark; choosing a licence for `engine/` before pushing.
 
 ## Building
 `cargo` is not on the PATH and the default macOS 27 SDK breaks linking:
@@ -26,7 +27,7 @@ Use `./target/release/vcb` for long runs; the debug build is far slower.
 - **The game is the ground truth.** If the engine disagrees with an observation, the engine is wrong until the user has re-observed that case. openVCB (`openVCB/`, git-ignored clone) may be read for ideas but never copied, and is not an oracle.
 - **Never guess a game rule silently.** A rule that is not observed is marked as a model in the spec, has a question number in the facts file, and gets a board. A pattern the rules don't define is an error in the engine.
 - **A model change must keep every earlier fixture passing**, and the changed rule is edited in the v1 spec and the facts file in the same commit.
-- **Boards for the user go in `saves/pending/`** (git-ignored), never under `engine/`. After observation they are moved to `engine/tests/boards/`.
+- **Boards for the user go in `saves/pending/`**, never under `engine/`. The whole `saves/` folder is git-ignored: it is the user's scratch space for the game. After observation, what is needed is moved to `engine/tests/boards/` (fixtures) or `engine/tests/evidence/` (saves that back a fact in the facts file but no test).
 - **Commits:** locally, per milestone or coherent step, only with all tests passing (two commits in this project's history broke that; don't repeat it). Stage explicit paths, never `git add -A`. Never push; the user pushes. No AI attribution in commit messages.
 - Do not open the game's encrypted scripts (`.gde` in `vcb.pck`). Reading plain strings and constants in the executable is how the random generator was found, and that is the limit.
 

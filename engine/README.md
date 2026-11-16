@@ -66,7 +66,7 @@ Example: the CPU fixture.
 
 The engine has no assembler. The game assembles when a simulation starts, and a save made afterwards contains the assembled program if Persistent Memory covers it.
 
-1. Put the assembly in the CPU file (`saves/CPU.vcb` is the CPU with its run switch fixed on).
+1. Put the assembly in the CPU file (`AoC2025/cpu-32bit-autorun-aoc1p1.vcb` is the CPU with its run switch fixed on).
 2. In the game: set Persistent Memory From 0 To 65535, enter simulation mode, return to edit mode, Save As a new file. Leaving simulation mode right away gives the program before it runs.
 3. `vcb run <that file> --ticks <n> --watch <addresses>`. The `assembly` text in the file is ignored by the engine.
 
@@ -85,6 +85,7 @@ A save made after a full run can also be used: set the words the program changes
 | `src/main.rs` | Command line |
 | `boards/*.txt` | Text-art sources of the test boards |
 | `tests/boards/` | Observed fixtures: `<name>.vcb`, `<name>.observed.md` (the checklist the user filled in), `<name>.after.vcb` (the game's save after a run) |
+| `tests/evidence/` | Game saves that back a fact in the facts file but are not used by a test |
 | `tests/` | `reader.rs`, `cli.rs`, `model.rs` (engine against the spec's rules), `fixtures.rs` (engine against the game) |
 | `tools/board-generators/` | Python scripts that wrote the larger `boards/*.txt` files. Run from `engine/`. |
 | `tools/random-search/` | The scripts that identified the game's random generator from the recordings. Run from the repo root. |
