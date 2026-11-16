@@ -13,12 +13,12 @@ pub type Result<T> = std::result::Result<T, String>;
 const MAX_BLOB: usize = 64 << 20;
 const TEMPLATE: &str = include_str!("template.json");
 /// Fields held as typed values in `Board`. Their copies in `Board::json` are nulled, and `to_vcb` writes them back.
-const TYPED_FIELDS: [&str; 8] = ["vmem_data", "vmem_is_external", "is_vmem_enabled", "vmem_settings", "clock_interval", "timer_interval", "random_seed", "random_is_time_seed"];
+const TYPED_FIELDS: [&str; 10] = ["assembly", "assembly_is_external", "vmem_data", "vmem_is_external", "is_vmem_enabled", "vmem_settings", "clock_interval", "timer_interval", "random_seed", "random_is_time_seed"];
 
 fn null_typed_fields(json: &mut Map<String, Value>) {
     json["layers"][0] = Value::Null;
     for name in TYPED_FIELDS {
-        json[name] = Value::Null;
+        json.insert(name.into(), Value::Null); // `assembly_is_external` is missing in some files
     }
 }
 
@@ -104,6 +104,8 @@ impl Board {
                 random_seed: 1,
                 random_is_time_seed: false,
             },
+            assembly: String::new(),
+            assembly_is_external: false,
             json,
         }
     }
@@ -194,9 +196,12 @@ impl Board {
             random_is_time_seed: bool_field(&json, "random_is_time_seed")?,
         };
 
+        let assembly = str_field(&json, "assembly")?.to_string();
+        let assembly_is_external = json.get("assembly_is_external").map_or(Ok(false), |v| v.as_bool().ok_or("assembly_is_external: expected true or false"))?;
+
         // The typed fields above are the source of truth; drop their copies from `json`.
         null_typed_fields(&mut json);
-        Ok(Board { width, height, inks, vmem, settings, json })
+        Ok(Board { width, height, inks, vmem, settings, assembly, assembly_is_external, json })
     }
 
     /// The `.vcb` text for this board. VMem is always written inline.
@@ -208,6 +213,8 @@ impl Board {
         let vmem_bytes: Vec<u8> = self.vmem.iter().flat_map(|w| w.to_be_bytes()).collect();
         json["vmem_data"] = encode_blob(&vmem_bytes, &[vmem_bytes.len()]).into();
         json["vmem_is_external"] = false.into();
+        json["assembly"] = self.assembly.as_str().into();
+        json["assembly_is_external"] = self.assembly_is_external.into();
 
         let s = &self.settings;
         json["is_vmem_enabled"] = s.vmem_enabled.into();
