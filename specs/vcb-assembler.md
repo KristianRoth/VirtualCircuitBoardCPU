@@ -81,11 +81,11 @@ Also verified:
 - A label takes the address of the next plain instruction, with only comments, blank lines and other labels in between.
 - Pointers defined before the first `origin`; several `origin` directives in any address order.
 - Words the program does not define keep their `vmem_data` value: words 1–5 of the CPU board survive in the game's after-save.
-- From part 2 only (verified once A0's save is in; until then undefined, 23q): `@ name` followed by `;`, and an indented label.
+- From part 2 (verified 2026-11-16 by `cpu-aoc1p2.assembled.vcb`): `@ name` followed by `;`, and an indented label, behave like a plain label.
 
 Two limits of this evidence, stated so they are not forgotten:
 - **OR.** In both programs the ORed values never share a bit, so OR cannot be told from addition or XOR. Overlapping bits are unverified.
-- **Pointer values.** Three words of `cpu-aoc1p1.vcb` were set back by hand after the run (`0x100`, `0x101`, `0xE000`), and two of them are the words the `pointer` statements store. For part 1 they are inferred from the tick-exact run. A0's save shows them directly.
+- **Pointer values.** Three words of `cpu-aoc1p1.vcb` were set back by hand after the run (`0x100`, `0x101`, `0xE000`), and two of them are the words the `pointer` statements store. For part 1 they are inferred from the tick-exact run. The part 2 save shows them directly: `0x100` = 0 and `0x101` = `0x1000`.
 
 ### Unverified at the start
 Each row is one feature in `asm.rs`. Only cases where the manual's rule gives one definite word are here.
@@ -271,8 +271,8 @@ Each milestone ends with a local commit once all tests pass.
 
 | # | Milestone | Needs from the user |
 |---|---|---|
-| A0 | `saves/pending/cpu-aoc1p2.vcb` (two fields of the manual-start board changed); the save imported as `cpu-aoc1p2.assembled.vcb` with its checklist | one save in the game, a minute |
-| A1a | The typed fields; `asm.rs` with the gate; the part 1 and part 2 tests; `vcb asm`. `vcb run` unchanged | nothing (part 2's criteria wait for A0). Done 2026-11-16 except part 2's tests: part 1 matches the game in every word; part 2 with its two `@ …;` lines rewritten runs to the Breakpoint at tick 70,339,472 with `0x100` = `0x16C7` |
+| A0 | `saves/pending/cpu-aoc1p2.vcb` (two fields of the manual-start board changed); the save imported as `cpu-aoc1p2.assembled.vcb` with its checklist | one save in the game, a minute. Done 2026-11-16: the game's memory equals the engine's in words 1–65535 |
+| A1a | The typed fields; `asm.rs` with the gate; the part 1 and part 2 tests; `vcb asm`. `vcb run` unchanged | nothing (part 2's criteria wait for A0). Done 2026-11-16: part 1 and part 2 match the game in every word; part 2 runs to the Breakpoint at tick 70,339,472 with `0x100` = `0x16C7` |
 | A1b | `vcb run` assembles by default, `--asm`, `--no-asm`; documents (below) | nothing |
 | A2 | `vcb gen` keys; the five probe boards and checklists in `saves/pending/` | run five boards in the game |
 | A3 | Import: fixtures, classes moved, facts file and this spec updated | nothing |

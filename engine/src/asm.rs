@@ -12,10 +12,6 @@ use std::collections::{HashMap, HashSet};
 /// Unverified features that a game save has since shown. Add the name here in the commit that adds the fixture.
 pub const VERIFIED: &[&str] = &[];
 
-/// `@ name;` and an indented label occur only in day 1 part 2. Set to true when the game's assembled save of
-/// part 2 (`cpu-aoc1p2.assembled.vcb`, milestone A0) is a fixture; until then they are question 23q.
-const PART2_LABEL_FORMS_VERIFIED: bool = false;
-
 const MAX_SOURCE_BYTES: usize = 16 << 20;
 const MAX_NESTING: usize = 64;
 const KEYWORDS: [&str; 15] = [
@@ -90,10 +86,6 @@ struct Stmt {
     toks: Vec<Tok>,
     line: usize,
     text: String,
-    /// The statement ends with `;` (not with the end of its line).
-    semi: bool,
-    /// First statement of a line that starts with spaces or tabs.
-    indented: bool,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -493,8 +485,7 @@ fn statements(asm: &mut Asm, source: &str) -> Vec<Stmt> {
             None => full_line,
         };
         let mut start = 0;
-        let pieces: Vec<&str> = code.split(';').collect();
-        for (k, piece) in pieces.iter().enumerate() {
+        for piece in code.split(';') {
             let mut toks: Vec<Tok> = Vec::new();
             let mut word_start = None;
             let mut glued_brace = false;
@@ -518,8 +509,7 @@ fn statements(asm: &mut Asm, source: &str) -> Vec<Stmt> {
                 asm.unverified("macro braces without spaces", line, toks[0].col);
             }
             if !toks.is_empty() {
-                let indented = k == 0 && piece.starts_with(|c: char| c.is_whitespace());
-                out.push(Stmt { toks, line, text: piece.trim().to_string(), semi: k + 1 < pieces.len(), indented });
+                out.push(Stmt { toks, line, text: piece.trim().to_string() });
             }
             start += piece.len() + 1;
         }
@@ -741,9 +731,6 @@ fn walk(asm: &mut Asm, source: &str) -> Result<Vec<Word>, Fatal> {
                 }
                 if toks.len() > 2 {
                     asm.undefined("q", "a label and an instruction in one statement", line, toks[2].col);
-                }
-                if !PART2_LABEL_FORMS_VERIFIED && (st.semi || st.indented) {
-                    asm.undefined("q", "a label followed by ; or an indented label", line, col);
                 }
                 let name = &toks[1];
                 if !is_name(&name.s) {

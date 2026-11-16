@@ -141,6 +141,7 @@ Boards `random-vmem-seed-1` and `-2` (`engine/boards/`): a counter on the VMem a
 - **The game assembles only at simulation start** (a "compiling assembly" loading bar) and never saves the result. A `.vcb` never contains an assembled program.
 - **Assembly errors:** the game shows the first error it finds, and only that one, in the editor, before the simulation starts (reported by the user from experience, 2026-11-16; no save backs it).
 - **What the game's assembler is known to do:** only what `cpu-aoc1p1` shows. The text the game assembled is the `assembly` field of `engine/tests/boards/cpu-aoc1p1.after.vcb`. `vcb-assembler.md` writes the forms it contains as a grammar ("Verified: the shapes the game has assembled"). Three words of `cpu-aoc1p1.vcb` were set back by hand after the run (`0x100`, `0x101`, `0xE000`), so the two pointer words are inferred from the tick-exact run, not read from a save. Words 1–5 (the old test pattern, not defined by the program) are intact in the after-save: **assembling keeps words the program does not define** (this part of question 19 is answered). Everything else is question 23.
+- **Day 1 part 2 as the game assembles it** (2026-11-16): `engine/tests/boards/cpu-aoc1p2.vcb` is the manual-start CPU with part 2 as assembly and Persistent Memory 0–65535; `cpu-aoc1p2.assembled.vcb` is the save made after entering simulation and returning at once. It holds the assembled program before anything ran: the pointer words are `0x100` = 0 and `0x101` = `0x1000`, words 1–5 are kept, and the game showed no error.
 - **The user's `.vcbasm` files have CRLF line ends** (`AoC2025/days/day1/part1.vcbasm`, `part2.vcbasm`; checked 2026-11-16), and the `assembly` field of every board seen has LF only. The files equal the board texts once CRLF is read as LF: part 1 the after-save above, part 2 `engine/tests/evidence/AOC1P2_asm.vcb` and `timer-and-random.vcb` (both with VMem disabled). The game has only been seen to assemble the LF text.
 - **Under Wine (Mac):** overwriting an existing save can leave the new content in `<name>.vcb.tmp`. Saving to a new filename works normally.
 
@@ -236,7 +237,7 @@ Questions 11–21 come from the v1 design (`vcb-engine-v1.md` lists the interim 
     - o. `origin orgprev` or `origin orgbase` with nothing to revert.
     - p. An expression inside a directive; an operator without spaces around it.
     - p also covers: a symbol or pointer value that is not a literal.
-    - q. A label definition and an instruction on one line; a label followed by `;`, and an indented label (both occur in day 1 part 2; answered by the assembler spec's A0 save); letter case of keywords, `0X`/`0B` and hex digits; literal forms such as `+5`.
+    - q. A label definition and an instruction on one line; (answered 2026-11-16 by `engine/tests/boards/cpu-aoc1p2.assembled.vcb`: a label followed by `;`, and an indented label, are plain labels); letter case of keywords, `0X`/`0B` and hex digits; literal forms such as `+5`.
     - r. A carriage return in the `assembly` field, and how the game reads a CRLF external file; External Editing on with no `.vcbasm` file (not planned to be observed); whether a board with VMem disabled and assembly text starts.
     - s. A label followed by `origin`, by a `pointer`, or by the end of the source.
     - t. A `;` inside a comment.
