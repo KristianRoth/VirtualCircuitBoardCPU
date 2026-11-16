@@ -4,7 +4,9 @@ use std::process::ExitCode;
 use std::time::Instant;
 use vcb::format::Result;
 use vcb::netlist::Components;
-use vcb::sim::{Engine, Options, Simulation, StopSet};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use vcb::sim::{Access, Engine, Options, Simulation, StopSet};
 use vcb::Board;
 
 #[derive(Parser)]
@@ -39,9 +41,22 @@ enum Command {
 #[derive(clap::Args)]
 struct RunArgs {
     board: PathBuf,
-    /// Maximum number of ticks to run.
+    /// A TOML file with run settings. Keys are the long flag names (ticks, break-addr, watch, ...);
+    /// flags given on the command line win.
     #[arg(long)]
-    ticks: u64,
+    config: Option<PathBuf>,
+    /// Maximum number of ticks to run. Required, here or in the config file.
+    #[arg(long)]
+    ticks: Option<u64>,
+    /// Stop when VMem accesses this address: addr[:fetch|write|any] (default fetch). Repeatable.
+    #[arg(long)]
+    break_addr: Vec<String>,
+    /// Stop once VMem has not changed for this many ticks.
+    #[arg(long)]
+    quiescent: Option<u64>,
+    /// Which engine to run. Only v1 exists.
+    #[arg(long)]
+    engine: Option<String>,
     /// Print the on/off state of the entity at this pixel every tick: x,y or x,y=label. Repeatable.
     #[arg(long)]
     probe: Vec<String>,
@@ -151,7 +166,72 @@ fn gen(source: &Path, output: &Path, force: bool) -> Result<()> {
     Ok(())
 }
 
-fn run(args: RunArgs) -> Result<()> {
+/// Fills every setting the command line left out from the config file.
+fn apply_config(args: &mut RunArgs, path: &Path) -> Result<()> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let table: toml::Table = text.parse().map_err(|e: toml::de::Error| format!("{}: {}", path.display(), e.message()))?;
+    let bad = |key: &str, want: &str| format!("{}: {key}: expected {want}", path.display());
+    let list = |key: &str, value: &toml::Value| -> Result<Vec<String>> {
+        let text = |v: &toml::Value| match v {
+            toml::Value::String(s) => Ok(s.clone()),
+            toml::Value::Integer(n) => Ok(n.to_string()),
+            _ => Err(bad(key, "text or a number")),
+        };
+        match value {
+            toml::Value::Array(items) => items.iter().map(text).collect(),
+            one => Ok(vec![text(one)?]),
+        }
+    };
+    for (key, value) in &table {
+        let number = || value.as_integer().ok_or_else(|| bad(key, "a whole number"));
+        let flag = || value.as_bool().ok_or_else(|| bad(key, "true or false"));
+        let word = || value.as_str().map(String::from).ok_or_else(|| bad(key, "text"));
+        match key.as_str() {
+            "ticks" => args.ticks = args.ticks.or(Some(number()? as u64)),
+            "quiescent" => args.quiescent = args.quiescent.or(Some(number()? as u64)),
+            "seed" => args.seed = args.seed.or(Some(number()?)),
+            "clock-interval" => args.clock_interval = args.clock_interval.or(Some(number()?)),
+            "timer-ticks" => args.timer_ticks = args.timer_ticks.or(Some(number()? as u64)),
+            "engine" => args.engine = args.engine.take().or(Some(word()?)),
+            "dump-vmem" => args.dump_vmem = args.dump_vmem.take().or(Some(word()?.into())),
+            "no-breakpoint" => args.no_breakpoint |= flag()?,
+            "allow-unverified" => args.allow_unverified |= flag()?,
+            "stats" => args.stats |= flag()?,
+            "force" => args.force |= flag()?,
+            "break-addr" if args.break_addr.is_empty() => args.break_addr = list(key, value)?,
+            "watch" if args.watch.is_empty() => args.watch = list(key, value)?,
+            "probe" if args.probe.is_empty() => args.probe = list(key, value)?,
+            "render" if args.render.is_empty() => args.render = list(key, value)?,
+            "break-addr" | "watch" | "probe" | "render" => {}
+            _ => return Err(format!("{}: unknown key \"{key}\"", path.display())),
+        }
+    }
+    Ok(())
+}
+
+fn parse_address(text: &str, vmem_len: usize) -> Option<usize> {
+    let parsed = match text.strip_prefix("0x") {
+        Some(hex) => usize::from_str_radix(hex, 16),
+        None => text.parse(),
+    };
+    parsed.ok().filter(|a| *a < vmem_len)
+}
+
+fn run(mut args: RunArgs) -> Result<()> {
+    // Ctrl-C ends the run after the current tick; the outputs are still written. The handler is installed
+    // before the board is loaded, so an early Ctrl-C is not lost.
+    let interrupt = Arc::new(AtomicBool::new(false));
+    let flag = interrupt.clone();
+    ctrlc::set_handler(move || flag.store(true, Ordering::Relaxed)).map_err(|e| format!("cannot install the Ctrl-C handler: {e}"))?;
+    if let Some(config) = args.config.clone() {
+        apply_config(&mut args, &config)?;
+    }
+    let max_ticks = args.ticks.ok_or("--ticks is required (or `ticks` in the config file), so a cut-off run cannot look like a finished one")?;
+    match args.engine.as_deref() {
+        None | Some("v1") => {}
+        Some("v2") => return Err("--engine v2: the v2 engine does not exist yet".into()),
+        Some(other) => return Err(format!("--engine {other}: expected v1 or v2")),
+    }
     let mut board = Board::read(&args.board)?;
     if let Some(n) = args.clock_interval {
         board.settings.clock_interval = n;
@@ -201,21 +281,28 @@ fn run(args: RunArgs) -> Result<()> {
     for spec in &args.render {
         let (tick, file) = spec.split_once(':').ok_or(format!("--render {spec}: expected tick:file.png"))?;
         let tick: u64 = tick.parse().map_err(|_| format!("--render {spec}: \"{tick}\" is not a tick number"))?;
-        if tick > args.ticks {
-            return Err(format!("--render {spec}: tick {tick} is after the run's last tick {}", args.ticks));
+        if tick > max_ticks {
+            return Err(format!("--render {spec}: tick {tick} is after the run's last tick {max_ticks}"));
         }
         renders.push((tick, file.into()));
     }
     let mut watch: Vec<usize> = Vec::new();
     for spec in &args.watch {
-        let parsed = match spec.strip_prefix("0x") {
-            Some(hex) => usize::from_str_radix(hex, 16),
-            None => spec.parse(),
-        };
-        watch.push(parsed.ok().filter(|a| *a < board.vmem.len()).ok_or(format!("--watch {spec}: not a VMem address"))?);
+        watch.push(parse_address(spec, board.vmem.len()).ok_or(format!("--watch {spec}: not a VMem address"))?);
     }
-    if !board.settings.vmem_enabled && (!watch.is_empty() || args.dump_vmem.is_some()) {
-        return Err("is_vmem_enabled: is false, so there is no VMem to watch or dump".into());
+    let mut break_addresses: Vec<(usize, Access)> = Vec::new();
+    for spec in &args.break_addr {
+        let (address, mode) = spec.split_once(':').unwrap_or((spec, "fetch"));
+        let access = match mode {
+            "fetch" => Access::Fetch,
+            "write" => Access::Write,
+            "any" => Access::Any,
+            _ => return Err(format!("--break-addr {spec}: expected fetch, write or any after the colon")),
+        };
+        break_addresses.push((parse_address(address, board.vmem.len()).ok_or(format!("--break-addr {spec}: not a VMem address"))?, access));
+    }
+    if !board.settings.vmem_enabled && (!watch.is_empty() || args.dump_vmem.is_some() || !break_addresses.is_empty() || args.quiescent.is_some()) {
+        return Err("is_vmem_enabled: is false, so there is no VMem to watch, dump or stop on".into());
     }
 
     let mut output_paths: Vec<&Path> = renders.iter().map(|(_, p)| p.as_path()).collect();
@@ -228,8 +315,15 @@ fn run(args: RunArgs) -> Result<()> {
     let mut engine = Engine::new(&board, components, &Options { timer_ticks: args.timer_ticks })?;
     let mut render_error = None;
     let started = Instant::now();
-    let stops = StopSet { max_ticks: args.ticks, breakpoint: !args.no_breakpoint };
+    let stops = StopSet { max_ticks, breakpoint: !args.no_breakpoint, watch: break_addresses, quiescent: args.quiescent, interrupt: Some(interrupt) };
+    let mut last_progress = (Instant::now(), 0u64);
     let report = engine.run_until(&stops, |engine| {
+        // With --stats: a progress line every 5 seconds. The clock is read only every 65,536 ticks.
+        if args.stats && engine.tick() & 0xffff == 0 && last_progress.0.elapsed().as_secs() >= 5 {
+            let speed = (engine.tick() - last_progress.1) as f64 / last_progress.0.elapsed().as_secs_f64();
+            eprintln!("tick {}  TPS: {speed:.0}", engine.tick());
+            last_progress = (Instant::now(), engine.tick());
+        }
         if !probes.is_empty() {
             let values: Vec<String> = probes.iter().map(|(label, e)| format!("{label}={}", engine.state()[*e as usize] as u8)).collect();
             println!("tick {}: {}", engine.tick(), values.join(" "));
@@ -244,7 +338,11 @@ fn run(args: RunArgs) -> Result<()> {
         return Err(e);
     }
 
-    let mut line = format!("stopped at tick {}: {}", report.tick, report.reasons.join(", "));
+    let reasons: Vec<String> = report.reasons.iter().map(|reason| match (*reason, report.watch_address) {
+        ("address-watch", Some(address)) => format!("address-watch {address:#010X}"),
+        _ => reason.to_string(),
+    }).collect();
+    let mut line = format!("stopped at tick {}: {}", report.tick, reasons.join(", "));
     if !unverified.is_empty() {
         let units: Vec<&str> = unverified.iter().map(|(unit, _)| *unit).collect();
         line += &format!(" (unverified: {})", units.join(", "));

@@ -68,7 +68,7 @@ fn engine_matches_every_observation() {
         let mut engine = Engine::new(&tb.board, components, &vcb::sim::Options { timer_ticks }).unwrap();
         let mut differences = Vec::new();
         // Boards without probes (VMem recordings) have no ticks to compare here.
-        engine.run_until(&StopSet { max_ticks: tb.ticks.last().copied().unwrap_or(0), breakpoint: false }, |e| {
+        engine.run_until(&StopSet { max_ticks: tb.ticks.last().copied().unwrap_or(0), breakpoint: false, ..Default::default() }, |e| {
             let Some((_, lit)) = observed.iter().find(|(t, _)| *t == e.tick()) else { return };
             for (i, entity) in entities.iter().enumerate() {
                 let (number, engine_says) = (i + 1, e.state()[*entity as usize]);
@@ -83,7 +83,7 @@ fn engine_matches_every_observation() {
         // the tick on which the Breakpoint turned on, which is the engine's stop tick.
         if let Some(Ok(counter)) = field(&checklist, "- Tick counter when a Breakpoint paused the game (if any):").map(str::parse::<u64>) {
             let mut engine = Engine::new(&tb.board, Components::build(&tb.board).unwrap(), &Default::default()).unwrap();
-            let report = engine.run_until(&StopSet { max_ticks: counter + 10, breakpoint: true }, |_| {});
+            let report = engine.run_until(&StopSet { max_ticks: counter + 10, breakpoint: true, ..Default::default() }, |_| {});
             assert_eq!((report.tick + 1, report.reasons), (counter, vec!["breakpoint"]), "{name}: Breakpoint pause");
         }
     }
@@ -166,7 +166,7 @@ fn engine_reproduces_the_recorded_random_bits_exactly() {
         let randoms: Vec<u32> = (0..32).map(|k| components.entity_at((s[8] - s[10] * k) as usize, s[9] as usize - 3).unwrap()).collect();
         let mut engine = Engine::new(&board, components, &Default::default()).unwrap();
         let mut wrong = Vec::new();
-        engine.run_until(&StopSet { max_ticks: 2 + 24 * 127, breakpoint: false }, |e| {
+        engine.run_until(&StopSet { max_ticks: 2 + 24 * 127, breakpoint: false, ..Default::default() }, |e| {
             let (cycle, phase) = ((e.tick() as usize).saturating_sub(2) / 24, (e.tick() + 22) % 24);
             if phase == 0 && (1..=127).contains(&cycle) {
                 let word: u32 = randoms.iter().enumerate().map(|(k, r)| (e.state()[*r as usize] as u32) << k).sum();
@@ -200,7 +200,7 @@ fn engine_vmem_matches_every_after_save() {
         assert!(after.vmem[from..=to].iter().any(|w| *w != 0), "{name}: the game saved nothing in words {from}..={to}");
 
         let mut engine = Engine::new(&board, Components::build(&board).unwrap(), &Default::default()).unwrap();
-        let report = engine.run_until(&StopSet { max_ticks: 5000, breakpoint: true }, |_| {});
+        let report = engine.run_until(&StopSet { max_ticks: 5000, breakpoint: true, ..Default::default() }, |_| {});
         let wrong: Vec<String> = (from..=to)
             .filter(|a| engine.vmem()[*a] != after.vmem[*a])
             .map(|a| format!("word {a}: engine {:08x}, game {:08x}", engine.vmem()[a], after.vmem[a]))
@@ -225,7 +225,7 @@ fn cpu_runs_advent_of_code_day_1_like_the_game() {
     assert!(vcb::unverified_units(&board).is_empty());
 
     let mut engine = Engine::new(&board, Components::build(&board).unwrap(), &Default::default()).unwrap();
-    let report = engine.run_until(&StopSet { max_ticks: 50_000_000, breakpoint: true }, |_| {});
+    let report = engine.run_until(&StopSet { max_ticks: 50_000_000, breakpoint: true, ..Default::default() }, |_| {});
     assert_eq!((report.tick, report.reasons), (43_146_512, vec!["breakpoint"]));
     assert_eq!(engine.vmem()[0x100], 0x407, "count");
     assert_eq!(engine.vmem()[0x101], 0x3092, "input pointer");

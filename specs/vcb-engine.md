@@ -3,6 +3,8 @@
 ## Problem & goal
 The user has a 32-bit computer built in Virtual Circuit Board (VCB, Steam app 1885690), saved as `32-bit-alu-try.vcb`, and wants to solve this year's Advent of Code with it. The game's simulator is too slow for that. openVCB (cloned in `openVCB/`) only reads the 2022 Godot `.tres` save format, not the current one. The goal is a new, fast simulation engine that loads current `.vcb` files and runs them **tick-exactly** like the game.
 
+**Status (2026-11-16):** v1 is complete (milestones M0–M7 in `vcb-engine-v1.md`), including the final boss in a first form: the CPU runs AoC day 1 part 1 exactly like the game, with the program assembled by the game. Still Later: the assembler, v2, VInput/VDisplay, a viewer, the openVCB patch and benchmark.
+
 **Game facts:** the file format, colour→ink table, VMem layout and timing, and everything observed in the game live in [`vcb-game-facts.md`](vcb-game-facts.md) ("the facts file"). This spec is the framework: goals, scope, interface, test ladder and rollout. The detailed design of the v1 engine is in `vcb-engine-v1.md`.
 
 **Game version:** VCB **Update 1.0.1**. The colour→ink table, ink semantics, fixtures and file-format notes are taken from this version. Every fixture records the game version it was made with. A game update means re-checking every fixture before anything else changes.
