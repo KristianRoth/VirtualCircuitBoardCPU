@@ -13,7 +13,22 @@ A 32-bit CPU built in the Steam game Virtual Circuit Board (VCB), and `engine/`:
 ## State (2026-11-16)
 - Milestones M0–M7 of v1 are done. Every ink and VMem is verified against the game; Timer is "modelled".
 - The CPU runs AoC day 1 part 1 to its Breakpoint at the game's tick with identical memory: `cargo test --release -- --ignored`, about 8 s, about 5.5 million ticks per second.
-- Candidates for what comes next (the user decides): an assembler in the engine (the game's assembly language is in `manual/08-assembly.md`), so programs need not be run in the game first; the v2 engine (optimised, checked against v1 with differential tests); AoC day 1 part 2 (`AoC2025/days/day1/part2.vcbasm`); the openVCB patch and benchmark; choosing a licence for `engine/` before pushing.
+- `vcb run` also has `--verbose` (prints every change to a watched VMem word with its tick), added after M7.
+- All three repositories (this one, `AoC2025`, `AoC2026`) have GitHub remotes under `KristianRoth` and were in sync with them at the end of the session. The user pushes; never push.
+- Nothing is waiting in `saves/pending/`, and no board is waiting for observation.
+
+## Loose ends
+- **No licence** has been chosen for `engine/`, and it is already on GitHub. Raise it with the user.
+- **The root `README.md`** was extended with a short description; the CPU's instruction table is also in `AoC2025/README.md`. The user may want to rewrite it.
+- **`openVCB/` is no longer cloned here** (it disappeared from the folder during the session; not removed by Claude). The specs still describe it. If the openVCB patch or benchmark is taken up, clone it again and pin commit `4903fa8`.
+- **Leftover files the user may delete:** `32-bit-alu-try.vcb.tmp` in the root, and in `saves/` two 4 MiB `.vcbmem` files and two `.vcb.tmp` files. All are git-ignored and nothing uses them.
+- **Unobserved game behaviour** (none of it used by the CPU): a non-zero word 0 preloaded in a file, VMem pin sizes other than 1×1, a Read or Write pixel touching a tunnel, bus or mesh, Random draw order in mixed cases. See the open questions in the facts file.
+
+## What could come next (the user decides)
+- An assembler in the engine (the game's assembly language is in `manual/08-assembly.md`), so programs need not be run in the game first. The game-assembled memory in `engine/tests/boards/cpu-aoc1p1.vcb` is a ready-made test for it.
+- AoC day 1 part 2 (`AoC2025/days/day1/part2.vcbasm`), and AoC 2026 in `AoC2026/`.
+- The v2 engine: optimised, behind the same trait and CLI, checked against v1 with differential tests.
+- The openVCB patch and benchmark, and measuring the game's own speed on the Windows PC.
 
 ## Building
 `cargo` is not on the PATH and the default macOS 27 SDK breaks linking:
@@ -24,7 +39,7 @@ cd engine && cargo test
 Use `./target/release/vcb` for long runs; the debug build is far slower.
 
 ## Rules of this project
-- **The game is the ground truth.** If the engine disagrees with an observation, the engine is wrong until the user has re-observed that case. openVCB (`openVCB/`, git-ignored clone) may be read for ideas but never copied, and is not an oracle.
+- **The game is the ground truth.** If the engine disagrees with an observation, the engine is wrong until the user has re-observed that case. openVCB (GPL-3; see Loose ends for the missing clone) may be read for ideas but never copied, and is not an oracle.
 - **Never guess a game rule silently.** A rule that is not observed is marked as a model in the spec, has a question number in the facts file, and gets a board. A pattern the rules don't define is an error in the engine.
 - **A model change must keep every earlier fixture passing**, and the changed rule is edited in the v1 spec and the facts file in the same commit.
 - **Boards for the user go in `saves/pending/`**, never under `engine/`. The whole `saves/` folder is git-ignored: it is the user's scratch space for the game. After observation, what is needed is moved to `engine/tests/boards/` (fixtures) or `engine/tests/evidence/` (saves that back a fact in the facts file but no test).
