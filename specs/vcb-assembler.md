@@ -176,8 +176,8 @@ vcb asm <board.vcb>
 ## Data
 - `Board` settings get two more typed fields, read and written unchanged: `assembly` (text) and `assembly_is_external` (bool). A board without `assembly_is_external` reads as false. `src/template.json` already has both keys.
 - **Test sources are the `assembly` fields of game saves**, not copies of the user's files: part 1 from `engine/tests/boards/cpu-aoc1p1.after.vcb`, part 2 from `cpu-aoc1p2.assembled.vcb`. `AoC2025/days/day1/part1.vcbasm` and `part2.vcbasm` equal those texts except for their CRLF line ends (checked 2026-11-16; part 2 against `engine/tests/evidence/AOC1P2_asm.vcb`). These fields contain the user's puzzle input. Advent of Code asks that inputs are not shared; the user allows it in this repository (framework spec, decision log), and the input is already in the existing fixtures.
-- Probe sources live in `engine/boards/` next to their text-art boards: `asm-probe-32.vcbasm`, `asm-probe-16.vcbasm`, `asm-reject.vcbasm`, `asm-external.vcbasm`, `asm-novmem.vcbasm`.
-- `vcb gen` header keys: `assembly = <file>` puts that file's text (LF) into the board's `assembly` field; `assembly_external = on` sets `assembly_is_external` and instead writes the file next to the generated board as `<name>.vcbasm`, with CRLF line ends when `assembly_crlf = on`. The file must be in the `.txt` file's directory. `textboard::parse` only records the keys; `gen()` in `main.rs` reads the file, as it already reads the board text. Without the keys the output is byte-identical to before.
+- Probe sources live in `engine/boards/` next to their text-art boards: `asm-probe-32.vcbasm`, `asm-probe-16.vcbasm`, `asm-reject.vcbasm`, `asm-external.vcbasm` with `asm-external-field.vcbasm`, `asm-novmem.vcbasm`. All are written by `engine/tools/board-generators/asm_probes.py`, which holds the list of cases.
+- `vcb gen` header keys: `assembly = <file>` puts that file's text (LF) into the board's `assembly` field; `assembly_external = <file>` sets `assembly_is_external` and writes that file next to the generated board as `<name>.vcbasm`, with CRLF line ends when `assembly_crlf = on`. A board with either key gets the assembler checklist (procedure and one line per `# case`) in place of the LED checklist. The file must be in the `.txt` file's directory. `textboard::parse` only records the keys; `gen()` in `main.rs` reads the file, as it already reads the board text. Without the keys the output is byte-identical to before.
 
 ## Security & privacy
 The source is untrusted text. The assembler reads only the files named above and executes nothing. Its work is bounded (source size, nesting depth, no recursive macros, checked arithmetic, addresses checked before any write), and a bad source gives an error, never a crash. Outputs cannot overwrite inputs.
@@ -207,13 +207,13 @@ Not planned to be observed, so they stay errors: whether address 0 can be writte
 **Layout of a probe program**, so that one surprising answer cannot spoil the others:
 - A prelude of verified statements only (the symbols the cases share).
 - Each case is one line (several statements joined with `;` where needed), with names used by no other case.
-- Above each case, on its own line: `# case <letter>-<n>` for a question 23 case, or `# case u-<feature>` for an unverified feature.
-- Each case starts with its own `origin <literal>` into a private block of 16 words (case k at `0x1000 + 16k`) and stores a marker word first. A case about where the current address goes stores a label's value (`@ Ck; Ck`), so the address is read from the save directly, and ends with a second `origin` and a closing marker.
+- Above each case, on its own line: `# case <letter>-<what>` for a question 23 case, `# case u-<feature>` for an unverified feature, `# case v0-…` for a control the game is known to accept, `# case z-…` for a case without a letter. A case is every line up to the next `# case` line (one case, the multi-line macro, has several).
+- Each case starts with its own `origin <literal>` into a private block of 16 words (case k at `0x1000 + 16k`) and stores a marker word first (`0xA500 + k` on the probe boards, `0xB500 + k` on `asm-reject`). The few cases that are about having no `origin` yet come first and have no block. A case about where the current address goes stores a label's value (`@ Ck; Ck`), so the address is read from the save directly, and ends with a second `origin` and a closing marker.
 - This holds for `asm-reject` too, so a case the game accepts after all can still be read.
 
 **Procedure for each board:**
 1. Open the board and start the simulation.
-2. If the editor shows an error: write the case number and the message in the checklist, put `#` in front of that case's line (do not delete it, so line numbers stay), and go to 1. If the error is on a line that is not a case line, or the simulation starts despite an error message, write that down and stop; that board goes back to the engine author.
+2. If the editor shows an error: write the message next to the case's id in the checklist, put `#` in front of every line of that case (do not delete lines, so line numbers stay), and go to 1. If the error is on a line that is not a case line, or the simulation starts despite an error message, write that down and stop; that board goes back to the engine author.
 3. If the game hangs or crashes: note the case, comment it out and start again. Save As every few passes; `last_simulated.vcb` in the game's autosave folder is the fallback.
 4. When the simulation starts: return to edit mode and Save As `<name>.assembled.vcb`.
 
@@ -274,7 +274,7 @@ Each milestone ends with a local commit once all tests pass.
 | A0 | `saves/pending/cpu-aoc1p2.vcb` (two fields of the manual-start board changed); the save imported as `cpu-aoc1p2.assembled.vcb` with its checklist | one save in the game, a minute. Done 2026-11-16: the game's memory equals the engine's in words 1–65535 |
 | A1a | The typed fields; `asm.rs` with the gate; the part 1 and part 2 tests; `vcb asm`. `vcb run` unchanged | nothing (part 2's criteria wait for A0). Done 2026-11-16: part 1 and part 2 match the game in every word; part 2 runs to the Breakpoint at tick 70,339,472 with `0x100` = `0x16C7` |
 | A1b | `vcb run` assembles by default, `--asm`, `--no-asm`; documents (below) | nothing. Done 2026-11-16: `vcb run AoC2025/cpu-32bit-autorun-aoc1p1.vcb --asm AoC2025/days/day1/part2.vcbasm --ticks 500000000 --watch 0x100` prints `0x16C7` |
-| A2 | `vcb gen` keys; the five probe boards and checklists in `saves/pending/` | run five boards in the game |
+| A2 | `vcb gen` keys; the five probe boards and checklists in `saves/pending/` | run five boards in the game. Boards written 2026-11-17: 53 cases on the probe boards, 40 on `asm-reject`; waiting for the user |
 | A3 | Import: fixtures, classes moved, facts file and this spec updated | nothing |
 
 - A1a and A1b are separate commits because A1b is the only step that changes what an existing command does. `--no-asm` is the way back for any board.

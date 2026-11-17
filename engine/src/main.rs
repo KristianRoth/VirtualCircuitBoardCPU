@@ -259,19 +259,42 @@ fn asm(args: AsmArgs) -> Result<()> {
 
 fn gen(source: &Path, output: &Path, force: bool) -> Result<()> {
     let text = std::fs::read_to_string(source).map_err(|e| format!("{}: {e}", source.display()))?;
-    let tb = vcb::textboard::parse(&text).map_err(|e| format!("{}: {e}", source.display()))?;
+    let mut tb = vcb::textboard::parse(&text).map_err(|e| format!("{}: {e}", source.display()))?;
     let name = output.file_stem().and_then(|s| s.to_str()).ok_or("the output needs a file name")?;
     let (checklist_path, png_path) = (output.with_extension("checklist.md"), output.with_extension("png"));
 
+    // Assembly programs named in the header: a plain file name next to the source, read with LF line ends.
+    let program = |file: &str| -> Result<String> {
+        if Path::new(file).components().count() != 1 || file == ".." {
+            return Err(format!("{}: assembly file \"{file}\" must be a file name in the same folder", source.display()));
+        }
+        let path = source.with_file_name(file);
+        Ok(std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?.replace("\r\n", "\n"))
+    };
+    if let Some(file) = &tb.assembly_file {
+        tb.board.assembly = program(file)?;
+    }
+    let external = tb.external_file.as_deref().map(program).transpose()?;
+    tb.board.assembly_is_external = external.is_some();
+    let external_path = output.with_extension("vcbasm");
+
     let vcb_text = tb.board.to_vcb();
-    let checklist = vcb::checklist(name, &vcb_text, &tb);
+    let checklist = match (&tb.assembly_file, &external) {
+        (None, None) => vcb::checklist(name, &vcb_text, &tb),
+        _ => vcb::asm_checklist(name, &vcb_text, &tb, &[tb.board.assembly.as_str(), external.as_deref().unwrap_or("")]),
+    };
     let labels: Vec<_> = tb.probes.iter().enumerate().map(|(i, p)| (i + 1, p.x, p.y)).collect();
     let png = vcb::render::render(&tb.board, None, &labels)?.to_png();
 
     // Check everything before writing anything.
-    check_outputs(&[source], &[output, &checklist_path, &png_path])?;
+    let mut outputs: Vec<&Path> = vec![output, &checklist_path, &png_path];
+    outputs.extend(external.is_some().then_some(external_path.as_path()));
+    check_outputs(&[source], &outputs)?;
     check_overwrite(output, force)?;
     check_overwrite(&png_path, force)?;
+    if external.is_some() {
+        check_overwrite(&external_path, force)?;
+    }
     if let Ok(existing) = std::fs::read_to_string(&checklist_path) {
         if existing != checklist {
             return Err(format!("{}: already exists and differs; it may hold observations, so it is never overwritten", checklist_path.display()));
@@ -280,6 +303,10 @@ fn gen(source: &Path, output: &Path, force: bool) -> Result<()> {
     write_file(output, vcb_text.as_bytes())?;
     write_file(&checklist_path, checklist.as_bytes())?;
     write_file(&png_path, &png)?;
+    if let Some(text) = &external {
+        let text = if tb.external_crlf { text.replace('\n', "\r\n") } else { text.clone() };
+        write_file(&external_path, text.as_bytes())?;
+    }
     println!("wrote {}, {} and {}", output.display(), checklist_path.display(), png_path.display());
     Ok(())
 }

@@ -101,7 +101,7 @@ Assemble onto a clean board: words of an earlier program that the new one does n
 | `tests/boards/` | Observed fixtures: `<name>.vcb`, `<name>.observed.md` (the checklist the user filled in), `<name>.after.vcb` (the game's save after a run) |
 | `tests/evidence/` | Game saves that back a fact in the facts file but are not used by a test |
 | `tests/` | `reader.rs`, `cli.rs`, `model.rs` (engine against the spec's rules), `fixtures.rs` (engine against the game), `asm.rs` (assembler against the game's day 1 memory, and its gate) |
-| `tools/board-generators/` | Python scripts that wrote the larger `boards/*.txt` files. Run from `engine/`. |
+| `tools/board-generators/` | Python scripts that wrote the larger `boards/*.txt` files, and `asm_probes.py` for the assembler probe programs (`boards/asm-*.vcbasm`). Run from `engine/`. |
 | `tools/random-search/` | The scripts that identified the game's random generator from the recordings. Run from the repo root. |
 | `examples/diff_boards.rs` | Shows the pixels that differ between two boards |
 
