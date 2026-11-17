@@ -1,0 +1,10 @@
+covers = 23, 19
+vmem.address = 16,40,2,2,0
+vmem.content = 16,70,6,2,0
+persistent = 0,8191
+word.0x0800 = 0x0BAD
+word.0x100C = 0x0C0C
+word.0x1FFF = 0x0E0E
+assembly = asm-probe-16.vcbasm
+
+LW5RE

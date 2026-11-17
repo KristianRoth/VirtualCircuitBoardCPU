@@ -1,0 +1,4 @@
+covers = 23r
+assembly = asm-novmem.vcbasm
+
+LW5RE

@@ -7,6 +7,7 @@ A 32-bit CPU built in the Steam game Virtual Circuit Board (VCB), and `engine/`:
 - `specs/vcb-engine-v1.md`: the v1 design, the milestone table with status (Rollout), open questions, and the decision log. This is the plan being followed.
 - `specs/vcb-game-facts.md`: everything observed about the game and the `.vcb` format, and every open question about the game. New facts about the game go here, with the date and the board that showed them.
 - `specs/vcb-engine.md`: the framework spec (goals, CLI, stop rules). The v1 spec lists where it overrides this.
+- `specs/vcb-assembler.md`: the assembler's spec (written 2026-11-16, not built yet): milestones A1–A3, the verified/unverified/undefined gate, the probe boards. Its game questions are question 23 in the facts file.
 - `engine/README.md`: build, commands, layout, how to run a program on the CPU.
 - `manual/*.md`: the game's User Guide, transcribed. Git-ignored on purpose (the game's copyrighted text, public repo). Do not commit it.
 
@@ -15,7 +16,11 @@ A 32-bit CPU built in the Steam game Virtual Circuit Board (VCB), and `engine/`:
 - The CPU runs AoC day 1 part 1 to its Breakpoint at the game's tick with identical memory: `cargo test --release -- --ignored`, about 8 s, about 5.5 million ticks per second.
 - `vcb run` also has `--verbose` (prints every change to a watched VMem word with its tick), added after M7.
 - All three repositories (this one, `AoC2025`, `AoC2026`) have GitHub remotes under `KristianRoth` and were in sync with them at the end of the session. The user pushes; never push.
-- Nothing is waiting in `saves/pending/`, and no board is waiting for observation.
+- **The assembler** (`specs/vcb-assembler.md`): milestone A1a is done. `engine/src/asm.rs` and `vcb asm` exist; day 1 part 1 assembles to the game's memory in every word. `vcb run` assembles the board's program before tick 0, as the game does (A1b; `--asm <file>` picks another program, `--no-asm` turns it off).
+- A0 is done too: the game's assembled save of part 2 is a fixture (`cpu-aoc1p2.assembled.vcb`), and part 2 run by the engine ends with `count` = `0x16C7`. Both day 1 programs assemble from the user's own `.vcbasm` files.
+- **The assembler is complete (A0–A4, 2026-11-17).** The probe saves are fixtures (`engine/tests/boards/asm-*`), and the assembler's rules are what the game showed: 32-bit signed arithmetic with C's precedence, addresses 1 to `0xFFFFF`, macros expanded in place. A macro definition must be alone on its line (the game rejects a `;` there).
+- The second probe round is imported too (`asm-probe2`, `asm-crfield`, `asm-external-missing`). No assembler feature is unverified any more; question 23 has five small open cases (b, c, n, p, u).
+- Nothing is waiting in `saves/pending/`.
 
 ## Loose ends
 - **No licence** has been chosen for `engine/`, and it is already on GitHub. Raise it with the user.
@@ -24,7 +29,6 @@ A 32-bit CPU built in the Steam game Virtual Circuit Board (VCB), and `engine/`:
 - **Unobserved game behaviour** (none of it used by the CPU): a non-zero word 0 preloaded in a file, VMem pin sizes other than 1×1, a Read or Write pixel touching a tunnel, bus or mesh, Random draw order in mixed cases. See the open questions in the facts file.
 
 ## What could come next (the user decides)
-- An assembler in the engine (the game's assembly language is in `manual/08-assembly.md`), so programs need not be run in the game first. The game-assembled memory in `engine/tests/boards/cpu-aoc1p1.vcb` is a ready-made test for it.
 - AoC day 1 part 2 (`AoC2025/days/day1/part2.vcbasm`), and AoC 2026 in `AoC2026/`.
 - The v2 engine: optimised, behind the same trait and CLI, checked against v1 with differential tests.
 - Measuring the game's own speed on the Windows PC, to compare with the engine.

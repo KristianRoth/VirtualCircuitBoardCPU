@@ -1,0 +1,490 @@
+symbol one 1
+symbol two 2
+symbol four 4
+symbol six 6
+macro pair { a? | b? }
+
+# case v0-control
+origin 0x0100; 0xC000; one two
+
+# case u-macro-no-placeholder
+macro m0a { one | two }
+origin 0x0110; 0xC001; m0a
+
+# case u-macro-one-placeholder
+macro m1a { a? | one }
+origin 0x0120; 0xC002; m1a two
+
+# case u-macro-three-placeholders
+macro m3a { a? | b? | c? }
+origin 0x0130; 0xC003; m3a one two four
+
+# case u-macro-braces
+macro mb1 {a? | b?}
+origin 0x0140; 0xC004; mb1 one two
+
+# case u-remac
+macro rm1 { a? | b? }
+remac rm1 { a? | b? | four }
+origin 0x0150; 0xC005; rm1 one two
+
+# case u-unmac
+macro um1 { a? | b? }
+unmac um1
+origin 0x0160; 0xC006; 5
+
+# case z-unmac-then-macro
+macro um2 { a? | b? }
+unmac um2
+macro um2 { a? | b? | four }
+origin 0x0170; 0xC007; um2 one two
+
+# case z-unsymb-then-symbol
+symbol rr1 1; unsymb rr1; symbol rr1 2; origin 0x0180; 0xC008; rr1
+
+# case z-macro-other-operators
+macro mo1 { a? + b? * 2 }
+origin 0x0190; 0xC009; mo1 one two
+
+# case z-macro-comment-after
+macro mc1 { a? | b? } # a comment after a macro definition
+origin 0x01A0; 0xC00A; mc1 one two
+
+# case z-macro-skips-a-letter
+macro ms1 { a? | c? }
+origin 0x01B0; 0xC00B; ms1 one two
+
+# case z-macro-empty-body
+macro me1 { }
+origin 0x01C0; 0xC00C; 5
+
+# case z-macro-use-in-expression
+origin 0x01D0; 0xC00D; pair one two | four
+
+# case d-macro-twice
+macro d3 { a? | b? }
+macro d3 { a? | b? | four }
+origin 0x01E0; 0xC00E; d3 one two
+
+# case k-macro-in-macro
+macro k2 { pair | a? | b? }
+origin 0x01F0; 0xC00F; k2 one two
+
+# case k-macro-in-macro-with-arguments
+macro k3 { pair a? b? }
+origin 0x0200; 0xC010; k3 one two
+
+# case z-unsymb-of-new-name
+unsymb nn1; origin 0x0210; 0xC011; 5
+
+# case z-unpoint-of-new-name
+unpoint nn2; origin 0x0220; 0xC012; 5
+
+# case z-unmac-of-new-name
+unmac nn3
+origin 0x0230; 0xC013; 5
+
+# case z-keyword-in-instruction
+origin 0x0240; 0xC014; one inline
+
+# case p-symbol-valued-by-pointer
+pointer pp1 0x0258 7; symbol ps1 pp1; origin 0x0250; 0xC015; ps1
+
+# case p-symbol-valued-by-label
+origin 0x0260; 0xC016; @ PL1; 1; symbol ps2 PL1; ps2
+
+# case p-origin-by-symbol
+symbol po1 0x0270; origin po1; 0xC017; 5
+
+# case p-pointer-address-by-symbol
+symbol pa1 0x0288; pointer pp2 pa1 7; origin 0x0280; 0xC018; pp2
+
+# case p-pointer-value-by-symbol
+pointer pp3 0x0298 six; origin 0x0290; 0xC019; pp3
+
+# case s-label-then-inline-pointer
+origin 0x02A0; 0xC01A; @ SI1; pointer si1 inline 5; 1; SI1
+
+# case v-repoint-inline
+pointer vi1 0x02B8 7; origin 0x02B0; 0xC01B; repoint vi1 inline 9; vi1
+
+# case v-repoint-of-symbol
+symbol vs1 1; repoint vs1 0x02C8 2; origin 0x02C0; 0xC01C; vs1
+
+# case u-negative-operand-add
+origin 0x02D0; 0xC01D; -1 + 2
+
+# case u-negative-operand-or
+origin 0x02E0; 0xC01E; -1 1
+
+# case u-negative-operand-multiply
+origin 0x02F0; 0xC01F; -2 * 3
+
+# case u-negative-intermediate
+origin 0x0300; 0xC020; (1 - 2) + 5
+
+# case u-negative-shift-right
+origin 0x0310; 0xC021; -8 >> 1
+
+# case u-negative-divide
+origin 0x0320; 0xC022; -7 / 2
+
+# case u-negative-modulo
+origin 0x0330; 0xC023; -7 % 3
+
+# case u-not-of-negative
+origin 0x0340; 0xC024; ~ -1
+
+# case u-not-then-add
+origin 0x0350; 0xC025; ~ 1 + 1
+
+# case u-add-then-not
+origin 0x0360; 0xC026; 1 + ~ 1
+
+# case u-not-parenthesis
+origin 0x0370; 0xC027; ~ (1 + 1)
+
+# case u-not-not
+origin 0x0380; 0xC028; ~ ~ 5
+
+# case u-minus-name
+origin 0x0390; 0xC029; - six
+
+# case u-minus-parenthesis
+origin 0x03A0; 0xC02A; - (1 + 1)
+
+# case b-product-fits
+origin 0x03B0; 0xC02B; 0xFFFF * 0x10000
+
+# case b-product-too-wide
+origin 0x03C0; 0xC02C; 0x10000 * 0x10000
+
+# case b-below-minus-2-to-31
+origin 0x03D0; 0xC02D; 0 - 0x80000001
+
+# case b-literal-below-minus-2-to-31
+origin 0x03E0; 0xC02E; -0x80000001
+
+# case b-literal-minus-2-to-32
+origin 0x03F0; 0xC02F; -0xFFFFFFFF
+
+# case b-shift-out-the-top
+origin 0x0400; 0xC030; 0x80000000 << 1
+
+# case c-shift-right-by-31
+origin 0x0410; 0xC031; 0x80000000 >> 31
+
+# case c-shift-right-by-32
+origin 0x0420; 0xC032; 0x80000000 >> 32
+
+# case c-shift-right-by-33
+origin 0x0430; 0xC033; 0x80000000 >> 33
+
+# case c-shift-left-zero-by-32
+origin 0x0440; 0xC034; 0 << 32
+
+# case c-shift-by-negative
+origin 0x0450; 0xC035; 8 >> -1
+
+# case w-divide-chain
+origin 0x0460; 0xC036; 64 / 4 / 2
+
+# case w-modulo-chain
+origin 0x0470; 0xC037; 100 % 7 % 3
+
+# case w-shift-left-chain
+origin 0x0480; 0xC038; 1 << 2 << 1
+
+# case w-add-chain
+origin 0x0490; 0xC039; 1 + 2 + 3
+
+# case a-all-levels
+origin 0x04A0; 0xC03A; 1 | 6 ^ 7 & 12 << 1 + 2 * 3
+
+# case a-parentheses-nested
+origin 0x04B0; 0xC03B; ((1 + 2) * (3 + 4)) - 1
+
+# case n-beyond-12-address-bits
+origin 0x1800; 0xC03C; 5
+
+# case n-last-word
+origin 0xFFFFF; 0xC03D
+
+# case n-past-the-last-word
+origin 0xFFFFF; 0xEEE1; 0xEEE2
+
+# case n-origin-beyond-vmem
+origin 0x100000; 0xEEE3
+
+# case n-pointer-beyond-vmem
+pointer nb1 0x100000 7; origin 0x0500; 0xC040; 5
+
+# case n-origin-0
+origin 0; 0xAAA0; 0xAAA1
+
+# case n-pointer-at-0
+pointer nz1 0 0xAAA2; origin 0x0520; 0xC042; nz1
+
+# case a-mul-div
+origin 0x0530; 0xC043; 2 * 1 / 2
+
+# case a-div-mul
+origin 0x0540; 0xC044; 1 / 1 * 2
+
+# case a-mul-mod
+origin 0x0550; 0xC045; 2 * 1 % 2
+
+# case a-mod-mul
+origin 0x0560; 0xC046; 1 % 1 * 2
+
+# case a-mul-add
+origin 0x0570; 0xC047; 2 * 1 + 1
+
+# case a-add-mul
+origin 0x0580; 0xC048; 1 + 1 * 2
+
+# case a-mul-sub
+origin 0x0590; 0xC049; 2 * 1 - 1
+
+# case a-sub-mul
+origin 0x05A0; 0xC04A; 2 - 1 * 2
+
+# case a-shl-mul
+origin 0x05B0; 0xC04B; 1 << 1 * 3
+
+# case a-mul-shr
+origin 0x05C0; 0xC04C; 2 * 1 >> 1
+
+# case a-shr-mul
+origin 0x05D0; 0xC04D; 2 >> 1 * 2
+
+# case a-mul-and
+origin 0x05E0; 0xC04E; 2 * 1 & 1
+
+# case a-and-mul
+origin 0x05F0; 0xC04F; 1 & 1 * 2
+
+# case a-mul-xor
+origin 0x0600; 0xC050; 2 * 1 ^ 1
+
+# case a-xor-mul
+origin 0x0610; 0xC051; 1 ^ 1 * 2
+
+# case a-mul-or
+origin 0x0620; 0xC052; 2 * 1 | 1
+
+# case a-or-mul
+origin 0x0630; 0xC053; 1 | 1 * 2
+
+# case a-div-mod
+origin 0x0640; 0xC054; 1 / 3 % 2
+
+# case a-mod-div
+origin 0x0650; 0xC055; 1 % 5 / 2
+
+# case a-div-add
+origin 0x0660; 0xC056; 1 / 1 + 1
+
+# case a-add-div
+origin 0x0670; 0xC057; 1 + 1 / 3
+
+# case a-div-sub
+origin 0x0680; 0xC058; 2 / 2 - 1
+
+# case a-sub-div
+origin 0x0690; 0xC059; 1 - 1 / 2
+
+# case a-div-shl
+origin 0x06A0; 0xC05A; 1 / 1 << 1
+
+# case a-shl-div
+origin 0x06B0; 0xC05B; 1 << 1 / 3
+
+# case a-div-shr
+origin 0x06C0; 0xC05C; 1 / 2 >> 1
+
+# case a-shr-div
+origin 0x06D0; 0xC05D; 1 >> 1 / 2
+
+# case a-div-and
+origin 0x06E0; 0xC05E; 1 / 3 & 1
+
+# case a-and-div
+origin 0x06F0; 0xC05F; 1 & 2 / 2
+
+# case a-div-xor
+origin 0x0700; 0xC060; 1 / 1 ^ 2
+
+# case a-xor-div
+origin 0x0710; 0xC061; 1 ^ 1 / 2
+
+# case a-div-or
+origin 0x0720; 0xC062; 1 / 1 | 2
+
+# case a-or-div
+origin 0x0730; 0xC063; 1 | 1 / 2
+
+# case a-mod-add
+origin 0x0740; 0xC064; 1 % 1 + 2
+
+# case a-add-mod
+origin 0x0750; 0xC065; 1 + 1 % 1
+
+# case a-mod-sub
+origin 0x0760; 0xC066; 1 % 3 - 1
+
+# case a-sub-mod
+origin 0x0770; 0xC067; 1 - 1 % 1
+
+# case a-mod-shl
+origin 0x0780; 0xC068; 1 % 1 << 1
+
+# case a-shl-mod
+origin 0x0790; 0xC069; 1 << 1 % 1
+
+# case a-mod-shr
+origin 0x07A0; 0xC06A; 1 % 5 >> 1
+
+# case a-shr-mod
+origin 0x07B0; 0xC06B; 1 >> 1 % 1
+
+# case a-mod-and
+origin 0x07C0; 0xC06C; 1 % 2 & 2
+
+# case a-and-mod
+origin 0x07D0; 0xC06D; 1 & 3 % 3
+
+# case a-mod-xor
+origin 0x07E0; 0xC06E; 1 % 1 ^ 2
+
+# case a-xor-mod
+origin 0x07F0; 0xC06F; 1 ^ 1 % 1
+
+# case a-mod-or
+origin 0x0800; 0xC070; 1 % 1 | 1
+
+# case a-or-mod
+origin 0x0810; 0xC071; 1 | 1 % 1
+
+# case a-sub-add
+origin 0x0820; 0xC072; 2 - 1 + 1
+
+# case a-add-shl
+origin 0x0830; 0xC073; 1 + 1 << 1
+
+# case a-shl-add
+origin 0x0840; 0xC074; 1 << 1 + 1
+
+# case a-add-shr
+origin 0x0850; 0xC075; 1 + 1 >> 2
+
+# case a-shr-add
+origin 0x0860; 0xC076; 1 >> 1 + 1
+
+# case a-add-and
+origin 0x0870; 0xC077; 1 + 1 & 1
+
+# case a-and-add
+origin 0x0880; 0xC078; 1 & 1 + 1
+
+# case a-add-xor
+origin 0x0890; 0xC079; 1 + 1 ^ 1
+
+# case a-xor-add
+origin 0x08A0; 0xC07A; 1 ^ 1 + 1
+
+# case a-add-or
+origin 0x08B0; 0xC07B; 1 + 1 | 1
+
+# case a-or-add
+origin 0x08C0; 0xC07C; 1 | 1 + 1
+
+# case a-sub-shl
+origin 0x08D0; 0xC07D; 2 - 1 << 1
+
+# case a-shl-sub
+origin 0x08E0; 0xC07E; 1 << 2 - 1
+
+# case a-sub-shr
+origin 0x08F0; 0xC07F; 1 - 1 >> 1
+
+# case a-shr-sub
+origin 0x0900; 0xC080; 2 >> 1 - 1
+
+# case a-sub-and
+origin 0x0910; 0xC081; 1 - 1 & 2
+
+# case a-and-sub
+origin 0x0920; 0xC082; 2 & 2 - 1
+
+# case a-sub-xor
+origin 0x0930; 0xC083; 2 - 1 ^ 1
+
+# case a-xor-sub
+origin 0x0940; 0xC084; 1 ^ 2 - 1
+
+# case a-sub-or
+origin 0x0950; 0xC085; 1 - 1 | 1
+
+# case a-or-sub
+origin 0x0960; 0xC086; 1 | 1 - 1
+
+# case a-shl-shr
+origin 0x0970; 0xC087; 1 << 1 >> 2
+
+# case a-shr-shl
+origin 0x0980; 0xC088; 2 >> 1 << 1
+
+# case a-shl-and
+origin 0x0990; 0xC089; 1 << 1 & 1
+
+# case a-and-shl
+origin 0x09A0; 0xC08A; 1 & 1 << 1
+
+# case a-shl-xor
+origin 0x09B0; 0xC08B; 1 << 1 ^ 1
+
+# case a-xor-shl
+origin 0x09C0; 0xC08C; 1 ^ 1 << 1
+
+# case a-shl-or
+origin 0x09D0; 0xC08D; 1 << 1 | 1
+
+# case a-or-shl
+origin 0x09E0; 0xC08E; 1 | 1 << 1
+
+# case a-shr-and
+origin 0x09F0; 0xC08F; 1 >> 1 & 2
+
+# case a-and-shr
+origin 0x0A00; 0xC090; 1 & 2 >> 1
+
+# case a-shr-xor
+origin 0x0A10; 0xC091; 1 >> 1 ^ 2
+
+# case a-xor-shr
+origin 0x0A20; 0xC092; 1 ^ 1 >> 1
+
+# case a-shr-or
+origin 0x0A30; 0xC093; 1 >> 1 | 1
+
+# case a-or-shr
+origin 0x0A40; 0xC094; 1 | 1 >> 1
+
+# case a-and-xor
+origin 0x0A50; 0xC095; 1 & 1 ^ 2
+
+# case a-xor-and
+origin 0x0A60; 0xC096; 1 ^ 1 & 2
+
+# case a-and-or
+origin 0x0A70; 0xC097; 1 & 1 | 2
+
+# case a-or-and
+origin 0x0A80; 0xC098; 1 | 1 & 2
+
+# case a-xor-or
+origin 0x0A90; 0xC099; 1 ^ 1 | 1
+
+# case a-or-xor
+origin 0x0AA0; 0xC09A; 1 | 1 ^ 1
