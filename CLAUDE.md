@@ -18,7 +18,8 @@ A 32-bit CPU built in the Steam game Virtual Circuit Board (VCB), and `engine/`:
 - All three repositories (this one, `AoC2025`, `AoC2026`) have GitHub remotes under `KristianRoth` and were in sync with them at the end of the session. The user pushes; never push.
 - **The assembler** (`specs/vcb-assembler.md`): milestone A1a is done. `engine/src/asm.rs` and `vcb asm` exist; day 1 part 1 assembles to the game's memory in every word. `vcb run` assembles the board's program before tick 0, as the game does (A1b; `--asm <file>` picks another program, `--no-asm` turns it off).
 - A0 is done too: the game's assembled save of part 2 is a fixture (`cpu-aoc1p2.assembled.vcb`), and part 2 run by the engine ends with `count` = `0x16C7`. Both day 1 programs assemble from the user's own `.vcbasm` files.
-- **Waiting for the user in `saves/pending/` (assembler A2, written 2026-11-17):** `asm-probe-32`, `asm-probe-16`, `asm-reject`, `asm-external` (with `asm-external.vcbasm` beside it), `asm-novmem`, each with a `.checklist.md` that holds the procedure. The user saves each as `<name>.assembled.vcb`. Import (A3) is described in the assembler spec: files go to `engine/tests/boards/` as `<name>.vcb`, `<name>.assembled.vcb`, `<name>.asm-observed.md`; then features move into `VERIFIED` in `src/asm.rs` and question 23 is updated.
+- **The assembler is complete (A0–A3, 2026-11-17).** The probe saves are fixtures (`engine/tests/boards/asm-*`), and the assembler's rules are what the game showed. Still unverified (need `--allow-unverified`): macros without exactly two placeholders, macro braces without spaces, `remac`, `unmac`. Still open: the remaining letters of question 23. A macro definition must be alone on its line (the game rejects a `;` there).
+- Nothing is waiting in `saves/pending/`.
 
 ## Loose ends
 - **No licence** has been chosen for `engine/`, and it is already on GitHub. Raise it with the user.
@@ -27,7 +28,7 @@ A 32-bit CPU built in the Steam game Virtual Circuit Board (VCB), and `engine/`:
 - **Unobserved game behaviour** (none of it used by the CPU): a non-zero word 0 preloaded in a file, VMem pin sizes other than 1×1, a Read or Write pixel touching a tunnel, bus or mesh, Random draw order in mixed cases. See the open questions in the facts file.
 
 ## What could come next (the user decides)
-- The assembler's next milestone: A3 (import the five probe saves once the user has run them).
+- A second small probe board for the four unverified macro features (each definition on its own line), if a program needs them.
 - AoC day 1 part 2 (`AoC2025/days/day1/part2.vcbasm`), and AoC 2026 in `AoC2026/`.
 - The v2 engine: optimised, behind the same trait and CLI, checked against v1 with differential tests.
 - Measuring the game's own speed on the Windows PC, to compare with the engine.

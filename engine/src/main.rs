@@ -176,18 +176,14 @@ fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
     std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, path)).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-const EXTERNAL_SOURCE: &str = "External Editing source";
-
 /// The program a board is assembled from: (text, name for messages, the file it came from).
 /// `None` when there is nothing to assemble. A file's CRLF line ends are read as LF: the file stands for the
 /// text as the game's Assembly Editor holds it.
-fn read_source(board_path: &Path, board: &Board, asm: Option<&Path>, allow_unverified: bool) -> Result<Option<(String, String, Option<PathBuf>)>> {
+fn read_source(board_path: &Path, board: &Board, asm: Option<&Path>) -> Result<Option<(String, String)>> {
     let file = match asm {
         Some(file) => Some(file.to_path_buf()),
+        // External Editing: the game assembles this file and not the board's own text (observed, asm-external).
         None if board.assembly_is_external => {
-            if !allow_unverified {
-                return Err(format!("{}: '{EXTERNAL_SOURCE}' is not verified against the game; pass --allow-unverified, or --asm <file>", board_path.display()));
-            }
             let file = board_path.with_extension("vcbasm");
             if !file.exists() {
                 return Err(format!("{}: External Editing is on and this file is missing: the game's result is not known (facts question 23r)", file.display()));
@@ -204,7 +200,7 @@ fn read_source(board_path: &Path, board: &Board, asm: Option<&Path>, allow_unver
         }
         None => (board.assembly.clone(), format!("{}:assembly", board_path.display())),
     };
-    Ok((!text.trim().is_empty()).then_some((text, name, file)))
+    Ok((!text.trim().is_empty()).then_some((text, name)))
 }
 
 fn vmem_dump(vmem: &[u32]) -> String {
@@ -217,7 +213,7 @@ fn vmem_dump(vmem: &[u32]) -> String {
 
 fn asm(args: AsmArgs) -> Result<()> {
     let mut board = Board::read(&args.board)?;
-    let source = read_source(&args.board, &board, args.asm.as_deref(), args.allow_unverified)?;
+    let source = read_source(&args.board, &board, args.asm.as_deref())?;
 
     // Check every output against every file this command reads, before anything is written.
     let listing_file = args.listing.as_deref().filter(|p| *p != Path::new("-"));
@@ -231,11 +227,8 @@ fn asm(args: AsmArgs) -> Result<()> {
     }
 
     let mut report = vcb::asm::Report::default();
-    if let Some((text, name, file)) = &source {
+    if let Some((text, name)) = &source {
         report = vcb::asm::assemble(text, name, &mut board, args.allow_unverified)?;
-        if file.is_some() && args.asm.is_none() {
-            report.unverified.push(EXTERNAL_SOURCE);
-        }
         for feature in &report.unverified {
             eprintln!("warning: asm {feature} is not verified against the game");
         }
@@ -414,16 +407,13 @@ fn run(mut args: RunArgs) -> Result<()> {
         if board.assembly_is_external || !board.assembly.trim().is_empty() {
             println!("assembly text not assembled: VMem is disabled");
         }
-    } else if let Some((text, name, file)) = read_source(&args.board, &board, args.asm.as_deref(), args.allow_unverified)? {
+    } else if let Some((text, name)) = read_source(&args.board, &board, args.asm.as_deref())? {
         let report = vcb::asm::assemble(&text, &name, &mut board, args.allow_unverified)?;
-        unverified_asm = report.unverified.clone();
-        if file.is_some() && args.asm.is_none() {
-            unverified_asm.push(EXTERNAL_SOURCE);
-        }
-        for feature in &unverified_asm {
+        for feature in &report.unverified {
             eprintln!("warning: asm {feature} is not verified against the game");
         }
-        println!("{}", vcb::asm::Report { unverified: unverified_asm.clone(), ..report }.summary(&name));
+        println!("{}", report.summary(&name));
+        unverified_asm = report.unverified;
     }
 
     // The gate: refuse inks nobody has observed in the game yet.
