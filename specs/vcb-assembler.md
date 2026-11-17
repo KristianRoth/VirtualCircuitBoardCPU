@@ -89,59 +89,54 @@ Two limits of this evidence, stated so they are not forgotten:
 - **Pointer values.** Three words of `cpu-aoc1p1.vcb` were set back by hand after the run (`0x100`, `0x101`, `0xE000`), and two of them are the words the `pointer` statements store. For part 1 they are inferred from the tick-exact run. The part 2 save shows them directly: `0x100` = 0 and `0x101` = `0x1000`.
 
 ### Shown by the probe boards (2026-11-17)
-Fixtures `asm-probe-32`, `asm-probe-16`, `asm-reject`, `asm-external`, `asm-novmem` in `engine/tests/boards/`. The two probe boards gave identical memory.
+Fixtures in `engine/tests/boards/`: first round `asm-probe-32`, `asm-probe-16` (identical memory), `asm-reject`, `asm-external`, `asm-novmem`; second round `asm-probe2`, `asm-crfield`, `asm-external-missing`. Each has the board, the game's save where the simulation started, and the checklist with the game's error messages.
 
 Accepted, with these results:
-- The first instruction goes to address 1.
-- A comment after a statement; a `;` inside a comment is part of the comment.
+- **Values are 32 bits wide on every board** (`0x12345` and `-1` are stored whole on the 16-bit board), and **any address from 1 to `0xFFFFF` can be stored to** whatever the address bits are (a word at `0x1800` on a 12-address-bit board).
+- The first instruction goes to address 1. Preloaded words the program does not write are kept.
+- A comment after a statement, also after a macro definition; a `;` inside a comment is part of the comment.
 - Underscores in decimal and hex literals; lower-case hex digits; a leading `+`.
-- **Values are 32 bits wide on every board.** `0x12345` and `-1` are stored whole on the 16-bit board. A negative literal or result is stored in two's complement (`-1` and `1 - 2` give `0xFFFFFFFF`).
-- OR of values that share bits is a plain OR (`3 6` and `3 | 6` give 7); three primitives in one instruction.
-- `resymb`, `unsymb`, `unpoint`, `pointer … inline`, `bookmark`, `sub_bookmark`.
-- A symbol's value may be the name of another symbol.
-- `repoint <name> <address> <value>`: stores the value at the new address and moves the name there; the old word stays.
-- A pointer with an address does not move the current address.
-- `origin orgprev` goes back to where the assembler was when it met the last `origin` (also when words were stored since); `origin orgbase` to where it was before the first one.
-- All operators directly in an instruction: `+ - * / % & | ^ << >> ~` and parentheses. `/` truncates (`7 / 2` = 3). `~ 1` = `0xFFFFFFFE`.
-- Precedence without parentheses for three pairs: `<<` before `|`, and `*` before `+` and before `-`. Chains of `>>` and of `-` run left to right.
+- An instruction of several primitives is their OR, also when bits overlap.
+- **Arithmetic is signed.** `-1 + 2` = 1, `-2 * 3` = -6, `-7 / 2` = -3 (truncation), `-7 % 3` = -1, `-8 >> 1` = -4, `~ 1` = -2. `~` and a minus sign work in front of a literal, a name or a parenthesis and bind tighter than any binary operator. A result must lie between -2^31 and 2^32-1; a negative one is stored in two's complement.
+- **Precedence is C's** (`* / %`, then `+ -`, `<< >>`, `&`, `^`, `|`), shown for every pair of operators in both orders, and chains of one level run left to right.
+- `>>` by 32 or 33 gives 0; `0 << 32` gives 0.
+- `symbol`, `resymb`, `unsymb` (and defining the name again afterwards). A symbol's value may be a literal or the name of a symbol, a pointer, or a label defined above it.
+- `pointer <name> <address> <value>` and `pointer <name> inline <value>`; the value may be a symbol. A pointer with an address does not move the current address. `unpoint`.
+- `repoint <name> <address>|inline <value>`: stores the value at the new address and moves the name there; the old word stays.
+- `origin orgprev` goes back to where the assembler was when it met the last `origin`; `origin orgbase` to where it was before the first one.
 - Two statements storing to one address: the later one wins.
-- A label names the next instruction, also across an `origin` and a pointer with an address.
-- A macro argument may be a literal.
+- A label names the next instruction, also across `origin` and pointers (with an address or inline).
+- **Macros:** any number of placeholders (none, one, three), braces with or without spaces, other operators in the body, literal arguments, `remac`, `unmac` (and `macro` again afterwards), an empty body in a definition. A macro name takes the tokens after it as its arguments and is replaced by its body wherever it stands in an instruction (`pair one two | four` = 7).
+- `bookmark`, `sub_bookmark`.
 - External Editing: the game assembles `<board>.vcbasm`, not the board's own text, and reads CRLF line ends.
 - A board with VMem disabled and assembly text starts normally.
-- Preloaded words the program does not write are kept (question 19, now fully answered).
 
 Rejected by the game (the engine refuses them too):
-- **A `;` on the line of a macro definition** ("Unexpected statement terminator (;) in a line with a macro definition"). A macro use may be followed by `;`.
+- **A `;` on the line of a macro definition.** A macro use may be followed by `;`.
+- A carriage return in the Assembly Editor text. External Editing with the `.vcbasm` file missing.
+- A value outside -2^31 to 2^32-1: a literal, or the result of `+`, `-`, `*` or `<<`. A shift by a negative count. Division or modulo by zero.
+- An address that is 0, beyond `0xFFFFF`, or not a literal (`origin` and the pointer address take no names).
 - `orgprev` or `orgbase` with no `origin` to revert.
-- A value wider than 32 bits: a literal, the result of `+`, or of `<<` (`1 << 32`, `1 << 1000`).
-- Division or modulo by zero.
-- A name defined twice or used for two kinds (symbol, pointer, label); a keyword as a name; a name with other characters or starting with a digit.
-- A name that is not defined at the point of use: never defined, defined later, or removed with `unsymb`/`unpoint`.
-- A macro used with the wrong number of arguments, with an expression as an argument, or not as the whole statement.
-- A macro body over several lines.
+- A name defined twice (also a macro) or used for two kinds; a keyword as a name or inside an instruction; a name with other characters or starting with a digit.
+- A name that is not defined at the point of use: never defined, defined later, or removed. Labels are the exception.
+- `unsymb`, `unpoint`, `unmac` of a name that is not defined; `resymb` of a name that is not a symbol; `repoint` of a name that is not a pointer.
+- A macro with the wrong number of arguments; a macro name inside a macro body; placeholders that skip a letter; a macro body over several lines.
 - A symbol value that is an expression; an operator without spaces; primitives beside an expression (`1 2 | 4`); an unclosed parenthesis.
 - A label and an instruction in one statement; a label with no instruction after it.
-- `0X` as a prefix. A keyword in another letter case is not a keyword (`Symbol q 1` is an instruction of undefined names).
-- `resymb` of a name that is not a symbol.
+- `0X` as a prefix. A keyword in another letter case is not a keyword.
 
 ### Still unverified
-The probe cases for these were lost to the `;` rule above, so only the manual backs them. Each is a gate hit without `--allow-unverified`.
-
-| Feature | Trigger |
-|---|---|
-| Macro without exactly two placeholders (none, one, or three and more) | such a macro |
-| Macro braces without spaces (`{a? \| b?}`, as in the manual's example) | a brace touching the body |
-| `remac` | the keyword |
-| `unmac` | the keyword |
+Nothing. Every feature the manual states has been shown by a save, so `--allow-unverified` changes nothing for the assembler today. The gate stays in the code for the next game update.
 
 ### Still undefined
-Question 23 in the facts file, the letters that remain: a (operator pairs other than the three shown), b (a product wider than 32 bits; a negative value below -2^31), c (`>>` by 32 or more), d (a macro defined twice), k (a macro inside a macro), n (address 0 or beyond the address bits: the game accepted `origin 0x10000`, but where the word went was outside the saved range), p (a symbol valued by a pointer or label; a non-literal `origin` or pointer argument), r (a carriage return in the board's own text; External Editing with the file missing), s (a label followed by an inline pointer), u (a negative value as an operand; `~` inside a larger expression), v (`repoint` with `inline`), w (chains of `/`, `%` or `<<`). Anything the parser has no rule for is undefined too (`no observed rule`).
+What is left of question 23, each a gate hit naming its letter:
+- b: a value outside the 32-bit range in the middle of an expression (the game rejects it as a final result).
+- c: a shift by 64 or more.
+- n: a word stored past the last VMem word (the game accepted `origin 0xFFFFF` followed by two words; where the second went is not visible).
+- p: a symbol valued by a label defined below it; a pointer valued by a pointer or a label.
+- u: two signs in a row. `~ ~ 5` gave -5 in the game, which no reading explains.
 
-**Second round (boards written 2026-11-17, waiting for the user).** Three more boards cover everything above, with the same procedure:
-- `asm-probe2`: 155 cases. The macro features with each definition on its own line; a macro defined twice and inside a macro; every pair of operators from different precedence levels in both orders, and the pairs within a level; negative operands, `~` and a minus sign inside expressions; the 32-bit limits; chains of `/`, `%`, `<<`; non-literal directive arguments; `repoint` variants; a label before an inline pointer; addresses beyond the address bits, at the end of VMem and at 0. The board has 12 address bits and Persistent Memory over all of VMem.
-- `asm-crfield`: the Assembly Editor text itself with CRLF line ends (`vcb gen` key `assembly_field_crlf = on`).
-- `asm-external-missing`: External Editing on and no `.vcbasm` file.
+Also without an observed rule: `remac` of a name that is not a macro, and the use of a macro with an empty body.
 
 ## Behavior
 ### Which source
@@ -153,14 +148,14 @@ In this order:
 
 - A source that is empty or only whitespace assembles nothing, prints nothing and is not an error.
 - `--asm` together with `--no-asm` on the command line is an error. From the TOML config the keys are `asm` and `no-asm`; a command-line flag overrides the config, so `--no-asm` cancels a config `asm` and the reverse. Paths in the config are relative to the working directory, as `dump-vmem` is.
-- **Line ends in files.** A file source (`--asm` or `<board>.vcbasm`) stands for the text as the Assembly Editor would hold it, so `\r\n` is read as `\n`. This is the engine's rule for its own input (the user's `.vcbasm` files are CRLF; the editor field the game assembled from is LF). The game reads a CRLF external file the same way (observed on `asm-external`). A `\r` in a board's `assembly` field, or a lone `\r` in a file, is undefined (23r).
+- **Line ends in files.** A file source (`--asm` or `<board>.vcbasm`) stands for the text as the Assembly Editor would hold it, so `\r\n` is read as `\n`. This is the engine's rule for its own input (the user's `.vcbasm` files are CRLF; the editor field the game assembled from is LF). The game reads a CRLF external file the same way (observed on `asm-external`). A `\r` in a board's `assembly` field, or a lone `\r` in a file, is rejected, as the game rejects it in the editor text (`asm-crfield`).
 
 ### Assembling
 1. Check the source: valid UTF-8, at most 16 MiB, no control characters other than tab and newline.
 2. Remove each comment (from `#` to the end of its line). Then split into statements at newlines and `;`. Keep each statement's line and column in the original text. A line with a macro definition may not contain a `;`.
-3. Preprocess: handle `macro`/`remac`/`unmac` in source order, and replace each macro use with its body, placeholders filled in. A macro name inside a macro body is undefined (23k).
-4. First pass, in source order: apply directives; give every instruction and pointer its address; give each pending label the address of the next instruction, also across `origin` and pointers with an address. A label followed by an inline pointer is undefined (23s); a label with no instruction after it is rejected.
-5. Second pass, in source order: evaluate every instruction with the symbols and pointers as defined at that point, and the labels of the whole program. Precedence is C's, accepted only for the operator pairs the game showed. All arithmetic is checked: overflow, a bad shift or a zero divisor is a gate hit or a rejection, never a panic. Parentheses nest at most 64 deep.
+3. Preprocess: handle `macro`/`remac`/`unmac` in source order. In an instruction, a macro name takes the tokens after it as its arguments and is replaced by its body, placeholders filled in. A macro name inside a macro body is rejected.
+4. First pass, in source order: apply directives; give every instruction and pointer its address; give each pending label the address of the next instruction, also across `origin` and pointers. A label with no instruction after it is rejected.
+5. Second pass, in source order: evaluate every instruction with the symbols and pointers as defined at that point, and the labels of the whole program. Arithmetic is signed with C's precedence. It is checked: a value outside the 32-bit range, a bad shift or a zero divisor is a rejection or a gate hit, never a panic. Parentheses nest at most 64 deep.
 6. Write each value as a 32-bit word (a negative result in two's complement). When two statements store to one address the later one wins. Other words are left as they are. Word 0 is never written.
 
 ### Errors and gate hits
@@ -198,10 +193,10 @@ vcb asm <board.vcb>
 
 ## Edge cases
 - **VMem disabled** (`is_vmem_enabled` false) with a non-empty board source: there is no memory to assemble into, so nothing is assembled and one line says so (`assembly text not assembled: VMem is disabled`). The game starts such a board normally (observed on `asm-novmem`). Two evidence boards are like this (`engine/tests/evidence/AOC1P2_asm.vcb`, `timer-and-random.vcb`). An explicit `--asm` on such a board is an error.
-- **External Editing with no `.vcbasm` file:** undefined (23r), the message names the path.
+- **External Editing with no `.vcbasm` file:** rejected, as in the game ("External assembly file not found"); the message names the path.
 - **`cpu-32bit-manual-start.vcb`** carries an older program in its `assembly` field. `vcb run` on it now assembles that text, as the game would. No existing test runs it through the command line.
 - **A program that stores nothing** (directives only): succeeds, `assembled 0 words`.
-- **Address 0, or an address beyond the address bits:** undefined (23n). Checked before any write. The game accepts `origin 0x10000` on a 16-bit-address board; where it stores the word is not observed.
+- **Addresses:** 1 to `0xFFFFF` whatever the address bits; address 0 and anything beyond are rejected, as in the game. Checked before any write.
 - **The Persistent Memory region** has no effect on assembling.
 
 ## Data
@@ -261,7 +256,6 @@ A1, the day 1 programs:
 - [ ] `cargo test` and `cargo test --release -- --ignored` pass with no edit to an existing test or to `engine/tests/expected/*`. `vcb run` on `cpu-aoc1p1.vcb` (empty `assembly`) prints no `assembled` line.
 
 A1, the gate:
-- [ ] For each row of "Still unverified": a snippet that is a gate hit without `--allow-unverified` with the feature's name in the message, and with the flag stores the manual's word and reports the feature once. (Before A3 this covered every manual-only feature; the probe fixtures now test those against the game.)
 - [ ] Every form listed under "Rejected by the game" has a snippet that is refused with `the game rejects this`, with and without the flag.
 - [ ] Every letter still open in question 23 has a snippet that is a gate hit with its letter in the message, with and without the flag.
 - [ ] `1 ? 2`, `symbol`, `macro m {`, `@`, `pointer p`, `(1`, `1 |`, `0b102`, `1 2 | 3`: an error or a gate hit; none assembles.
@@ -270,7 +264,7 @@ A1, the gate:
 
 A1, sources, outputs and safety:
 - [ ] One command-line test per source rule: `--asm` wins over the field; the field is used otherwise; `--no-asm` assembles nothing; `--asm` with `--no-asm` fails; config `asm` is cancelled by `--no-asm`; config `no-asm` is overridden by `--asm`.
-- [ ] A file source with CRLF assembles to the same memory as its LF form. A `\r` in a board's `assembly` field is a 23r gate hit. A stored word is not cut to the content bits.
+- [ ] A file source with CRLF assembles to the same memory as its LF form. A `\r` in a board's `assembly` field is rejected. A stored word is not cut to the content bits.
 - [ ] Source `""` and `" \n\t\n"`: exit 0, no `assembled` line, memory unchanged. Source `symbol a 1`: exit 0, `assembled 0 words from <source>`.
 - [ ] A source with the byte `0xFF`: non-zero exit, the message names the file and UTF-8. A source over 16 MiB, and one with 65 nested parentheses: an error, no crash.
 - [ ] A board with VMem disabled and assembly text runs, prints the `not assembled` line, and gives the same result as with `--no-asm`. With `--asm` it fails.
@@ -297,6 +291,7 @@ Each milestone ends with a local commit once all tests pass.
 | A1a | The typed fields; `asm.rs` with the gate; the part 1 and part 2 tests; `vcb asm`. `vcb run` unchanged | nothing (part 2's criteria wait for A0). Done 2026-11-16: part 1 and part 2 match the game in every word; part 2 runs to the Breakpoint at tick 70,339,472 with `0x100` = `0x16C7` |
 | A1b | `vcb run` assembles by default, `--asm`, `--no-asm`; documents (below) | nothing. Done 2026-11-16: `vcb run AoC2025/cpu-32bit-autorun-aoc1p1.vcb --asm AoC2025/days/day1/part2.vcbasm --ticks 500000000 --watch 0x100` prints `0x16C7` |
 | A2 | `vcb gen` keys; the five probe boards and checklists in `saves/pending/` | run five boards in the game. Boards written 2026-11-17: 53 cases on the probe boards, 40 on `asm-reject`; waiting for the user |
+| A4 | Second round: `asm-probe2` (155 cases: macros with each definition on its own line, every operator pair, negative values, the 32-bit limits, addresses), `asm-crfield`, `asm-external-missing` | run three boards. Done 2026-11-17: the engine matches the game's memory on `asm-probe2` except for three words of the two cases still open, and refuses the 19 cases the user commented out |
 | A3 | Import: fixtures, classes moved, facts file and this spec updated | nothing. Done 2026-11-17: the engine matches the game's memory on both probe boards and on `asm-reject`, and refuses each of the 50 cases the user had to comment out |
 
 - A1a and A1b are separate commits because A1b is the only step that changes what an existing command does. `--no-asm` is the way back for any board.
@@ -330,4 +325,5 @@ All are about the game and are question 23 in the facts file; owner the user (th
 - Review, flag → one shared `--allow-unverified` for inks and assembler; warnings say which.
 - Review, engine error reporting → stop at the first real error, but list every gate hit in one run.
 - A3 (2026-11-17) → the assembler's rules were rewritten to what the probe saves showed: 32-bit values on every board, the observed precedence pairs, later write wins, labels across `origin` and pointers, `repoint`, the game's rejections. Four macro features stay unverified because a macro definition may not share a line with `;`.
+- Second round (2026-11-17, the user asked to confirm everything at once) → no feature is unverified any more; precedence and signed arithmetic are the game's; a handful of corner cases stay undefined.
 - Review, clear fixes → applied: verified defined by shape; the keep-memory rule verified; own suffixes for assembler fixtures; External Editing unverified with its own board; probe layout; write safety over all inputs; parser bounds; VMem-disabled boards run; concrete criteria.

@@ -219,18 +219,11 @@ Questions 11–21 come from the v1 design (`vcb-engine-v1.md` lists the interim 
 20. **Shared Read/Write pixel:** one Read pixel touching two components feeds both (answered 2026-11-15). A shared Write pixel also connects both (observed on `general`).
 21. **Content width under 32 bits:** answered 2026-11-16: a write sets the bits above the content width to 0.
 22. **Random draw order:** two cases observed and matched by the engine: Randoms along one trace draw in the order a walk from the trace's first pixel reaches them, and Randoms on separate traces that turn on in the same tick draw in board order (left to right on `random-pulse`). The general rule for mixed cases is not known.
-23. **The assembler.** Mostly answered 2026-11-17 by the probe boards `asm-probe-32`, `asm-probe-16`, `asm-reject`, `asm-external` and `asm-novmem` (boards, the game's saves and the filled checklists with the game's error messages are in `engine/tests/boards/`). What the game accepts, with results, and what it rejects is listed in `vcb-assembler.md` ("Shown by the probe boards"). The headline facts: values are 32 bits wide whatever the content bits; a macro definition may not share a line with `;`; a name must be defined before it is used (labels excepted); External Editing assembles `<board>.vcbasm` and reads CRLF; a board with VMem disabled and assembly text starts normally. Still open (each is an error in the engine's assembler until observed):
-    - a. Operator pairs without parentheses other than the three shown (`<<` before `|`, `*` before `+` and `-`).
-    - b. A product wider than 32 bits; a negative value below -2^31.
-    - c. `>>` by 32 or more.
-    - d. A macro defined twice.
-    - k. A macro inside a macro.
-    - n. Address 0 (not planned: Persistent Memory does not save word 0). An address beyond the address bits: the game accepted `origin 0x10000` on a 16-address-bit board, but the word was outside the saved range.
-    - p. A symbol valued by a pointer or a label; a non-literal argument of `origin` or `pointer`.
-    - r. A carriage return in the `assembly` field; External Editing on with no `.vcbasm` file (not planned).
-    - s. A label followed by an inline pointer.
-    - u. A negative value as an operand; `~` inside a larger expression.
-    - v. `repoint` with `inline`, or of a name that is not a pointer.
-    - w. Chains of `/`, `%` or `<<` without parentheses.
+23. **The assembler.** Answered 2026-11-17 by eight probe boards (`asm-probe-32`, `asm-probe-16`, `asm-reject`, `asm-external`, `asm-novmem`, then `asm-probe2`, `asm-crfield`, `asm-external-missing`; boards, the game's saves and the filled checklists with the game's error messages are in `engine/tests/boards/`). What the game accepts, with results, and what it rejects is listed in `vcb-assembler.md` ("Shown by the probe boards"). The headline facts: values are 32 bits wide and addresses run from 1 to `0xFFFFF`, whatever the board's content and address bits; arithmetic is signed with C's operator precedence, and a result must lie between -2^31 and 2^32-1; a macro definition may not share a line with `;`; a name must be defined before it is used (labels excepted); External Editing assembles `<board>.vcbasm` and reads CRLF, and the game rejects a carriage return in the editor text. Still open (each is an error in the engine's assembler):
+    - b. A value outside the 32-bit range in the middle of an expression.
+    - c. A shift by 64 or more.
+    - n. A word stored past the last VMem word: the game accepted `origin 0xFFFFF` followed by two words; where the second went is not visible in the save.
+    - p. A symbol valued by a label defined below it; a pointer valued by a pointer or a label.
+    - u. Two signs in a row: `~ ~ 5` was stored as -5 (`0xFFFFFFFB`), which no reading explains.
     
-    Also unobserved, though the manual states them: a macro with none, one, or three and more placeholders; macro braces without spaces; `remac`; `unmac`. Their probe cases put the definition and its use on one line and fell to the `;` rule.
+    Also not observed: `remac` of a name that is not a macro; the use of a macro whose body is empty.
