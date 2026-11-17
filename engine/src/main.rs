@@ -267,6 +267,10 @@ fn gen(source: &Path, output: &Path, force: bool) -> Result<()> {
     if let Some(file) = &tb.assembly_file {
         tb.board.assembly = program(file)?;
     }
+    let field_text = tb.board.assembly.clone();
+    if tb.field_crlf {
+        tb.board.assembly = field_text.replace('\n', "\r\n");
+    }
     let external = tb.external_file.as_deref().map(program).transpose()?;
     tb.board.assembly_is_external = external.is_some();
     let external_path = output.with_extension("vcbasm");
@@ -274,7 +278,7 @@ fn gen(source: &Path, output: &Path, force: bool) -> Result<()> {
     let vcb_text = tb.board.to_vcb();
     let checklist = match (&tb.assembly_file, &external) {
         (None, None) => vcb::checklist(name, &vcb_text, &tb),
-        _ => vcb::asm_checklist(name, &vcb_text, &tb, &[tb.board.assembly.as_str(), external.as_deref().unwrap_or("")]),
+        _ => vcb::asm_checklist(name, &vcb_text, &tb, &[field_text.as_str(), external.as_deref().unwrap_or("")]),
     };
     let labels: Vec<_> = tb.probes.iter().enumerate().map(|(i, p)| (i + 1, p.x, p.y)).collect();
     let png = vcb::render::render(&tb.board, None, &labels)?.to_png();

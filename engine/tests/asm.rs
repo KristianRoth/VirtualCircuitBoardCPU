@@ -564,7 +564,7 @@ fn vcb_gen_puts_assembly_text_on_a_board() {
 #[test]
 fn probe_programs_are_well_formed() {
     let read = |name: &str| std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("boards").join(name)).unwrap();
-    for name in ["asm-probe-32.vcbasm", "asm-probe-16.vcbasm", "asm-reject.vcbasm"] {
+    for name in ["asm-probe-32.vcbasm", "asm-probe-16.vcbasm", "asm-reject.vcbasm", "asm-probe2.vcbasm"] {
         let program = read(name);
         // Case ids are unique, and so are the lines of the cases, so a commented-out line names one case.
         let ids: Vec<&str> = program.lines().filter_map(|l| l.strip_prefix("# case ")).collect();
@@ -581,7 +581,7 @@ fn probe_programs_are_well_formed() {
     // The probe holds no mistake of its own: with the flag, the engine's only objections are open questions
     // and what the game itself turned out to reject.
     let mut b = board(32);
-    let objections = assemble(&read("asm-probe-32.vcbasm"), "probe", &mut b, true).unwrap_err();
+    let objections = assemble(&read("asm-probe-32.vcbasm"), "probe", &mut b, true).unwrap_err() + "\n" + &assemble(&read("asm-probe2.vcbasm"), "probe2", &mut b, true).unwrap_err();
     for line in objections.lines() {
         assert!(line.contains("(facts question 23") || line.contains("no observed rule") || line.contains("the game rejects this"), "{line}");
     }

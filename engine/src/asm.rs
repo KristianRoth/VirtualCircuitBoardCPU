@@ -354,6 +354,11 @@ impl Asm<'_> {
             }
             ")" => Err(format!("{}: an operand is missing before ')'", self.at(line, tok.col))),
             "~" => Ok(Ast::Not(Box::new(self.operand(toks, i, line, depth)?))),
+            "-" if *i < toks.len() => {
+                self.undefined("u", "a minus sign in front of a name or a parenthesis", line, tok.col);
+                self.operand(toks, i, line, depth)?;
+                Ok(Ast::Unknown)
+            }
             op if OPERATORS.contains(&op) => Err(format!("{}: an operand is missing before '{op}'", self.at(line, tok.col))),
             _ => self.primitive(tok, line),
         }
