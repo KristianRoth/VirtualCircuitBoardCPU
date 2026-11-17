@@ -22,6 +22,12 @@ A 32-bit CPU built in the Steam game Virtual Circuit Board (VCB), and `engine/`:
 - The second probe round is imported too (`asm-probe2`, `asm-crfield`, `asm-external-missing`). No assembler feature is unverified any more; question 23 has five small open cases (b, c, n, p, u).
 - Nothing is waiting in `saves/pending/`.
 
+## The CPU boards and the shift fix (2026-11-17)
+- The three CPU boards in `AoC2025/` carry a 50-pixel fix (x 1120–1129, y 215–224) that makes `shf | n` shift A left by n. It was found and checked in the engine only; the user has not yet run a patched board in the game. `AoC2025/findings/cpu-instructions.md` describes the CPU's instructions and the fix; `AoC2025/RULES.md` holds the rules for solving puzzles on the CPU.
+- **The engine's fixtures are not patched** (`engine/tests/boards/cpu-*.vcb`): they are the boards the game ran and saved, so they stay as the game saw them. They differ from the `AoC2025/` boards by those 50 pixels.
+- `saves/pending/cpu-shift-test.vcb` (unpatched) and `cpu-shift-fix-test.vcb` (patched) are shift test boards for the game; a `non` before each shift pauses the CPU there.
+- `engine/examples/trace.rs` inspects a board (text art, what an entity connects to, a bus and its taps, signal changes during a run).
+
 ## Loose ends
 - **No licence** has been chosen for `engine/`, and it is already on GitHub. Raise it with the user.
 - **The root `README.md`** was extended with a short description; the CPU's instruction table is also in `AoC2025/README.md`. The user may want to rewrite it.
