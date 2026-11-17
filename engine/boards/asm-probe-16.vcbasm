@@ -1,0 +1,164 @@
+symbol one 1
+symbol two 2
+symbol four 4
+symbol six 6
+macro pair { a? | b? }
+
+# case u-first-address
+0xF1F1; 0xF1F2
+
+# case v0-control
+origin 0x1010; 0xA501; one two
+
+# case v0-pointer-value
+pointer pv1 0x1028 0x1234; origin 0x1020; 0xA502; pv1
+
+# case u-comment-after
+origin 0x1030; 0xA503; 3 # a comment after a statement
+
+# case u-underscore-decimal
+origin 0x1040; 0xA504; 1_000
+
+# case u-underscore-hex
+origin 0x1050; 0xA505; 0x1_0
+
+# case u-negative-literal
+origin 0x1060; 0xA506; -1
+
+# case u-negative-symbol
+symbol ns1 -2; origin 0x1070; 0xA507; ns1
+
+# case u-or-overlap
+origin 0x1080; 0xA508; 3 6
+
+# case u-or-overlap-operator
+origin 0x1090; 0xA509; 3 | 6
+
+# case u-three-primitives
+origin 0x10A0; 0xA50A; one two four
+
+# case u-resymb
+symbol rs1 1; origin 0x10B0; 0xA50B; rs1; resymb rs1 2; rs1
+
+# case u-unsymb
+symbol us1 1; unsymb us1; origin 0x10C0; 0xA50C; 5
+
+# case u-inline
+origin 0x10D0; 0xA50D; pointer in1 inline 5; in1; 9
+
+# case u-unpoint
+pointer up1 0x10E8 7; unpoint up1; origin 0x10E0; 0xA50E; 5
+
+# case u-orgprev
+origin 0x10F0; origin 0x10F8; origin orgprev; 0xA50F; 5
+
+# case z-orgprev-after-store
+origin 0x1100; 0xA510; origin 0x1108; origin orgprev; @ OP2; OP2
+
+# case u-add
+origin 0x1110; 0xA511; 6 + 3
+
+# case u-subtract
+origin 0x1120; 0xA512; 6 - 3
+
+# case u-multiply
+origin 0x1130; 0xA513; 6 * 3
+
+# case u-and
+origin 0x1140; 0xA514; 6 & 3
+
+# case u-xor
+origin 0x1150; 0xA515; 6 ^ 3
+
+# case u-shift-left
+origin 0x1160; 0xA516; 1 << 4
+
+# case u-divide
+origin 0x1170; 0xA517; 6 / 3
+
+# case u-modulo
+origin 0x1180; 0xA518; 7 % 4
+
+# case u-or-in-instruction
+origin 0x1190; 0xA519; 6 | 1
+
+# case u-shift-right-in-instruction
+origin 0x11A0; 0xA51A; (8 >> 1)
+
+# case u-macro-no-placeholder
+macro m0a { one | two }; origin 0x11B0; 0xA51B; m0a
+
+# case u-macro-one-placeholder
+macro m1a { a? | one }; origin 0x11C0; 0xA51C; m1a two
+
+# case u-macro-three-placeholders
+macro m3a { a? | b? | c? }; origin 0x11D0; 0xA51D; m3a one two four
+
+# case u-macro-literal-arguments
+origin 0x11E0; 0xA51E; pair 1 2
+
+# case u-macro-braces
+macro mb1 {a? | b?}; origin 0x11F0; 0xA51F; mb1 one two
+
+# case u-remac
+macro rm1 { a? | b? }; remac rm1 { a? | b? | four }; origin 0x1200; 0xA520; rm1 one two
+
+# case u-unmac
+macro um1 { a? | b? }; unmac um1; origin 0x1210; 0xA521; 5
+
+# case u-bookmarks
+origin 0x1220; 0xA522; 1; bookmark Bk1; sub_bookmark Bk2; 2
+
+# case a-or-shift
+origin 0x1230; 0xA523; 1 | 2 << 3
+
+# case a-shift-or
+origin 0x1240; 0xA524; 2 << 3 | 1
+
+# case a-subtract-multiply
+origin 0x1250; 0xA525; 8 - 2 * 3
+
+# case a-add-multiply
+origin 0x1260; 0xA526; 6 + 3 * 2
+
+# case b-wider-than-16-bits
+origin 0x1270; 0xA527; 0x12345
+
+# case b-negative-result
+origin 0x1280; 0xA528; 1 - 2
+
+# case b-overflow
+origin 0x1290; 0xA529; 0xFFFFFFFF + 1
+
+# case l-address-after-pointer
+origin 0x12A0; 0xA52A; pointer la1 0x12A8 7; @ LA1; LA1
+
+# case m-two-writes
+origin 0x12B0; 0xA52B; 1; origin 0x12B0; 0x77
+
+# case q-lower-case-hex
+origin 0x12C0; 0xA52C; 0xff
+
+# case s-label-then-origin
+origin 0x12D0; 0xA52D; @ SL1; origin 0x12D8; 1; SL1
+
+# case s-label-then-pointer
+origin 0x12E0; 0xA52E; @ SL2; pointer sl2p 0x12E8 7; origin 0x12E9; 1; SL2
+
+# case t-semicolon-in-comment
+# not a statement; origin 0x12F0; 0xA52F; 0x99
+
+# case u-not
+origin 0x1300; 0xA530; ~ 1
+
+# case u-inexact-division
+origin 0x1310; 0xA531; 7 / 2
+
+# case w-shift-chain
+origin 0x1320; 0xA532; 64 >> 2 >> 1
+
+# case w-subtract-chain
+origin 0x1330; 0xA533; 10 - 4 - 3
+
+# case u-orgbase
+origin 0x1340; origin 0x1348; origin orgbase; @ OB1; OB1

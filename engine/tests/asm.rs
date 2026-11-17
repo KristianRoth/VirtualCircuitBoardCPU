@@ -460,3 +460,79 @@ fn vcb_run_with_vmem_disabled_runs_without_assembling() {
     std::fs::write(d.join("p.vcbasm"), "origin 0x10\n1\n").unwrap();
     assert!(!run(&["--asm", d.join("p.vcbasm").to_str().unwrap()]).0);
 }
+
+// ---- `vcb gen` puts assembly programs on generated boards ----
+
+#[test]
+fn vcb_gen_puts_assembly_text_on_a_board() {
+    let d = dir("gen-asm");
+    let p = |name: &str| d.join(name).to_str().unwrap().to_string();
+    let art = "\nLW5RB\n";
+    std::fs::write(p("field.vcbasm"), "# case a-1\r\norigin 0x10\r\n1\r\n").unwrap();
+    std::fs::write(p("ext.vcbasm"), "# case r-1\norigin 0x20\n2\n").unwrap();
+
+    // Without the keys the board is byte-identical to one generated before the keys existed: no assembly.
+    std::fs::write(p("plain.txt"), art).unwrap();
+    assert!(vcb(&["gen", &p("plain.txt"), "-o", &p("plain.vcb")]).status.success());
+    let plain = Board::read(&d.join("plain.vcb")).unwrap();
+    assert!(plain.assembly.is_empty() && !plain.assembly_is_external && !d.join("plain.vcbasm").exists());
+    assert!(std::fs::read_to_string(p("plain.checklist.md")).unwrap().starts_with("# Checklist: plain"));
+
+    // assembly = <file>: the text (LF) in the board, and the assembler checklist with its cases.
+    std::fs::write(p("a.txt"), format!("assembly = field.vcbasm\n{art}")).unwrap();
+    let out = vcb(&["gen", &p("a.txt"), "-o", &p("a.vcb")]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let a = Board::read(&d.join("a.vcb")).unwrap();
+    assert_eq!((a.assembly.as_str(), a.assembly_is_external), ("# case a-1\norigin 0x10\n1\n", false));
+    assert!(a.inks == plain.inks);
+    let checklist = std::fs::read_to_string(p("a.checklist.md")).unwrap();
+    assert!(checklist.starts_with("# Assembler checklist: a") && checklist.contains("\n- a-1: \n") && checklist.contains("- Observed by: \n"));
+    assert!(!checklist.contains("External Editing"));
+
+    // assembly_external = <file>: External Editing on, the file beside the board, here with CRLF.
+    std::fs::write(p("e.txt"), format!("assembly = field.vcbasm\nassembly_external = ext.vcbasm\nassembly_crlf = on\n{art}")).unwrap();
+    assert!(vcb(&["gen", &p("e.txt"), "-o", &p("e.vcb")]).status.success());
+    let e = Board::read(&d.join("e.vcb")).unwrap();
+    assert!(e.assembly_is_external && e.assembly == a.assembly);
+    assert_eq!(std::fs::read(p("e.vcbasm")).unwrap(), b"# case r-1\r\norigin 0x20\r\n2\r\n");
+    let checklist = std::fs::read_to_string(p("e.checklist.md")).unwrap();
+    assert!(checklist.contains("- a-1: \n- r-1: \n") && checklist.contains("External Editing switch"));
+    assert!(!vcb(&["gen", &p("e.txt"), "-o", &p("e.vcb")]).status.success(), "an existing .vcbasm needs --force");
+
+    // The program must be a file name next to the source.
+    std::fs::write(p("bad.txt"), format!("assembly = ../field.vcbasm\n{art}")).unwrap();
+    let out = vcb(&["gen", &p("bad.txt"), "-o", &p("bad.vcb")]);
+    assert!(!out.status.success() && text(&out.stderr).contains("must be a file name in the same folder"));
+}
+
+// ---- the probe programs for the game (boards/asm-*.vcbasm, written by tools/board-generators/asm_probes.py) ----
+
+#[test]
+fn probe_programs_are_well_formed() {
+    let read = |name: &str| std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("boards").join(name)).unwrap();
+    for name in ["asm-probe-32.vcbasm", "asm-probe-16.vcbasm", "asm-reject.vcbasm"] {
+        let program = read(name);
+        // Case ids are unique, and so are the lines of the cases, so a commented-out line names one case.
+        let ids: Vec<&str> = program.lines().filter_map(|l| l.strip_prefix("# case ")).collect();
+        let lines: Vec<&str> = program.lines().filter(|l| !l.is_empty() && !l.starts_with("# case ")).collect();
+        for list in [&ids, &lines] {
+            let mut sorted = list.to_vec();
+            sorted.sort();
+            sorted.dedup();
+            assert_eq!(sorted.len(), list.len(), "{name}: a case id or a line occurs twice");
+        }
+        assert!(ids.len() >= 30, "{name}");
+    }
+
+    // The probe holds no mistake of its own: with the flag, the engine's only objections are the open questions.
+    let mut b = board(32);
+    let objections = assemble(&read("asm-probe-32.vcbasm"), "probe", &mut b, true).unwrap_err();
+    for line in objections.lines() {
+        assert!(line.contains("(facts question 23") || line.contains("no observed rule"), "{line}");
+    }
+    // Every letter the probe boards are meant to answer has a case on one of them.
+    let ids = read("asm-probe-32.vcbasm") + &read("asm-reject.vcbasm") + &read("asm-external.vcbasm") + &read("asm-novmem.vcbasm");
+    for letter in 'a'..='x' {
+        assert!(ids.contains(&format!("# case {letter}-")), "no probe case for 23{letter}");
+    }
+}
