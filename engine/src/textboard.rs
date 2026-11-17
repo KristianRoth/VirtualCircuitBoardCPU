@@ -39,6 +39,14 @@ pub struct TextBoard {
     pub ticks: Vec<u64>,
     /// Rule and question ids this board is meant to cover.
     pub covers: Vec<String>,
+    /// `assembly = <file>`: a program for the board's Assembly Editor text. `vcb gen` reads the file.
+    pub assembly_file: Option<String>,
+    /// `assembly_external = <file>`: a program written next to the board as `<name>.vcbasm`, with External
+    /// Editing switched on; `assembly_crlf = on` gives that file Windows line ends.
+    pub external_file: Option<String>,
+    pub external_crlf: bool,
+    /// `assembly_field_crlf = on`: the Assembly Editor text itself gets Windows line ends (a probe for the game).
+    pub field_crlf: bool,
 }
 
 fn number<T: std::str::FromStr>(text: &str, line: usize) -> Result<T> {
@@ -49,6 +57,7 @@ pub fn parse(text: &str) -> Result<TextBoard> {
     let mut board = Board::new(BOARD_SIZE, BOARD_SIZE);
     let (mut probes, mut ticks, mut covers): (Vec<Probe>, Vec<u64>, Vec<String>) = Default::default();
     let mut labels = false;
+    let (mut assembly_file, mut external_file, mut external_crlf, mut field_crlf) = (None, None, false, false);
     let mut lines = text.lines().enumerate().map(|(i, l)| (i + 1, l));
 
     for (n, line) in lines.by_ref() {
@@ -97,6 +106,10 @@ pub fn parse(text: &str) -> Result<TextBoard> {
                 board.settings.vmem_settings[14] = number(from, n)?;
                 board.settings.vmem_settings[15] = number(to, n)?;
             }
+            "assembly" => assembly_file = Some(value.to_string()),
+            "assembly_external" => external_file = Some(value.to_string()),
+            "assembly_crlf" => external_crlf = value == "on",
+            "assembly_field_crlf" => field_crlf = value == "on",
             "covers" => covers = value.split(',').map(|c| c.trim().to_string()).collect(),
             _ => return Err(format!("line {n}: unknown key \"{key}\"")),
         }
@@ -129,7 +142,7 @@ pub fn parse(text: &str) -> Result<TextBoard> {
             draw_label(&mut board, i + 1, p)?;
         }
     }
-    Ok(TextBoard { board, probes, ticks, covers })
+    Ok(TextBoard { board, probes, ticks, covers, assembly_file, external_file, external_crlf, field_crlf })
 }
 
 /// Draws the probe's number in Annotation ink next to its LED block, so it can be read in the game:

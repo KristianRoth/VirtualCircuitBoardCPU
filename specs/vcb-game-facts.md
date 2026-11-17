@@ -10,7 +10,7 @@ What is known about Virtual Circuit Board (Steam app 1885690) and its `.vcb` sav
 - A `.vcb` is JSON with `file_type: "RF_VCB_PROJECT"` and `file_version: 2`.
 - The old format is a Godot resource starting with `[gd_resource`.
 - `layers` holds 3 base64 blobs. `layers[0]` is the logic layer. `layers[1]` and `layers[2]` were empty in every test and are presumably decoration (open question 7).
-- Other fields seen: `vmem_data`, `vmem_settings`, `is_vmem_enabled`, `vmem_is_external`, `vinput_is_enabled`, `vdisplay_is_enabled`, `clock_interval`, `timer_interval`, `random_seed`, `random_is_time_seed`, `simulation_speed_ticks` (the game's UI speed setting), `led_palette`, `assembly`.
+- Other fields seen: `vmem_data`, `vmem_settings`, `is_vmem_enabled`, `vmem_is_external`, `vinput_is_enabled`, `vdisplay_is_enabled`, `clock_interval`, `timer_interval`, `random_seed`, `random_is_time_seed`, `simulation_speed_ticks` (the game's UI speed setting), `led_palette`, `assembly` (the Assembly Editor's text), `assembly_is_external` (bool; the External Editing switch, false in every file seen).
 
 ## Blob format
 Used by the layers and by `vmem_data`: base64 text, decoding to a zstd frame followed by a trailer of (tag, value) pairs. Each pair is two little-endian i32 values, and the tag is always `2`.
@@ -139,6 +139,10 @@ Boards `random-vmem-seed-1` and `-2` (`engine/boards/`): a counter on the VMem a
 - **Without a persistent region, saves never capture runtime state.** Pixels hold no state, and memory written by the circuit isn't saved: `engine/tests/evidence/vmem-test3_2.vcb` was saved while running with word 1 = 3 on screen, and its `vmem_data` is all zeros. Saves hold only what is set in the editor.
 - External VMem doesn't help (`engine/tests/evidence/vmem-ext.vcb`): the game wrote neither the existing `.vcbmem` while running nor a new one on Save As.
 - **The game assembles only at simulation start** (a "compiling assembly" loading bar) and never saves the result. A `.vcb` never contains an assembled program.
+- **Assembly errors:** the game shows the first error it finds, and only that one, in the editor, before the simulation starts (reported by the user from experience, 2026-11-16; no save backs it).
+- **What the game's assembler is known to do:** only what `cpu-aoc1p1` shows. The text the game assembled is the `assembly` field of `engine/tests/boards/cpu-aoc1p1.after.vcb`. `vcb-assembler.md` writes the forms it contains as a grammar ("Verified: the shapes the game has assembled"). Three words of `cpu-aoc1p1.vcb` were set back by hand after the run (`0x100`, `0x101`, `0xE000`), so the two pointer words are inferred from the tick-exact run, not read from a save. Words 1–5 (the old test pattern, not defined by the program) are intact in the after-save: **assembling keeps words the program does not define** (this part of question 19 is answered). Everything else is question 23.
+- **Day 1 part 2 as the game assembles it** (2026-11-16): `engine/tests/boards/cpu-aoc1p2.vcb` is the manual-start CPU with part 2 as assembly and Persistent Memory 0–65535; `cpu-aoc1p2.assembled.vcb` is the save made after entering simulation and returning at once. It holds the assembled program before anything ran: the pointer words are `0x100` = 0 and `0x101` = `0x1000`, words 1–5 are kept, and the game showed no error.
+- **The user's `.vcbasm` files have CRLF line ends** (`AoC2025/days/day1/part1.vcbasm`, `part2.vcbasm`; checked 2026-11-16), and the `assembly` field of every board seen has LF only. The files equal the board texts once CRLF is read as LF: part 1 the after-save above, part 2 `engine/tests/evidence/AOC1P2_asm.vcb` and `timer-and-random.vcb` (both with VMem disabled). The game has only been seen to assemble the LF text.
 - **Under Wine (Mac):** overwriting an existing save can leave the new content in `<name>.vcb.tmp`. Saving to a new filename works normally.
 
 ## What the User Guide says
@@ -211,7 +215,15 @@ Questions 11–21 come from the v1 design (`vcb-engine-v1.md` lists the interim 
 16. **VMem read latency:** answered 2026-11-16: the tick after the address pins flip.
 17. **Breakpoint pause:** the counter shows the tick the Breakpoint turned on, plus one (answered 2026-11-15). Still open, before the CPU rung: does the paused game hold the state of that tick or of the next one (does VMem written in the extra tick show)?
 18. **Latch On at tick 0:** answered 2026-11-15: its trace is on at tick 0 and a latch reading it sees a rising edge.
-19. **Assembly and memory:** answered 2026-11-16: a save made after a run with Persistent Memory over the program area contains the assembled program. Not checked: whether a non-empty `assembly` field overwrites words the program does not define (words 1–5 of the old test pattern survived).
+19. **Assembly and memory:** answered 2026-11-16 and 2026-11-17: a save made after a run with Persistent Memory over the program area contains the assembled program, and assembling keeps every word the program does not write (preloaded words before, between and after the program survived on the probe boards).
 20. **Shared Read/Write pixel:** one Read pixel touching two components feeds both (answered 2026-11-15). A shared Write pixel also connects both (observed on `general`).
 21. **Content width under 32 bits:** answered 2026-11-16: a write sets the bits above the content width to 0.
 22. **Random draw order:** two cases observed and matched by the engine: Randoms along one trace draw in the order a walk from the trace's first pixel reaches them, and Randoms on separate traces that turn on in the same tick draw in board order (left to right on `random-pulse`). The general rule for mixed cases is not known.
+23. **The assembler.** Answered 2026-11-17 by eight probe boards (`asm-probe-32`, `asm-probe-16`, `asm-reject`, `asm-external`, `asm-novmem`, then `asm-probe2`, `asm-crfield`, `asm-external-missing`; boards, the game's saves and the filled checklists with the game's error messages are in `engine/tests/boards/`). What the game accepts, with results, and what it rejects is listed in `vcb-assembler.md` ("Shown by the probe boards"). The headline facts: values are 32 bits wide and addresses run from 1 to `0xFFFFF`, whatever the board's content and address bits; arithmetic is signed with C's operator precedence, and a result must lie between -2^31 and 2^32-1; a macro definition may not share a line with `;`; a name must be defined before it is used (labels excepted); External Editing assembles `<board>.vcbasm` and reads CRLF, and the game rejects a carriage return in the editor text. Still open (each is an error in the engine's assembler):
+    - b. A value outside the 32-bit range in the middle of an expression.
+    - c. A shift by 64 or more.
+    - n. A word stored past the last VMem word: the game accepted `origin 0xFFFFF` followed by two words; where the second went is not visible in the save.
+    - p. A symbol valued by a label defined below it; a pointer valued by a pointer or a label.
+    - u. Two signs in a row: `~ ~ 5` was stored as -5 (`0xFFFFFFFB`), which no reading explains.
+    
+    Also not observed: `remac` of a name that is not a macro; the use of a macro whose body is empty.
