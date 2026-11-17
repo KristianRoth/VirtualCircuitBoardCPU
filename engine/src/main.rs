@@ -186,7 +186,7 @@ fn read_source(board_path: &Path, board: &Board, asm: Option<&Path>) -> Result<O
         None if board.assembly_is_external => {
             let file = board_path.with_extension("vcbasm");
             if !file.exists() {
-                return Err(format!("{}: External Editing is on and this file is missing: the game's result is not known (facts question 23r)", file.display()));
+                return Err(format!("{}: External Editing is on and this file is missing: the game rejects this", file.display()));
             }
             Some(file)
         }

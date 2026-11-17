@@ -7,19 +7,20 @@
 //! letter. Gate hits and rejections do not stop the assembler, so one run lists them all; a statement that
 //! cannot be parsed at all stops it at once.
 //!
-//! Values are 32 bits wide whatever the board's content bits are (observed on a 16-bit board).
+//! Values are 32 bits wide whatever the board's content bits are, and any address from 1 to the end of VMem
+//! can be stored to whatever the address bits are (both observed). Arithmetic is signed, with C's precedence.
 
-use crate::board::Board;
+use crate::board::{Board, VMEM_WORDS};
 use std::collections::{HashMap, HashSet};
 
 /// Unverified features that a game save has since shown. Add the name here in the commit that adds the fixture.
-/// All but the last were shown by the probe boards `asm-probe-32`, `asm-probe-16` and `asm-reject` (2026-11-17).
+/// The probe boards `asm-probe-32`, `asm-probe-16`, `asm-reject` and `asm-probe2` (2026-11-17) showed every
+/// one, so no feature is unverified today. The gate stays for the next game update, when each must be shown again.
 pub const VERIFIED: &[&str] = &[
     "first address is 1",
     "comment after a statement",
     "underscores in decimal and hex literals",
     "negative literal",
-    "OR of overlapping bits",
     "more than two primitives in an instruction",
     "resymb",
     "unsymb",
@@ -27,23 +28,17 @@ pub const VERIFIED: &[&str] = &[
     "unpoint",
     "origin orgprev",
     "origin orgbase",
-    "operator +",
-    "operator -",
-    "operator *",
-    "operator /",
-    "operator %",
-    "operator &",
-    "operator ^",
-    "operator <<",
-    "an expression outside the verified macro shape",
     "macro argument that is a literal",
+    "macro without exactly two placeholders",
+    "macro braces without spaces",
+    "remac",
+    "unmac",
     "bookmark",
     "sub_bookmark",
 ];
 
-/// Pairs of different operators the game has evaluated without parentheses; the tighter one is second.
-/// Everything else mixed at one level is question 23a.
-const OBSERVED_PAIRS: [[&str; 2]; 3] = [["|", "<<"], ["-", "*"], ["+", "*"]];
+/// A stored value lies in this range; a negative one is stored in two's complement.
+const VALUE_RANGE: std::ops::RangeInclusive<i64> = -(1 << 31)..=u32::MAX as i64;
 
 const MAX_SOURCE_BYTES: usize = 16 << 20;
 const MAX_NESTING: usize = 64;
@@ -130,11 +125,12 @@ enum Kind {
 
 enum Ast {
     /// A literal, symbol or pointer value.
-    Val { v: i64, literal: bool },
+    Val(i64),
     Label(String),
     Bin(&'static str, Box<Ast>, Box<Ast>),
     Paren(Box<Ast>),
     Not(Box<Ast>),
+    Neg(Box<Ast>),
     /// An instruction without operators: its primitives are ORed.
     Prims(Vec<Ast>),
     /// A gate hit made this statement's value meaningless.
@@ -153,7 +149,6 @@ struct Emit {
 struct Asm<'a> {
     source_name: &'a str,
     allow: bool,
-    address_bits: u32,
     hits: Vec<String>,
     used: Vec<&'static str>,
     names: HashMap<String, Kind>,
@@ -217,7 +212,7 @@ impl Asm<'_> {
         if s.starts_with('-') {
             self.unverified("negative literal", line, tok.col);
             if v > 1 << 31 {
-                self.undefined("b", "a negative value below -2^31", line, tok.col);
+                self.rejected("a value below -2^31", line, tok.col);
                 return Ok(None);
             }
             return Ok(Some(-(v as i64)));
@@ -225,17 +220,22 @@ impl Asm<'_> {
         Ok(Some(v as i64))
     }
 
-    /// A literal that must be there (a directive's argument). A name or an expression is question 23p.
-    fn directive_literal(&mut self, tok: &Tok, line: usize) -> Result<Option<i64>, Fatal> {
-        if is_literal_like(&tok.s) {
-            return self.literal(tok, line);
+    /// An address in a directive: a literal from 1 to the last VMem word (the game rejects anything else).
+    fn address(&mut self, tok: &Tok, line: usize) -> Result<Option<i64>, Fatal> {
+        if !is_literal_like(&tok.s) {
+            self.rejected("an address that is not a number", line, tok.col);
+            return Ok(None);
         }
-        self.undefined("p", "a directive argument that is not a literal", line, tok.col);
-        Ok(None)
+        let address = self.literal(tok, line)?;
+        if address.is_some_and(|a| !(1..VMEM_WORDS as i64).contains(&a)) {
+            self.rejected("an address outside VMem (1 to 1,048,575)", line, tok.col);
+            return Ok(None);
+        }
+        Ok(address)
     }
 
     /// Checks a name being defined. Returns false when the definition should not go ahead.
-    fn check_new_name(&mut self, tok: &Tok, line: usize, kind: &str) -> bool {
+    fn check_new_name(&mut self, tok: &Tok, line: usize) -> bool {
         let name = tok.s.as_str();
         if !is_name(name) {
             self.rejected("a name with characters other than letters, digits and underscore, or starting with a digit", line, tok.col);
@@ -253,8 +253,6 @@ impl Asm<'_> {
             None => None,
         };
         match existing {
-            // A macro defined twice could not be put to the game: its probe case fell to the `;` rule.
-            Some("macro") if kind == "macro" => self.undefined("d", "a macro defined twice", line, tok.col),
             Some(k) => self.rejected(&format!("the name '{name}' is already defined as a {k}"), line, tok.col),
             None => {}
         }
@@ -266,24 +264,24 @@ impl Asm<'_> {
         let name = tok.s.as_str();
         let glued_operator = name.len() > 1 && OPERATORS.iter().any(|op| name[1..].contains(op));
         if is_literal_like(name) && !glued_operator {
-            return Ok(self.literal(tok, line)?.map_or(Ast::Unknown, |v| Ast::Val { v, literal: true }));
+            return Ok(self.literal(tok, line)?.map_or(Ast::Unknown, |v| Ast::Val(v)));
         }
         if !is_name(name) {
             self.rejected(&format!("'{}' is not a name or a number (operators need spaces around them)", escape(name)), line, tok.col);
             return Ok(Ast::Unknown);
         }
         match self.names.get(name) {
-            Some(Kind::Symbol(v)) | Some(Kind::Pointer(v)) => return Ok(Ast::Val { v: *v, literal: false }),
-            Some(Kind::Macro) => self.rejected("a macro use that is not the whole statement", line, tok.col),
+            Some(Kind::Symbol(v)) | Some(Kind::Pointer(v)) => return Ok(Ast::Val(*v)),
+            Some(Kind::Macro) => self.rejected("a macro name inside a macro body", line, tok.col),
             None if self.labels.contains_key(name) => return Ok(Ast::Label(name.to_string())),
-            None if KEYWORDS.contains(&name) => self.undefined("", "a keyword inside an instruction", line, tok.col),
+            None if KEYWORDS.contains(&name) => self.rejected("a keyword inside an instruction", line, tok.col),
             None => self.rejected(&format!("the name '{name}' must be defined before it is used"), line, tok.col),
         }
         Ok(Ast::Unknown)
     }
 
     /// One level of an expression: operand { operator operand }, up to `)` or the end.
-    /// Precedence is C's; the game showed it for the pairs in `OBSERVED_PAIRS`, and chains run left to right.
+    /// Precedence is C's and chains run left to right (the game showed every pair of operators).
     fn expression(&mut self, toks: &[Tok], i: &mut usize, line: usize, depth: usize) -> Result<Ast, Fatal> {
         if depth > MAX_NESTING {
             return Err(format!("{}: parentheses nested more than {MAX_NESTING} deep", self.at(line, toks[*i - 1].col)));
@@ -306,14 +304,6 @@ impl Asm<'_> {
             }
             operands.push(self.operand(toks, i, line, depth)?);
         }
-        let col = toks[(*i).min(toks.len() - 1)].col;
-        let mut kinds = ops.clone();
-        kinds.sort();
-        kinds.dedup();
-        if kinds.len() > 1 && !OBSERVED_PAIRS.iter().any(|pair| kinds.iter().all(|op| pair.contains(op))) {
-            self.undefined("a", "these operators together without parentheses", line, col);
-            usable = false;
-        }
         if !usable {
             return Ok(Ast::Unknown);
         }
@@ -326,10 +316,6 @@ impl Asm<'_> {
                     continue;
                 }
                 let (op, right) = (ops.remove(k), operands.remove(k + 1));
-                if matches!(op, "/" | "%" | "<<") && matches!(&operands[k], Ast::Bin(left, _, _) if *left == op) {
-                    self.undefined("w", "a chain of /, % or << without parentheses", line, col);
-                    return Ok(Ast::Unknown);
-                }
                 let left = std::mem::replace(&mut operands[k], Ast::Unknown);
                 operands[k] = Ast::Bin(op, Box::new(left), Box::new(right));
             }
@@ -353,11 +339,16 @@ impl Asm<'_> {
                 Ok(Ast::Paren(Box::new(inner)))
             }
             ")" => Err(format!("{}: an operand is missing before ')'", self.at(line, tok.col))),
-            "~" => Ok(Ast::Not(Box::new(self.operand(toks, i, line, depth)?))),
-            "-" if *i < toks.len() => {
-                self.undefined("u", "a minus sign in front of a name or a parenthesis", line, tok.col);
-                self.operand(toks, i, line, depth)?;
-                Ok(Ast::Unknown)
+            // `~ x` and `- x` bind tighter than any binary operator (observed). `~ ~ 5` gave -5 in the game,
+            // which no reading explains, so one sign directly after another is question 23u.
+            sign @ ("~" | "-") if *i < toks.len() => {
+                if matches!(toks[*i].s.as_str(), "~" | "-") {
+                    self.undefined("u", "two signs (~ or -) in a row", line, tok.col);
+                    self.operand(toks, i, line, depth)?;
+                    return Ok(Ast::Unknown);
+                }
+                let inner = Box::new(self.operand(toks, i, line, depth)?);
+                Ok(if sign == "~" { Ast::Not(inner) } else { Ast::Neg(inner) })
             }
             op if OPERATORS.contains(&op) => Err(format!("{}: an operand is missing before '{op}'", self.at(line, tok.col))),
             _ => self.primitive(tok, line),
@@ -381,146 +372,71 @@ impl Asm<'_> {
         if i < toks.len() {
             return Err(format!("{}: ')' without an opening parenthesis", self.at(line, toks[i].col)));
         }
-        // The game showed `~ x` as a whole instruction; inside a larger expression it is question 23u.
-        fn has_not(ast: &Ast) -> bool {
-            match ast {
-                Ast::Not(_) => true,
-                Ast::Bin(_, a, b) => has_not(a) || has_not(b),
-                Ast::Paren(inner) => has_not(inner),
-                _ => false,
-            }
-        }
-        if let Ast::Not(inner) = &ast {
-            if !has_not(inner) {
-                return Ok(ast);
-            }
-        }
-        if has_not(&ast) {
-            self.undefined("u", "the operator ~ inside a larger expression", line, toks[0].col);
-            return Ok(Ast::Unknown);
-        }
         Ok(ast)
     }
 
     /// The value of a tree, once every label has its address. `None` after a gate hit.
-    /// A value may be negative only as the final result (it is stored in two's complement); what the game
-    /// does with a negative operand is question 23u.
-    fn eval(&mut self, ast: &Ast, line: usize, col: usize) -> Option<i64> {
-        const MAX: i64 = u32::MAX as i64;
-        let operand = |asm: &mut Self, ast: &Ast| -> Option<i64> {
-            let v = asm.eval(ast, line, col)?;
-            if v < 0 {
-                asm.undefined("u", "a negative value as an operand", line, col);
-                return None;
-            }
-            Some(v)
-        };
-        match ast {
-            Ast::Unknown => None,
-            Ast::Val { v, .. } => Some(*v),
-            Ast::Label(name) => self.labels[name],
-            Ast::Paren(inner) => self.eval(inner, line, col),
-            Ast::Not(inner) => Some(!(operand(self, inner)? as u32) as i64),
-            Ast::Prims(prims) if prims.len() == 1 => self.eval(&prims[0], line, col),
+    /// Arithmetic is signed (`-7 / 2` is -3, `-7 % 3` is -1, `-8 >> 1` is -4). The game rejects a result
+    /// outside `VALUE_RANGE`; whether it also checks the steps in between is question 23b, so a step outside
+    /// the range is refused under that letter.
+    fn eval(&mut self, ast: &Ast, top: bool, line: usize, col: usize) -> Option<i64> {
+        let value: i128 = match ast {
+            Ast::Unknown => return None,
+            Ast::Val(v) => return Some(*v),
+            Ast::Label(name) => return self.labels[name],
+            Ast::Paren(inner) => return self.eval(inner, top, line, col),
+            Ast::Not(inner) => !self.eval(inner, false, line, col)? as i128,
+            Ast::Neg(inner) => -(self.eval(inner, false, line, col)? as i128),
+            Ast::Prims(prims) if prims.len() == 1 => return self.eval(&prims[0], top, line, col),
             Ast::Prims(prims) => {
                 let mut value = 0;
                 for p in prims {
-                    let v = operand(self, p)?;
-                    if value & v != 0 {
-                        self.unverified("OR of overlapping bits", line, col);
-                    }
-                    value |= v;
+                    value |= self.eval(p, false, line, col)?;
                 }
-                Some(value)
+                value as i128
             }
             Ast::Bin(op, left, right) => {
-                let (a, b) = (operand(self, left), operand(self, right));
-                let (a, b) = (a?, b?);
+                let (a, b) = (self.eval(left, false, line, col), self.eval(right, false, line, col));
+                let (a, b) = (a? as i128, b? as i128);
                 match *op {
-                    "|" => {
-                        if a & b != 0 {
-                            self.unverified("OR of overlapping bits", line, col);
-                        }
-                        Some(a | b)
+                    "|" => a | b,
+                    "&" => a & b,
+                    "^" => a ^ b,
+                    "+" => a + b,
+                    "-" => a - b,
+                    "*" => a * b,
+                    "/" | "%" if b == 0 => {
+                        self.rejected("division or modulo by zero", line, col);
+                        return None;
                     }
-                    "&" => Some(a & b),
-                    "^" => Some(a ^ b),
-                    "-" => Some(a - b),
-                    "+" if a + b <= MAX => Some(a + b),
-                    "*" if a * b <= MAX => Some(a * b),
-                    "/" if b != 0 => Some(a / b),
-                    "%" if b != 0 => Some(a % b),
-                    "<<" if b < 32 && a << b <= MAX => Some(a << b),
-                    ">>" if b < 32 => Some(a >> b),
-                    "*" => {
-                        self.undefined("b", "a product wider than 32 bits", line, col);
-                        None
+                    "/" => a / b,
+                    "%" => a % b,
+                    _ if b < 0 => {
+                        self.rejected("a shift by a negative count", line, col);
+                        return None;
                     }
-                    ">>" => {
-                        self.undefined("c", "a right shift by 32 or more", line, col);
-                        None
-                    }
-                    "+" | "<<" => {
+                    ">>" if b < 64 => a >> b,
+                    "<<" if b < 64 => a << b,
+                    "<<" if a != 0 => {
                         self.rejected("a value wider than 32 bits", line, col);
-                        None
+                        return None;
                     }
                     _ => {
-                        self.rejected("division or modulo by zero", line, col);
-                        None
+                        self.undefined("c", "a shift by 64 or more", line, col);
+                        return None;
                     }
                 }
             }
+        };
+        if value >= *VALUE_RANGE.start() as i128 && value <= *VALUE_RANGE.end() as i128 {
+            return Some(value as i64);
         }
-    }
-
-    /// Gate checks on the form of an expression: which operators, and whether it is the shape the game has
-    /// assembled (a macro body `x | y | (z >> literal)`).
-    fn check_shape(&mut self, ast: &Ast, in_macro: bool, line: usize, col: usize) {
-        fn operators(ast: &Ast, found: &mut Vec<&'static str>) {
-            match ast {
-                Ast::Bin(op, a, b) => {
-                    found.push(op);
-                    operators(a, found);
-                    operators(b, found);
-                }
-                Ast::Paren(inner) | Ast::Not(inner) => operators(inner, found),
-                _ => {}
-            }
+        if top {
+            self.rejected("a value outside 32 bits (-2^31 to 2^32-1)", line, col);
+        } else {
+            self.undefined("b", "a value outside 32 bits in the middle of an expression", line, col);
         }
-        fn term(ast: &Ast) -> bool {
-            match ast {
-                Ast::Val { literal: false, .. } | Ast::Label(_) => true,
-                Ast::Paren(inner) => matches!(&**inner, Ast::Bin(">>", a, b)
-                    if matches!(**a, Ast::Val { literal: false, .. } | Ast::Label(_)) && matches!(**b, Ast::Val { literal: true, .. })),
-                _ => false,
-            }
-        }
-        fn or_chain(ast: &Ast) -> bool {
-            match ast {
-                Ast::Bin("|", a, b) => or_chain(a) && term(b),
-                other => term(other),
-            }
-        }
-        if matches!(ast, Ast::Prims(_) | Ast::Unknown) || (in_macro && or_chain(ast)) {
-            return;
-        }
-        self.unverified("an expression outside the verified macro shape", line, col);
-        let mut found = Vec::new();
-        operators(ast, &mut found);
-        for op in found {
-            let feature = match op {
-                "+" => "operator +",
-                "-" => "operator -",
-                "*" => "operator *",
-                "/" => "operator /",
-                "%" => "operator %",
-                "&" => "operator &",
-                "^" => "operator ^",
-                "<<" => "operator <<",
-                _ => continue,
-            };
-            self.unverified(feature, line, col);
-        }
+        None
     }
 }
 
@@ -598,14 +514,9 @@ pub fn assemble(source: &str, source_name: &str, board: &mut Board, allow_unveri
     if !board.settings.vmem_enabled {
         return Err(format!("{source_name}: is_vmem_enabled is false, so there is no VMem to assemble into"));
     }
-    let address_bits = board.settings.vmem_settings[0];
-    if !(1..=20).contains(&address_bits) {
-        return Err(format!("vmem_settings: {address_bits} address bits cannot be assembled for"));
-    }
     let mut asm = Asm {
         source_name,
         allow: allow_unverified,
-        address_bits: address_bits as u32,
         hits: Vec::new(),
         used: Vec::new(),
         names: HashMap::new(),
@@ -640,7 +551,7 @@ fn walk(asm: &mut Asm, source: &str) -> Result<Vec<Word>, Fatal> {
     for (n, line) in source.split('\n').enumerate() {
         if let Some(at) = line.find(|c: char| c.is_control() && c != '\t') {
             if line[at..].starts_with('\r') {
-                asm.undefined("r", "a carriage return in the source", n + 1, at + 1);
+                asm.rejected("a carriage return in the program text", n + 1, at + 1);
             } else {
                 return Err(format!("{}: a control character in the source", asm.at(n + 1, at + 1)));
             }
@@ -657,10 +568,10 @@ fn walk(asm: &mut Asm, source: &str) -> Result<Vec<Word>, Fatal> {
         }
     }
 
-    let limit = 1i64 << asm.address_bits;
+    let limit = VMEM_WORDS as i64;
     let mut emits: Vec<Emit> = Vec::new();
     let mut seen_labels: HashSet<String> = HashSet::new();
-    // A label names the next instruction, also across `origin` and pointers with an address (observed).
+    // A label names the next instruction, also across `origin` and pointers (observed).
     let mut pending_labels: Vec<(String, usize, usize)> = Vec::new();
     let mut cur: i64 = 1;
     let mut origin_seen = false;
@@ -686,7 +597,8 @@ fn walk(asm: &mut Asm, source: &str) -> Result<Vec<Word>, Fatal> {
                 asm.unverified("first address is 1", line, col);
             }
             if *cur >= limit {
-                asm.undefined("n", "an address beyond the address bits", line, col);
+                // The game accepted a word after the last one; where it went could not be seen.
+                asm.undefined("n", "a word stored past the last VMem word", line, col);
             }
             *cur += 1;
             *cur - 1
@@ -694,17 +606,18 @@ fn walk(asm: &mut Asm, source: &str) -> Result<Vec<Word>, Fatal> {
         match head {
             "symbol" | "resymb" => {
                 args(2)?;
-                // The value is a literal, or the name of a symbol (observed).
+                // The value is a literal, or the name of a symbol, a pointer or a label defined above (observed).
                 let value = match asm.names.get(&toks[2].s) {
-                    Some(Kind::Symbol(v)) => Some(*v),
+                    Some(Kind::Symbol(v)) | Some(Kind::Pointer(v)) => Some(*v),
                     _ if is_literal_like(&toks[2].s) => asm.literal(&toks[2], line)?,
+                    _ if seen_labels.contains(&toks[2].s) && !pending_labels.iter().any(|(name, _, _)| *name == toks[2].s) => asm.labels[&toks[2].s],
                     _ => {
-                        asm.undefined("p", "a symbol value that is neither a literal nor a symbol", line, toks[2].col);
+                        asm.undefined("p", "a symbol value that is not a literal or a name defined above", line, toks[2].col);
                         None
                     }
                 };
                 if head == "symbol" {
-                    if !asm.check_new_name(&toks[1], line, "symbol") {
+                    if !asm.check_new_name(&toks[1], line) {
                         continue;
                     }
                 } else {
@@ -726,44 +639,41 @@ fn walk(asm: &mut Asm, source: &str) -> Result<Vec<Word>, Fatal> {
                 if asm.names.get(&toks[1].s).is_some_and(is_kind) {
                     asm.names.remove(&toks[1].s);
                 } else {
-                    asm.undefined("", &format!("{head} of a name that is not defined as that kind"), line, toks[1].col);
+                    asm.rejected(&format!("{head} of a name that is not defined as that kind"), line, toks[1].col);
                 }
             }
             // `pointer <name> <address>|inline <value>` stores the value and names its address.
-            // `repoint <name> <address> <value>` does the same for an existing pointer; the old word stays (observed).
+            // `repoint` does the same for an existing pointer; the old word stays (observed).
             "pointer" | "repoint" => {
                 args(3)?;
-                let value = asm.directive_literal(&toks[3], line)?;
+                // The value is a literal or the name of a symbol (observed).
+                let value = match asm.names.get(&toks[3].s) {
+                    Some(Kind::Symbol(v)) => Some(*v),
+                    _ if is_literal_like(&toks[3].s) => asm.literal(&toks[3], line)?,
+                    _ => {
+                        asm.undefined("p", "a pointer value that is not a literal or a symbol", line, toks[3].col);
+                        None
+                    }
+                };
                 let address = if toks[2].s == "inline" {
-                    if head == "repoint" {
-                        asm.undefined("v", "repoint with inline", line, toks[2].col);
-                    }
-                    if !pending_labels.is_empty() {
-                        asm.undefined("s", "a label followed by an inline pointer", line, col);
-                    }
                     asm.unverified("pointer inline", line, toks[2].col);
                     Some(place(asm, &mut cur))
                 } else {
-                    asm.directive_literal(&toks[2], line)?
+                    asm.address(&toks[2], line)?
                 };
-                if address.is_some_and(|a| a <= 0 || a >= limit) {
-                    asm.undefined("n", "address 0 or an address beyond the address bits", line, toks[2].col);
-                    continue;
-                }
+                let Some(address) = address else { continue };
                 if head == "repoint" {
                     if !matches!(asm.names.get(&toks[1].s), Some(Kind::Pointer(_))) {
-                        asm.undefined("v", "repoint of a name that is not a pointer", line, toks[1].col);
+                        asm.rejected("repoint of a name that is not a pointer", line, toks[1].col);
                         continue;
                     }
                     asm.pointers.retain(|(name, _)| *name != toks[1].s);
-                } else if !asm.check_new_name(&toks[1], line, "pointer") {
+                } else if !asm.check_new_name(&toks[1], line) {
                     continue;
                 }
-                let address = address.unwrap_or(0);
                 asm.names.insert(toks[1].s.clone(), Kind::Pointer(address));
                 asm.pointers.push((toks[1].s.clone(), address));
-                let ast = value.map_or(Ast::Unknown, |v| Ast::Val { v, literal: true });
-                emits.push(Emit { address, ast, stmt: index, col, in_macro: None });
+                emits.push(Emit { address, ast: value.map_or(Ast::Unknown, Ast::Val), stmt: index, col, in_macro: None });
             }
             "origin" => {
                 args(1)?;
@@ -776,11 +686,7 @@ fn walk(asm: &mut Asm, source: &str) -> Result<Vec<Word>, Fatal> {
                         }
                     }
                     _ => {
-                        let Some(address) = asm.directive_literal(&toks[1], line)? else { continue };
-                        if address <= 0 || address >= limit {
-                            asm.undefined("n", "address 0 or an address beyond the address bits", line, toks[1].col);
-                            continue;
-                        }
+                        let Some(address) = asm.address(&toks[1], line)? else { continue };
                         origins.push(cur);
                         cur = address;
                     }
@@ -799,6 +705,8 @@ fn walk(asm: &mut Asm, source: &str) -> Result<Vec<Word>, Fatal> {
                     asm.rejected("a name with characters other than letters, digits and underscore, or starting with a digit", line, name.col);
                 } else if KEYWORDS.contains(&name.s.as_str()) {
                     asm.rejected("a keyword used as a name", line, name.col);
+                } else if asm.names.contains_key(&name.s) {
+                    asm.rejected(&format!("the name '{}' is already defined", name.s), line, name.col);
                 } else if !seen_labels.insert(name.s.clone()) {
                     asm.rejected(&format!("the name '{}' is already defined as a label", name.s), line, name.col);
                 }
@@ -818,13 +726,13 @@ fn walk(asm: &mut Asm, source: &str) -> Result<Vec<Word>, Fatal> {
                 letters.sort();
                 letters.dedup();
                 if letters.iter().enumerate().any(|(i, l)| *l as usize != i) {
-                    asm.undefined("", "macro placeholders that skip a letter", line, col);
+                    asm.rejected("macro placeholders that skip a letter", line, col);
                 }
                 if letters.len() != 2 {
                     asm.unverified("macro without exactly two placeholders", line, col);
                 }
                 if head == "macro" {
-                    if !asm.check_new_name(&toks[1], line, "macro") {
+                    if !asm.check_new_name(&toks[1], line) {
                         continue;
                     }
                 } else {
@@ -839,50 +747,47 @@ fn walk(asm: &mut Asm, source: &str) -> Result<Vec<Word>, Fatal> {
             "bookmark" => asm.unverified("bookmark", line, col),
             "sub_bookmark" => asm.unverified("sub_bookmark", line, col),
             _ => {
-                // An instruction: one word at the current address.
-                let (expanded, in_macro) = match asm.macros.get(head).filter(|_| asm.names.get(head) == Some(&Kind::Macro)) {
-                    None => (Some(toks.clone()), None),
-                    Some(body) => {
-                        let body = body.clone();
-                        let placeholders = body.iter().filter(|t| is_placeholder(&t.s)).map(|t| t.s.as_bytes()[0]).collect::<HashSet<_>>().len();
-                        let call = &toks[1..];
-                        let mut usable = true;
-                        for arg in call {
-                            if is_literal_like(&arg.s) {
-                                asm.unverified("macro argument that is a literal", line, arg.col);
-                            } else if !is_name(&arg.s) {
-                                asm.rejected("a macro argument that is an expression", line, arg.col);
-                                usable = false;
-                            }
-                        }
-                        if usable && call.len() != placeholders {
-                            asm.rejected(&format!("the macro '{head}' takes {placeholders} arguments, not {}", call.len()), line, col);
-                            usable = false;
-                        }
-                        let expanded: Vec<Tok> = body
-                            .iter()
-                            .map(|t| if is_placeholder(&t.s) { call.get((t.s.as_bytes()[0] - b'a') as usize).unwrap_or(t).clone() } else { Tok { s: t.s.clone(), col } })
-                            .collect();
-                        if usable && expanded.iter().any(|t| asm.names.get(&t.s) == Some(&Kind::Macro)) {
-                            asm.undefined("k", "a macro inside a macro", line, col);
-                            usable = false;
-                        }
-                        if usable && expanded.is_empty() {
-                            asm.undefined("", "a macro with an empty body", line, col);
-                            usable = false;
-                        }
-                        (usable.then_some(expanded), Some(head.to_string()))
+                // An instruction: one word at the current address. A macro name takes the tokens after it as
+                // its arguments and is replaced by its body, wherever it stands (`pair one two | four`, observed).
+                let mut expanded: Vec<Tok> = Vec::new();
+                let (mut in_macro, mut usable, mut k) = (None, true, 0);
+                while k < toks.len() {
+                    let tok = &toks[k];
+                    k += 1;
+                    let Some(body) = asm.macros.get(&tok.s).filter(|_| asm.names.get(&tok.s) == Some(&Kind::Macro)).cloned() else {
+                        expanded.push(tok.clone());
+                        continue;
+                    };
+                    in_macro = in_macro.or(Some(tok.s.clone()));
+                    let placeholders = body.iter().filter(|t| is_placeholder(&t.s)).map(|t| t.s.as_bytes()[0]).collect::<HashSet<_>>().len();
+                    let call = &toks[k..(k + placeholders).min(toks.len())];
+                    k += call.len();
+                    if call.len() != placeholders {
+                        asm.rejected(&format!("the macro '{}' takes {placeholders} arguments, not {}", tok.s, call.len()), line, tok.col);
+                        usable = false;
                     }
-                };
+                    for arg in call {
+                        if is_literal_like(&arg.s) {
+                            asm.unverified("macro argument that is a literal", line, arg.col);
+                        } else if !is_name(&arg.s) {
+                            asm.rejected("a macro argument that is not a name or a number", line, arg.col);
+                            usable = false;
+                        }
+                    }
+                    if body.is_empty() {
+                        asm.undefined("", "the use of a macro with an empty body", line, tok.col);
+                        usable = false;
+                    }
+                    expanded.extend(body.iter().map(|t| if is_placeholder(&t.s) { call.get((t.s.as_bytes()[0] - b'a') as usize).unwrap_or(t).clone() } else { Tok { s: t.s.clone(), col: tok.col } }));
+                }
                 let hits_before = asm.hits.len();
-                let ast = match expanded {
-                    Some(toks) => asm.instruction(&toks, line).map_err(|e| match &in_macro {
+                let ast = match usable {
+                    true => asm.instruction(&expanded, line).map_err(|e| match &in_macro {
                         Some(name) => format!("{e} (in macro {name})"),
                         None => e,
                     })?,
-                    None => Ast::Unknown,
+                    false => Ast::Unknown,
                 };
-                asm.check_shape(&ast, in_macro.is_some(), line, col);
                 if let Some(name) = &in_macro {
                     for hit in &mut asm.hits[hits_before..] {
                         *hit += &format!(" (in macro {name})");
@@ -907,11 +812,7 @@ fn walk(asm: &mut Asm, source: &str) -> Result<Vec<Word>, Fatal> {
     for emit in &emits {
         let st = &stmts[emit.stmt];
         let hits_before = asm.hits.len();
-        let mut value = asm.eval(&emit.ast, st.line, emit.col);
-        if value.is_some_and(|v| v < -(1 << 31)) {
-            asm.undefined("b", "a negative result below -2^31", st.line, emit.col);
-            value = None;
-        }
+        let value = asm.eval(&emit.ast, true, st.line, emit.col);
         if let Some(name) = &emit.in_macro {
             for hit in &mut asm.hits[hits_before..] {
                 *hit += &format!(" (in macro {name})");

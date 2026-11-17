@@ -52,7 +52,7 @@ vcb run <board.vcb> --ticks <n>    simulate
 | `--timer-ticks <n>` | Ticks per Timer interval. Required when the board has Timer ink. |
 | `--stats` | Ticks, time and ticks per second at the end; a progress line every 5 seconds. |
 | `--force` | Allow overwriting output files. |
-| `--allow-unverified` | Run even if the board uses something with no observed fixture, and let the assembler use features only the manual states. |
+| `--allow-unverified` | Run even if the board uses something with no observed fixture. (For the assembler it changes nothing today: every feature has been observed.) |
 | `--asm <file.vcbasm>` | Assemble this program before tick 0 instead of the board's own. |
 | `--no-asm` | Assemble nothing; run the memory as the file holds it. |
 | `--engine v1` | Only v1 exists. |
@@ -81,7 +81,7 @@ For example, Advent of Code day 1 part 2 on the CPU (about 12 s; `AoC2025/` is a
 
 `vcb asm <board> [--asm <program>]` assembles without running. `-o <new.vcb>` writes the board with the assembled memory and the program as its Assembly Editor text, `--dump-vmem <file>` the memory, `--listing <file>` (`-` prints it) the address, word, line and statement of every stored word, then the labels and pointers. With no output it only checks the program.
 
-The assembler accepts what the game has been seen to assemble and refuses what it has been seen to reject (`the game rejects this`). Four macro features that only the manual states need `--allow-unverified`; anything else is refused with a letter of question 23 in `../specs/vcb-game-facts.md`. All such problems are listed in one run. A `.vcbasm` file may have Windows line ends. Note that the game rejects a `;` on the line of a macro definition.
+The assembler accepts what the game has been seen to assemble and refuses what it has been seen to reject (`the game rejects this`). A few corner cases the game has not been asked about are refused with a letter of question 23 in `../specs/vcb-game-facts.md`. All such problems are listed in one run. A `.vcbasm` file may have Windows line ends. Note that the game rejects a `;` on the line of a macro definition.
 
 Assemble onto a clean board: words of an earlier program that the new one does not overwrite stay, and the `assembled` line then says how many words it replaced.
 

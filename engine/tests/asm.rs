@@ -85,32 +85,7 @@ fn day_1_part_2_runs_to_the_right_answer() {
     assert_eq!(engine.vmem()[0x100], 0x16C7, "count");
 }
 
-/// What only the manual states (the probe cases for these fell to the game's "no ; on a macro line" rule):
-/// a gate hit naming the feature without the flag; with the flag, the manual's word.
-#[test]
-fn unverified_features_need_the_flag_and_follow_the_manual() {
-    let cases: &[(&str, &str, &[(usize, u32)])] = &[
-        ("macro without exactly two placeholders", "symbol s 5\nmacro m { a? }\norigin 0x10\nm s", &[(0x10, 5)]),
-        ("macro without exactly two placeholders", "macro m { 6 | 1 }\norigin 0x10\nm", &[(0x10, 7)]),
-        ("macro without exactly two placeholders", "macro m { a? | b? | c? }\norigin 0x10\nm 1 2 4", &[(0x10, 7)]),
-        ("macro braces without spaces", "macro m {a? | b?}\norigin 0x10\nm 1 2", &[(0x10, 3)]),
-        ("remac", "macro m { a? | b? }\nremac m { a? | b? | 4 }\norigin 0x10\nm 1 2", &[(0x10, 7)]),
-        ("unmac", "macro m { a? | b? }\nunmac m\norigin 0x10\n5", &[(0x10, 5)]),
-    ];
-    for (feature, source, words) in cases {
-        let refused = asm(source, false).expect_err(feature);
-        assert!(refused.contains(&format!("'{feature}' is not verified")), "{feature}: {refused}");
-        assert_eq!(&asm(source, true).unwrap_or_else(|e| panic!("{feature}: {e}")), words, "{feature}");
-    }
-
-    // With the flag a feature is reported once, however often it is used.
-    let mut b = board(32);
-    let report = assemble("macro m { a? }\nmacro n { a? }\norigin 0x10\nm 1; n 2", "t", &mut b, true).unwrap();
-    assert_eq!(report.unverified, ["macro without exactly two placeholders"]);
-    assert!(report.summary("t").ends_with("(unverified: asm macro without exactly two placeholders)"));
-}
-
-/// Forms the game refused on the `asm-reject` board (and the macro-line rule from the probe boards).
+/// Forms the game refused on the probe boards.
 #[test]
 fn what_the_game_rejects_is_refused() {
     let cases = [
@@ -118,12 +93,18 @@ fn what_the_game_rejects_is_refused() {
         "origin orgbase\n1",
         "origin 0x10\n0x1_0000_0000",
         "origin 0x10\n0xFFFFFFFF + 1",
+        "origin 0x10\n0x10000 * 0x10000",
+        "origin 0x10\n0 - 0x80000001",
+        "origin 0x10\n-0x80000001",
+        "origin 0x10\n0x80000000 << 1",
         "origin 0x10\n1 << 32",
         "origin 0x10\n1 << 1000",
+        "origin 0x10\n8 >> -1",
         "origin 0x10\n6 / 0",
         "origin 0x10\n6 % 0",
         "symbol a 1; symbol a 2",
         "pointer p 0x20 1; pointer p 0x21 1",
+        "macro m { a? | b? }\nmacro m { a? | b? }",
         "origin 0x10\n@ L\n1\n@ L\n2",
         "symbol a 1; pointer a 0x20 1",
         "symbol a 1\norigin 0x10\n@ a\n1",
@@ -133,10 +114,16 @@ fn what_the_game_rejects_is_refused() {
         "pointer p 0x20 1; unpoint p\norigin 0x10\np",
         "origin 0x10\na; symbol a 1",
         "origin 0x10\np; pointer p 0x20 1",
+        "unsymb a",
+        "unpoint p",
+        "unmac m",
+        "origin 0x10\n1 inline",
         "macro m { a? | b? }\norigin 0x10\nm 1",
         "macro m { a? | b? }\norigin 0x10\nm 1 2 4",
         "macro m { a? | b? }\norigin 0x10\nm ( 1 | 2 ) 4",
         "macro m { a? | b? }\norigin 0x10\n1 m",
+        "macro m { a? | c? }",
+        "macro n { a? | b? }\nmacro m { n | a? | b? }\norigin 0x10\nm 1 2",
         "origin 0x10\nmacro m {\na? | b?\n}",
         "macro m { a? | b? }; origin 0x10",
         "origin 0x10\n1|2",
@@ -147,6 +134,14 @@ fn what_the_game_rejects_is_refused() {
         "symbol 1a 1",
         "origin 0x10\n1 2 | 4",
         "resymb a 1",
+        "symbol a 1; repoint a 0x20 2",
+        "symbol a 0x10; origin a",
+        "symbol a 0x20; pointer p a 1",
+        "origin 0x100000",
+        "origin 0",
+        "pointer p 0 1",
+        "pointer p 0x100000 1",
+        "origin 0x10\r\n5",
         "origin 0x10\n1\n@ L",
     ];
     for source in cases {
@@ -159,44 +154,61 @@ fn what_the_game_rejects_is_refused() {
     assert!(asm("symbol a 1 + 1", true).is_err() && asm("origin 0x10\n(1", true).is_err());
 }
 
-/// The cases of facts question 23 that are still open: always a gate hit naming the letter.
+/// The few cases of facts question 23 that are still open: always a gate hit naming the letter.
 #[test]
 fn undefined_cases_are_always_gate_hits() {
     let cases: &[(&str, &str)] = &[
-        ("a", "origin 0x10\n1 | 2 + 3"),
-        ("a", "origin 0x10\n8 >> 1 & 3"),
-        ("b", "origin 0x10\n0x10000 * 0x10000"),
-        ("b", "origin 0x10\n-0x80000001"),
-        ("b", "origin 0x10\n0 - 0x80000001"),
-        ("c", "origin 0x10\n1 >> 32"),
-        ("d", "macro m { a? | b? }\nmacro m { a? | b? }"),
-        ("k", "macro n { a? | b? }\nmacro m { n | a? | b? }\norigin 0x10\nm 1 2"),
-        ("n", "origin 0x10000"),
-        ("n", "origin 0"),
-        ("n", "pointer p 0 1"),
-        ("n", "origin 0xFFFF\n1; 2"),
-        ("p", "pointer p 0x20 1; symbol b p"),
-        ("p", "symbol a 0x10; origin a"),
-        ("r", "origin 0x10\r\n5"),
-        ("s", "origin 0x10\n@ L\npointer p inline 5\n1"),
-        ("u", "origin 0x10\n-1 + 2"),
-        ("u", "origin 0x10\n-1 1"),
-        ("u", "origin 0x10\n1 + ~ 1"),
-        ("u", "origin 0x10\n~ -1"),
-        ("v", "pointer p 0x20 1; repoint p inline 2"),
-        ("v", "symbol a 1; repoint a 0x20 2"),
-        ("w", "origin 0x10\n8 / 2 / 2"),
-        ("w", "origin 0x10\n1 << 1 << 1"),
+        ("b", "origin 0x10\n(0xFFFFFFFF + 1) - 1"),
+        ("c", "origin 0x10\n0 << 64"),
+        ("c", "origin 0x10\n1 >> 64"),
+        ("n", "origin 0xFFFFF\n1; 2"),
+        ("p", "symbol a L\norigin 0x10\n@ L\n1"),
+        ("p", "pointer p 0x20 1; pointer q 0x21 p"),
+        ("u", "origin 0x10\n~ ~ 5"),
+        ("u", "origin 0x10\n- - 5"),
     ];
-    for letter in ["a", "b", "c", "d", "k", "n", "p", "r", "s", "u", "v", "w"] {
-        assert!(cases.iter().any(|(l, _)| *l == letter), "no case for 23{letter}");
-    }
     for (letter, source) in cases {
         for allow in [false, true] {
             let refused = asm(source, allow).expect_err(source);
             assert!(refused.contains(&format!("(facts question 23{letter})")), "23{letter} {source:?}: {refused}");
         }
     }
+}
+
+/// Rules the second probe board showed, as the game's own results.
+#[test]
+fn arithmetic_and_macros_follow_the_game() {
+    let cases: &[(&str, u32)] = &[
+        ("1 | 6 ^ 7 & 12 << 1 + 2 * 3", 7),
+        ("64 / 4 / 2", 8),
+        ("100 % 7 % 3", 2),
+        ("1 << 2 << 1", 8),
+        ("-1 + 2", 1),
+        ("-1 1", 0xFFFF_FFFF),
+        ("-2 * 3", 0xFFFF_FFFA),
+        ("-8 >> 1", 0xFFFF_FFFC),
+        ("-7 / 2", 0xFFFF_FFFD),
+        ("-7 % 3", 0xFFFF_FFFF),
+        ("~ -1 | 0x40", 0x40),
+        ("~ 1 + 1", 0xFFFF_FFFF),
+        ("~ (1 + 1)", 0xFFFF_FFFD),
+        ("- (1 + 1)", 0xFFFF_FFFE),
+        ("0xFFFF * 0x10000", 0xFFFF_0000),
+        ("0x80000000 >> 31", 1),
+        ("0x80000000 >> 33 | 0x40", 0x40),
+        ("0 << 32 | 0x40", 0x40),
+        ("-0x80000000", 0x8000_0000),
+    ];
+    for (expression, word) in cases {
+        assert_eq!(asm(&format!("origin 0x10\n{expression}"), false).unwrap_or_else(|e| panic!("{expression}: {e}")), [(0x10, *word)], "{expression}");
+    }
+    // A macro name takes the tokens after it as arguments and is replaced by its body, wherever it stands.
+    let macros = "macro pair { a? | b? }\nmacro none { 1 | 2 }\nmacro one {a?}\nmacro sum { a? + b? * 2 }\norigin 0x10\n";
+    assert_eq!(asm(&format!("{macros}pair 1 2 | 4; none; one 5; sum 1 2; 8 | pair 1 2"), false).unwrap(), [(0x10, 7), (0x11, 3), (0x12, 5), (0x13, 5), (0x14, 11)]);
+    // A label names the next instruction, also past an inline pointer; repoint can be inline.
+    assert_eq!(asm("origin 0x10\n@ L; pointer p inline 5; 1; L; repoint p inline 9; p", false).unwrap(), [(0x10, 5), (0x11, 1), (0x12, 0x11), (0x13, 9), (0x14, 0x13)]);
+    // A symbol may be valued by a pointer or by a label defined above it; a pointer by a symbol.
+    assert_eq!(asm("pointer p 0x30 7; symbol a p\norigin 0x10\n@ L; 1; symbol b L; a; b; pointer q 0x31 b", false).unwrap(), [(0x10, 1), (0x11, 0x30), (0x12, 0x10), (0x30, 7), (0x31, 0x10)]);
 }
 
 #[test]
@@ -215,20 +227,19 @@ fn nothing_outside_the_rules_assembles() {
 
 #[test]
 fn every_gate_hit_is_listed_and_a_real_error_stops() {
-    // An unverified feature, a rejected form and an open question, and no real error: all three are listed,
-    // and the board is unchanged.
+    // Two rejected forms and an open question, and no real error: all three are listed, and the board is unchanged.
     let mut b = board(32);
-    let error = assemble("macro m { a? }\norigin 0x10\nnope\n1 >> 32", "t", &mut b, false).unwrap_err();
+    let error = assemble("origin 0x10\nnope\n~ ~ 5\n6 / 0", "t", &mut b, false).unwrap_err();
     let lines: Vec<&str> = error.lines().collect();
     assert_eq!(lines.len(), 3, "{error}");
-    assert!(lines[0].starts_with("t:1:1: ") && lines[1].starts_with("t:3:1: ") && lines[2].starts_with("t:4:1: "), "{error}");
+    assert!(lines.iter().any(|l| l.starts_with("t:2:1: ")) && lines.iter().any(|l| l.starts_with("t:3:1: ")) && lines.iter().any(|l| l.starts_with("t:4:1: ")), "{error}");
     assert!(b.vmem.iter().all(|w| *w == 0));
 
     // A gate hit, then a real error: both, the gate hit first; nothing after the real error.
-    let error = asm("macro m { a? }\norigin 0x10\n(1\nnope", false).unwrap_err();
+    let error = asm("origin 0x10\n1 inline\n(1\nnope", false).unwrap_err();
     let lines: Vec<&str> = error.lines().collect();
     assert_eq!(lines.len(), 2, "{error}");
-    assert!(lines[0].contains("macro without exactly two placeholders") && lines[1].starts_with("t:3:1: "), "{error}");
+    assert!(lines[0].contains("a keyword inside an instruction") && lines[1].starts_with("t:3:1: "), "{error}");
 
     // Positions: after a `;`, and inside a macro use.
     assert!(asm("origin 0x10\n1; foo", false).unwrap_err().starts_with("t:2:4: "));
@@ -273,8 +284,8 @@ fn cases(program: &str) -> (String, Vec<(String, Vec<String>)>) {
 fn the_probe_saves_match_the_game() {
     let observed = |name: &str| std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/boards/{name}.asm-observed.md"))).unwrap();
     // A case the game accepted whose result the save cannot show stays an open question; it is cut from the text.
-    let still_open = ["n-beyond-address-bits"];
-    for name in ["asm-probe-32", "asm-probe-16", "asm-reject"] {
+    let still_open = ["u-not-not", "n-past-the-last-word"];
+    for name in ["asm-probe-32", "asm-probe-16", "asm-reject", "asm-probe2"] {
         let (board, game) = (fixture(&format!("{name}.vcb")), fixture(&format!("{name}.assembled.vcb")));
         // The asm-reject save has one more Write pixel than its board (drawn by accident during the session).
         let stray_pixels = board.inks.iter().zip(&game.inks).filter(|(a, b)| a != b).count();
@@ -289,7 +300,9 @@ fn the_probe_saves_match_the_game() {
         let report = assemble(&text, name, &mut assembled, false).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert!(report.unverified.is_empty());
         let (from, to) = (1, game.settings.vmem_settings[15] as usize);
-        let wrong: Vec<String> = (from..=to).filter(|a| assembled.vmem[*a] != game.vmem[*a]).map(|a| format!("{a:#X}: engine {:#X}, game {:#X}", assembled.vmem[a], game.vmem[a])).collect();
+        // The words of the still-open cases: `~ ~ 5` (stored -5) and the last VMem word, written by both `n-` cases.
+        let unexplained = |a: &usize| name == "asm-probe2" && [0x380, 0x381, 0xFFFFF].contains(a);
+        let wrong: Vec<String> = (from..=to).filter(|a| assembled.vmem[*a] != game.vmem[*a] && !unexplained(a)).map(|a| format!("{a:#X}: engine {:#X}, game {:#X}", assembled.vmem[a], game.vmem[a])).collect();
         assert!(wrong.is_empty(), "{name}: {wrong:?}");
 
         // Every case the user had to comment out is refused by the engine too, and its message is on record.
@@ -304,7 +317,7 @@ fn the_probe_saves_match_the_game() {
                 assert!(checklist.lines().any(|l| l.starts_with(&format!("- {id}: ")) && l.len() > id.len() + 6), "{name}: no message for {id}");
             }
         }
-        assert_eq!(rejected, if name == "asm-reject" { 36 } else { 7 }, "{name}");
+        assert_eq!(rejected, match name { "asm-reject" => 36, "asm-probe2" => 19, _ => 7 }, "{name}");
     }
 
     // External Editing: the game assembled the CRLF file beside the board, not the board's own text.
@@ -315,6 +328,13 @@ fn the_probe_saves_match_the_game() {
     assemble(&file.replace("\r\n", "\n"), "asm-external", &mut assembled, false).unwrap();
     assert!((1..=8191).all(|a| assembled.vmem[a] == game.vmem[a]) && game.vmem[0x1010] == 0xE7E1 && game.vmem[0x1000] == 0);
     assert!(observed("asm-external").contains("Observed by: K") && observed("asm-novmem").contains("simulation start in the end (yes/no): yes"));
+
+    // A carriage return in the editor text: the game showed an error and did not start.
+    let crfield = fixture("asm-crfield.vcb");
+    assert!(crfield.assembly.contains("\r\n") && observed("asm-crfield").contains("INVALID_TOKEN"));
+    assert!(assemble(&crfield.assembly, "asm-crfield", &mut crfield.clone(), true).unwrap_err().contains("the game rejects this"));
+    // External Editing on and no file: "External assembly file not found" (the engine's side is a command-line test).
+    assert!(fixture("asm-external-missing.vcb").assembly_is_external && observed("asm-external-missing").contains("External assembly file not found"));
 }
 
 #[test]
@@ -411,10 +431,10 @@ fn vcb_asm_never_overwrites_an_input_or_leaves_half_a_result() {
     assert!(vcb(&["asm", &b, "--listing", &p("old.txt"), "--force"]).status.success());
 
     // A program with a gate hit and a real error: both are printed, and no output file appears.
-    std::fs::write(p("bad.vcbasm"), "macro m { a? }\norigin 0x10\n(1\n").unwrap();
+    std::fs::write(p("bad.vcbasm"), "nope\norigin 0x10\n(1\n").unwrap();
     let out = vcb(&["asm", &b, "--asm", &p("bad.vcbasm"), "-o", &p("never.vcb"), "--listing", &p("never.txt")]);
     let stderr = text(&out.stderr);
-    assert!(!out.status.success() && stderr.contains("bad.vcbasm:1:1: 'macro without exactly two placeholders'") && stderr.contains("bad.vcbasm:3:1: "), "{stderr}");
+    assert!(!out.status.success() && stderr.contains("bad.vcbasm:1:1: the name 'nope' must be defined") && stderr.contains("bad.vcbasm:3:1: "), "{stderr}");
     assert!(!d.join("never.vcb").exists() && !d.join("never.txt").exists() && !d.join("never.vcb.part").exists());
 
     std::fs::write(p("latin1.vcbasm"), b"origin 0x10\n1 # \xff\n").unwrap();
@@ -434,9 +454,9 @@ fn vcb_asm_uses_the_external_file_when_external_editing_is_on() {
         let out = vcb(&["asm", board_path, "--listing", listing.to_str().unwrap(), "--force"]);
         (out.status.success(), text(&out.stdout) + &text(&out.stderr))
     };
-    // What the game does without the file is not known.
+    // Without the file the game shows "External assembly file not found".
     let (ok, said) = run();
-    assert!(!ok && said.contains("x.vcbasm") && said.contains("23r"), "{said}");
+    assert!(!ok && said.contains("x.vcbasm") && said.contains("the game rejects this"), "{said}");
 
     // With the file there, it is assembled and the board's own text is not (as the game does).
     std::fs::write(d.join("x.vcbasm"), "origin 0x10\r\n2\r\n").unwrap();
@@ -479,14 +499,10 @@ fn vcb_run_assembles_the_boards_program_like_the_game() {
     std::fs::write(p("both.toml"), format!("asm = {:?}\nno-asm = true\n", p("prog.vcbasm"))).unwrap();
     assert!(!run(&["--config", &p("both.toml")]).0);
 
-    // A gate hit stops the run before tick 0; with the flag the feature is named on both lines.
-    std::fs::write(p("one.vcbasm"), "macro m { a? }\norigin 0x10\nm 5\n").unwrap();
-    let (ok, stdout, stderr) = run(&["--asm", &p("one.vcbasm")]);
-    assert!(!ok && stdout.is_empty() && stderr.contains("one.vcbasm:1:1: 'macro without exactly two placeholders' is not verified"), "{stderr}");
-    let (ok, stdout, stderr) = run(&["--asm", &p("one.vcbasm"), "--allow-unverified"]);
-    assert!(ok && stderr.contains("warning: asm macro without exactly two placeholders is not verified"), "{stderr}");
-    let note = "(unverified: asm macro without exactly two placeholders)";
-    assert!(stdout.contains(&format!("{note}\nstopped at tick 1: max-ticks {note}\n")), "{stdout}");
+    // A program the game would reject stops the run before tick 0.
+    std::fs::write(p("bad.vcbasm"), "origin 0x10\nnope\n").unwrap();
+    let (ok, stdout, stderr) = run(&["--asm", &p("bad.vcbasm")]);
+    assert!(!ok && stdout.is_empty() && stderr.contains("bad.vcbasm:2:1: the name 'nope' must be defined before it is used: the game rejects this"), "{stderr}");
 
     // The program file cannot be an output, and no input is changed.
     let (ok, _, stderr) = run(&["--asm", &p("prog.vcbasm"), "--dump-vmem", &p("prog.vcbasm"), "--force"]);
