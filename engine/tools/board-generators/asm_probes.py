@@ -124,6 +124,112 @@ REJECT = [
 ]
 
 
+# ---- The second round (asm-probe2): everything the first round left open. ----
+# A macro definition must be alone on its line, so these cases have several lines.
+PROBE2 = [
+    ("v0-control", "{O} one two"),
+    ("u-macro-no-placeholder", "macro m0a { one | two }\n{O} m0a"),
+    ("u-macro-one-placeholder", "macro m1a { a? | one }\n{O} m1a two"),
+    ("u-macro-three-placeholders", "macro m3a { a? | b? | c? }\n{O} m3a one two four"),
+    ("u-macro-braces", "macro mb1 {a? | b?}\n{O} mb1 one two"),
+    ("u-remac", "macro rm1 { a? | b? }\nremac rm1 { a? | b? | four }\n{O} rm1 one two"),
+    ("u-unmac", "macro um1 { a? | b? }\nunmac um1\n{O} 5"),
+    ("z-unmac-then-macro", "macro um2 { a? | b? }\nunmac um2\nmacro um2 { a? | b? | four }\n{O} um2 one two"),
+    ("z-unsymb-then-symbol", "symbol rr1 1; unsymb rr1; symbol rr1 2; {O} rr1"),
+    ("z-macro-other-operators", "macro mo1 { a? + b? * 2 }\n{O} mo1 one two"),
+    ("z-macro-comment-after", "macro mc1 { a? | b? } # a comment after a macro definition\n{O} mc1 one two"),
+    ("z-macro-skips-a-letter", "macro ms1 { a? | c? }\n{O} ms1 one two"),
+    ("z-macro-empty-body", "macro me1 { }\n{O} 5"),
+    ("z-macro-use-in-expression", "{O} pair one two | four"),
+    ("d-macro-twice", "macro d3 { a? | b? }\nmacro d3 { a? | b? | four }\n{O} d3 one two"),
+    ("k-macro-in-macro", "macro k2 { pair | a? | b? }\n{O} k2 one two"),
+    ("k-macro-in-macro-with-arguments", "macro k3 { pair a? b? }\n{O} k3 one two"),
+    ("z-unsymb-of-new-name", "unsymb nn1; {O} 5"),
+    ("z-unpoint-of-new-name", "unpoint nn2; {O} 5"),
+    ("z-unmac-of-new-name", "unmac nn3\n{O} 5"),
+    ("z-keyword-in-instruction", "{O} one inline"),
+    ("p-symbol-valued-by-pointer", "pointer pp1 {B8} 7; symbol ps1 pp1; {O} ps1"),
+    ("p-symbol-valued-by-label", "{O} @ PL1; 1; symbol ps2 PL1; ps2"),
+    ("p-origin-by-symbol", "symbol po1 {B}; origin po1; {M}; 5"),
+    ("p-pointer-address-by-symbol", "symbol pa1 {B8}; pointer pp2 pa1 7; {O} pp2"),
+    ("p-pointer-value-by-symbol", "pointer pp3 {B8} six; {O} pp3"),
+    ("s-label-then-inline-pointer", "{O} @ SI1; pointer si1 inline 5; 1; SI1"),
+    ("v-repoint-inline", "pointer vi1 {B8} 7; {O} repoint vi1 inline 9; vi1"),
+    ("v-repoint-of-symbol", "symbol vs1 1; repoint vs1 {B8} 2; {O} vs1"),
+    ("u-negative-operand-add", "{O} -1 + 2"),
+    ("u-negative-operand-or", "{O} -1 1"),
+    ("u-negative-operand-multiply", "{O} -2 * 3"),
+    ("u-negative-intermediate", "{O} (1 - 2) + 5"),
+    ("u-negative-shift-right", "{O} -8 >> 1"),
+    ("u-negative-divide", "{O} -7 / 2"),
+    ("u-negative-modulo", "{O} -7 % 3"),
+    ("u-not-of-negative", "{O} ~ -1"),
+    ("u-not-then-add", "{O} ~ 1 + 1"),
+    ("u-add-then-not", "{O} 1 + ~ 1"),
+    ("u-not-parenthesis", "{O} ~ (1 + 1)"),
+    ("u-not-not", "{O} ~ ~ 5"),
+    ("u-minus-name", "{O} - six"),
+    ("u-minus-parenthesis", "{O} - (1 + 1)"),
+    ("b-product-fits", "{O} 0xFFFF * 0x10000"),
+    ("b-product-too-wide", "{O} 0x10000 * 0x10000"),
+    ("b-below-minus-2-to-31", "{O} 0 - 0x80000001"),
+    ("b-literal-below-minus-2-to-31", "{O} -0x80000001"),
+    ("b-literal-minus-2-to-32", "{O} -0xFFFFFFFF"),
+    ("b-shift-out-the-top", "{O} 0x80000000 << 1"),
+    ("c-shift-right-by-31", "{O} 0x80000000 >> 31"),
+    ("c-shift-right-by-32", "{O} 0x80000000 >> 32"),
+    ("c-shift-right-by-33", "{O} 0x80000000 >> 33"),
+    ("c-shift-left-zero-by-32", "{O} 0 << 32"),
+    ("c-shift-by-negative", "{O} 8 >> -1"),
+    ("w-divide-chain", "{O} 64 / 4 / 2"),
+    ("w-modulo-chain", "{O} 100 % 7 % 3"),
+    ("w-shift-left-chain", "{O} 1 << 2 << 1"),
+    ("w-add-chain", "{O} 1 + 2 + 3"),
+    ("a-all-levels", "{O} 1 | 6 ^ 7 & 12 << 1 + 2 * 3"),
+    ("a-parentheses-nested", "{O} ((1 + 2) * (3 + 4)) - 1"),
+    ("n-beyond-12-address-bits", "origin 0x1800; {M}; 5"),
+    ("n-last-word", "origin 0xFFFFF; {M}"),
+    ("n-past-the-last-word", "origin 0xFFFFF; 0xEEE1; 0xEEE2"),
+    ("n-origin-beyond-vmem", "origin 0x100000; 0xEEE3"),
+    ("n-pointer-beyond-vmem", "pointer nb1 0x100000 7; {O} 5"),
+    ("n-origin-0", "origin 0; 0xAAA0; 0xAAA1"),
+    ("n-pointer-at-0", "pointer nz1 0 0xAAA2; {O} nz1"),
+]
+
+# Every pair of operators from different precedence levels of C, in both orders, with operands for which the
+# two readings differ; and the pairs within one level, where the question is the direction.
+NAMES = {"*": "mul", "/": "div", "%": "mod", "+": "add", "-": "sub", "<<": "shl", ">>": "shr", "&": "and", "^": "xor", "|": "or"}
+LEVELS = [["*", "/", "%"], ["+", "-"], ["<<", ">>"], ["&"], ["^"], ["|"]]
+
+
+def value(op, a, b):
+    if a is None or b is None or (op in "/%" and b == 0) or (op in ("<<", ">>") and b > 31):
+        return None
+    v = eval(f"a {op.replace('/', '//')} b")
+    return v if 0 <= v < 2**32 else None
+
+
+def operands(a, b):
+    """Small x, y, z for which (x a y) b z and x a (y b z) are both valid and differ; None when the two
+    readings can never differ (x * y << z)."""
+    for x, y, z in ((x, y, z) for x in (1, 2, 3, 5, 7, 12, 20, 100) for y in (1, 2, 3, 5, 6, 9) for z in (1, 2, 3, 4, 7)):
+        left, right = value(b, value(a, x, y), z), value(a, x, value(b, y, z))
+        if left is not None and right is not None and left != right:
+            return x, y, z
+    return None
+
+
+for i, level in enumerate(LEVELS):
+    for a in level:
+        for b in (op for other in LEVELS[i:] for op in other if op != a):
+            if b in level and level.index(b) < level.index(a):
+                continue
+            for first, second in ((a, b), (b, a)):
+                if operands(first, second) is None:
+                    continue
+                x, y, z = operands(first, second)
+                PROBE2.append((f"a-{NAMES[first]}-{NAMES[second]}", f"{{O}} {x} {first} {y} {second} {z}"))
+
 def program(cases, first_block, marker_base):
     lines = [PRELUDE]
     for k, (case, text) in enumerate(cases):
@@ -164,3 +270,17 @@ write("asm-external.txt", board(32, "23r", "assembly = asm-external-field.vcbasm
 # VMem disabled: does the simulation start at all?
 write("asm-novmem.vcbasm", "# case r-vmem-disabled\norigin 0x1000; 1\n")
 write("asm-novmem.txt", board(0, "23r", "assembly = asm-novmem.vcbasm\n"))
+
+# The second round. 12 address bits, so most of VMem is "beyond the address bits"; blocks start at 0x100.
+# Persistent Memory is set to all of VMem, to see words stored beyond the address bits.
+write("asm-probe2.vcbasm", program(PROBE2, 0x100, 0xC000))
+write("asm-probe2.txt", f"covers = 23\nvmem.address = 12,40,2,2,0\nvmem.content = 32,70,6,2,0\npersistent = 0,1048575\nword.0x0FFF = 0x0BAD\nassembly = asm-probe2.vcbasm\n\nLW5RE\n")
+
+# A carriage return in the Assembly Editor text itself.
+write("asm-crfield.vcbasm", "# case r-carriage-return-in-the-editor-text\norigin 0x1000\n0xC4C1\n0xC4C2\n")
+write("asm-crfield.txt", board(32, "23r", "assembly = asm-crfield.vcbasm\nassembly_field_crlf = on\n"))
+
+# External Editing on, and no .vcbasm file (it is deleted after `vcb gen`); the board's own text is there.
+write("asm-external-missing-field.vcbasm", "# case r-external-file-missing\norigin 0x1000; 0xF1E1\n")
+write("asm-external-missing-file.vcbasm", "origin 0x1010\n0xE7E1\n")
+write("asm-external-missing.txt", board(32, "23r (the .vcbasm file is missing on purpose)", "assembly = asm-external-missing-field.vcbasm\nassembly_external = asm-external-missing-file.vcbasm\n"))
