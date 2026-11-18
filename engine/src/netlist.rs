@@ -15,6 +15,7 @@ pub enum Kind {
     Pin,
 }
 
+#[derive(Clone)]
 pub struct Components {
     pub width: usize,
     pub height: usize,
