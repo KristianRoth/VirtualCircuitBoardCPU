@@ -37,7 +37,7 @@ A single user (the author) runs it locally from the CLI. There is no auth or mul
 
 ### Later / TODO
 - VInput (keyboard) and VDisplay.
-- **v2 engine:** optimised behind the same `Simulation` trait and CLI (multithreading, cache reordering, anything profiling shows). It must stay tick-exact and is checked against v1 with differential tests.
+- **v2 engine:** specified in `vcb-engine-v2.md` (2026-11-18), which replaces what this spec says about v2. In short: as fast as possible on one core, the same observable events as v1 (VMem accesses and Breakpoints with their ticks, the stop, the final memory), checked against v1 only.
 - Viewer.
 
 ## Behavior
@@ -95,7 +95,7 @@ vcb run <board.vcb>
   --seed <n>
   --clock-interval <n> --timer-interval <n>
   --stats                        # final stats plus progress every 5 s
-  --engine v1|v2                 # v2 is an error until it exists
+  --engine v1|v2                 # see vcb-engine-v2.md; v2 is an error until its Scaffolding milestone
 ```
 The assembler spec adds `vcb asm`, and `--asm <file>` and `--no-asm` on `vcb run`: once it is built, `vcb run` assembles the board's assembly text before tick 0, as the game does. The v1 spec adds `vcb info`, `vcb gen`, `--probe`, `--render`, `--timer-ticks` and `--allow-unverified`, and lists where v1 overrides this spec ("Overrides of the framework spec").
 - `run.toml` uses the long flag names as keys.
@@ -108,7 +108,7 @@ Library:
   - `step()`
   - `run_until(&StopSet) -> StopReport`: each engine checks the stops inside its own loop.
   - `vmem()`
-  - `state() -> Vec<bool>` in canonical component order. Used by the v1/v2 differential tests.
+  - `state() -> Vec<bool>` in canonical component order. (v1 only. The v2 tests compare events, not states; see `vcb-engine-v2.md`.)
 
 ## Integrations
 - **Ink semantics:** the in-game User Guide, the VCB wiki and community docs, confirmed by the user's test boards. Those boards are the only source of ground truth.
@@ -124,8 +124,8 @@ Input files are trusted local files. The engine still decodes with bounds: check
 
 ## Performance
 - v1: no speed target. Correctness comes first.
-- v2: as fast as possible. It is compared with v1 and the game, and `--stats` reports TPS.
-- Benchmark method: the median of 5 runs of 10⁶ ticks on a named fixture.
+- v2: as fast as possible. It is compared with v1 only, by the rule in `vcb-engine-v2.md`; `--stats` reports TPS.
+- Benchmark method for v2: the one in `vcb-engine-v2.md` (two builds interleaved on the Advent of Code programs). The older method here, the median of 5 runs of 10⁶ ticks on a named fixture, is not used.
 
 ## Acceptance criteria
 Reader and errors
@@ -162,7 +162,7 @@ Stops and outputs
 
 Speed and v2
 - [ ] `--stats` reports ticks, time and TPS.
-- [ ] (v2) A seeded random-board generator produces at least 1000 boards. On those, plus every fixture, v1 and v2 states are equal after every tick for 10,000 ticks, and a failing case prints its seed.
+- [ ] (v2) Replaced by the acceptance criteria of `vcb-engine-v2.md`: at least 1,000 seeded random circuits plus every fixture, compared with v1 in events, stop and final VMem; a failing case prints its seed.
 
 ## Rollout
 0. **Prerequisites in the game (owner: the user):**
@@ -177,7 +177,8 @@ Speed and v2
    - **D. CPU subsets:** the ALU on its own, then the CPU running tiny hand-encoded programs (store a constant; a loop of 10), written into `vmem_data` by script.
    - **E. Final boss:** the AoC day 1 board. Done 2026-11-16 with the program assembled by the game.
 4. **The assembler:** `vcb-assembler.md`, milestones A1–A3.
-5. **Later:** the v2 engine with differential tests, then VInput/VDisplay and a viewer.
+5. **The v2 engine:** `vcb-engine-v2.md` (Profile, Scaffolding, then stages of measured attempts).
+6. **Later:** VInput/VDisplay and a viewer.
 
 ## Open questions
 All open questions are about the game and live in the facts file (questions 3, 4, 6–23). References to "open question N" in this spec mean that list. Questions 1, 2 and 5 are answered there.
@@ -198,7 +199,7 @@ All open questions are about the game and live in the facts file (questions 3, 4
 - Location → `./engine/` in this repo.
 - Interface → library crate plus a thin CLI.
 - Configuration → CLI flags plus a TOML run file, over the `.vcb` settings.
-- Performance strategy → v1 is a simple single-threaded event-driven engine; v2 is optimised and multithreaded behind the same CLI.
+- Performance strategy → v1 is a simple single-threaded event-driven engine; v2 is optimised behind the same CLI (single-threaded too, decided 2026-11-18 in `vcb-engine-v2.md`).
 - v1 vs v2 → differential tests.
 - Write-back → first required exact resume for every ink. **Dropped on 2026-11-13** after testing showed saves hold no live state and the game always simulates from reset.
 - Unexpected input → fail loudly with the location.

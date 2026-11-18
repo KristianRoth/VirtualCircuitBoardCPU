@@ -98,6 +98,7 @@ impl Components {
 
         // Step 1: the game replaces whatever is drawn at the pin positions with pin latches.
         let mut pin_pixels: [Vec<usize>; 2] = Default::default();
+        let mut pin_rows: Vec<(usize, usize)> = Vec::new(); // (a pin's first pixel, another pixel of it)
         if board.settings.vmem_enabled {
             let s = &board.settings.vmem_settings;
             for (group, name, base, max_bits) in [(0, "address", 0, 20), (1, "content", 7, 32)] {
@@ -106,20 +107,28 @@ impl Components {
                 if !(4..=max_bits).contains(&bits) {
                     return Err(format!("vmem_settings: {bits} {name} bits, expected 4 to {max_bits}"));
                 }
-                if (size_x, size_y) != (1, 1) {
-                    return Err(format!("vmem_settings: {name} pin size {size_x}x{size_y} is not supported, only 1x1 has been observed"));
+                // Model (question 4): a pin 1 wide and n high is one pin over the n pixels downwards from its position,
+                // as the game's 32-bit sample computer draws its pin latches. Wider pins have not been seen.
+                if size_x != 1 || size_y < 1 {
+                    return Err(format!("vmem_settings: {name} pin size {size_x}x{size_y} is not supported, only a width of 1 has been seen"));
                 }
                 for k in 0..bits {
-                    let (px_x, px_y) = (x - offset_x * k, y + offset_y * k);
-                    if px_x < 0 || px_y < 0 || px_x >= w as i64 || px_y >= h as i64 {
-                        return Err(format!("vmem_settings: {name} pin {k} at {px_x},{px_y} is outside the board"));
+                    for row in 0..size_y {
+                        let (px_x, px_y) = (x - offset_x * k, y + offset_y * k + row);
+                        if px_x < 0 || px_y < 0 || px_x >= w as i64 || px_y >= h as i64 {
+                            return Err(format!("vmem_settings: {name} pin {k} at {px_x},{px_y} is outside the board"));
+                        }
+                        let i = px_y as usize * w + px_x as usize;
+                        if px[i] == Px::Pin {
+                            return Err(format!("vmem_settings: {name} pin {k} at {px_x},{px_y} is on top of another pin"));
+                        }
+                        px[i] = Px::Pin;
+                        if row == 0 {
+                            pin_pixels[group].push(i);
+                        } else {
+                            pin_rows.push((i - row as usize * w, i));
+                        }
                     }
-                    let i = px_y as usize * w + px_x as usize;
-                    if px[i] == Px::Pin {
-                        return Err(format!("vmem_settings: {name} pin {k} at {px_x},{px_y} is on top of another pin"));
-                    }
-                    px[i] = Px::Pin;
-                    pin_pixels[group].push(i);
                 }
             }
         }
@@ -131,6 +140,9 @@ impl Components {
             2 => (i % w > 0).then(|| i - 1),
             _ => (i >= w).then(|| i - w),
         };
+        for (first, other) in pin_rows {
+            union(&mut parent, first, other);
+        }
 
         // Rules 1-3: touching pixels of the same kind are one entity. One Wireless ink is one component board-wide.
         let mut first_wireless = [None; 4];
@@ -173,7 +185,9 @@ impl Components {
                     const NAMES: [&str; 4] = ["left to right", "top to bottom", "right to left", "bottom to top"];
                     for d in 0..4 {
                         let Some(behind) = step(i, (d + 2) % 4).filter(|n| px[*n].joinable()) else { continue };
-                        let same_ink = |j: Option<usize>| j.filter(|j| px[*j].joinable() && key(board.inks[*j]) == key(board.inks[behind]));
+                        // Model (question 12): a bus at a tunnel is matched by its own colour, although touching bus pixels of any
+                        // colour are one bus. The game's compact 32-bit sample computer needs it: a Bus 4 pair with Bus 3 between.
+                        let same_ink = |j: Option<usize>| j.filter(|j| px[*j].joinable() && board.inks[*j] == board.inks[behind]);
                         let mut q = step(i, d);
                         loop {
                             let Some(t) = q else {
