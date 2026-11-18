@@ -1,5 +1,6 @@
 // Colours the names a .vcbasm program defines, wherever they are used: symbols, pointers, macros and
-// labels each get their own token type. The plain syntax colouring is in syntaxes/vcbasm.tmLanguage.json.
+// labels each get their own token type. It also provides go-to-definition for those names.
+// The plain syntax colouring is in syntaxes/vcbasm.tmLanguage.json.
 
 const TOKEN_TYPES = ['vcbSymbol', 'vcbPointer', 'vcbMacro', 'vcbLabel'];
 const DEFINES = { symbol: 'vcbSymbol', resymb: 'vcbSymbol', pointer: 'vcbPointer', repoint: 'vcbPointer', macro: 'vcbMacro', remac: 'vcbMacro' };
@@ -43,6 +44,16 @@ function classify(text) {
   return tokens;
 }
 
+/** Where the name at (line, column) is defined: every definition of it, as { line, start, length }. */
+function definitionsAt(text, line, column) {
+  const tokens = classify(text);
+  const lines = text.split(/\r?\n/);
+  const here = tokens.find((t) => t.line === line && t.start <= column && column <= t.start + t.length);
+  if (!here) return [];
+  const name = lines[line].substr(here.start, here.length);
+  return tokens.filter((t) => t.declaration && lines[t.line].substr(t.start, t.length) === name);
+}
+
 function activate(context) {
   const vscode = require('vscode');
   const legend = new vscode.SemanticTokensLegend(TOKEN_TYPES, ['declaration']);
@@ -56,6 +67,15 @@ function activate(context) {
     },
   };
   context.subscriptions.push(vscode.languages.registerDocumentSemanticTokensProvider({ language: 'vcbasm' }, provider, legend));
+  // Cmd+click (or F12) on a name goes to the symbol, pointer, macro or label line that defines it.
+  const definitions = {
+    provideDefinition(document, position) {
+      return definitionsAt(document.getText(), position.line, position.character).map(
+        (t) => new vscode.Location(document.uri, new vscode.Range(t.line, t.start, t.line, t.start + t.length))
+      );
+    },
+  };
+  context.subscriptions.push(vscode.languages.registerDefinitionProvider({ language: 'vcbasm' }, definitions));
 }
 
-module.exports = { activate, deactivate() {}, classify };
+module.exports = { activate, deactivate() {}, classify, definitionsAt };
