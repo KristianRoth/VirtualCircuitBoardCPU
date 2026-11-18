@@ -112,7 +112,7 @@ Accepted, with these results:
 - A board with VMem disabled and assembly text starts normally.
 
 Rejected by the game (the engine refuses them too):
-- **A `;` on the line of a macro definition.** A macro use may be followed by `;`.
+- **A `;` after the closing brace of a macro definition.** A `;` inside the braces is part of the body (see "Macros of several statements" below). A macro use may be followed by `;`.
 - A carriage return in the Assembly Editor text. External Editing with the `.vcbasm` file missing.
 - A value outside -2^31 to 2^32-1: a literal, or the result of `+`, `-`, `*` or `<<`. A shift by a negative count. Division or modulo by zero.
 - An address that is 0, beyond `0xFFFFF`, or not a literal (`origin` and the pointer address take no names).
@@ -138,6 +138,13 @@ What is left of question 23, each a gate hit naming its letter:
 
 Also without an observed rule: `remac` of a name that is not a macro, and the use of a macro with an empty body.
 
+**Macros of several statements** (observed 2026-11-18). The game's compact 32-bit sample computer defines `macro printb {lia StringStarta?; psh; cal PrintStringMem; @ StringStarta?; jmp StringEnda?}` and `macro printd {end_of_string; @ StringEnda?}` and uses them as `printb 0` … `printd 0`. The user's save of that board after assembling in the game (`32-bit-cpu-compact-assembled.vcb`; the game's own board, so not in the repository) holds exactly the words of the body written out by hand: 638 words equal, and five more that the running program wrote. So:
+- a macro body may hold several statements separated by `;`, and labels (`@`) among them;
+- a placeholder may be glued to the end of a name: `StringStarta?` with the argument `0` is the name `StringStart0`;
+- the earlier rejection ("Unexpected statement terminator (;) in a line with a macro definition") was for a `;` after the closing brace.
+
+Not observed, and gate hits in the engine: such a macro used inside an expression or with tokens before it, and a directive (`symbol`, `origin`, …) inside a body.
+
 ## Behavior
 ### Which source
 In this order:
@@ -152,8 +159,8 @@ In this order:
 
 ### Assembling
 1. Check the source: valid UTF-8, at most 16 MiB, no control characters other than tab and newline.
-2. Remove each comment (from `#` to the end of its line). Then split into statements at newlines and `;`. Keep each statement's line and column in the original text. A line with a macro definition may not contain a `;`.
-3. Preprocess: handle `macro`/`remac`/`unmac` in source order. In an instruction, a macro name takes the tokens after it as its arguments and is replaced by its body, placeholders filled in. A macro name inside a macro body is rejected.
+2. Remove each comment (from `#` to the end of its line). Then split into statements at newlines and `;`. Keep each statement's line and column in the original text. A line with a macro definition may contain a `;` only inside the braces.
+3. Preprocess: handle `macro`/`remac`/`unmac` in source order. A use of a macro whose body holds a `;` is replaced by the body's statements first (labels and instructions; the use must be the whole statement). In an instruction, a macro name takes the tokens after it as its arguments and is replaced by its body, placeholders filled in. A macro name inside a macro body is rejected.
 4. First pass, in source order: apply directives; give every instruction and pointer its address; give each pending label the address of the next instruction, also across `origin` and pointers. A label with no instruction after it is rejected.
 5. Second pass, in source order: evaluate every instruction with the symbols and pointers as defined at that point, and the labels of the whole program. Arithmetic is signed with C's precedence. It is checked: a value outside the 32-bit range, a bad shift or a zero divisor is a rejection or a gate hit, never a panic. Parentheses nest at most 64 deep.
 6. Write each value as a 32-bit word (a negative result in two's complement). When two statements store to one address the later one wins. Other words are left as they are. Word 0 is never written.

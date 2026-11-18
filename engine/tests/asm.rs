@@ -205,6 +205,19 @@ fn arithmetic_and_macros_follow_the_game() {
     // A macro name takes the tokens after it as arguments and is replaced by its body, wherever it stands.
     let macros = "macro pair { a? | b? }\nmacro none { 1 | 2 }\nmacro one {a?}\nmacro sum { a? + b? * 2 }\norigin 0x10\n";
     assert_eq!(asm(&format!("{macros}pair 1 2 | 4; none; one 5; sum 1 2; 8 | pair 1 2"), false).unwrap(), [(0x10, 7), (0x11, 3), (0x12, 5), (0x13, 5), (0x14, 11)]);
+    // A body of several statements, with labels and a placeholder glued to a name, as in the game's compact
+    // sample computer: `printb 0` there stores `lia StringStart0; psh; cal PrintStringMem; jmp StringEnd0`.
+    let multi = "macro begin {Starta?; 7; @ Starta?; Enda?}\nmacro end {9; @ Enda?}\norigin 0x10\nbegin 0; 5; end 0; 6; begin x; end x; 3";
+    assert_eq!(asm(multi, false).unwrap(), [(0x10, 0x12), (0x11, 7), (0x12, 0x15), (0x13, 5), (0x14, 9), (0x15, 6), (0x16, 0x18), (0x17, 7), (0x18, 0x1A), (0x19, 9), (0x1A, 3)]);
+    for (source, message) in [
+        ("macro two {1; 2}; 3", "a ; on the line of a macro definition"),
+        ("macro two {a?; 2}\norigin 0x10\ntwo", "takes 1 arguments, not 0"),
+        ("macro two {1; 2}\norigin 0x10\n4 | two", "used inside an expression"),
+        ("macro two {1; origin 5}\norigin 0x10\ntwo", "a directive inside a macro body"),
+        ("macro one {1}\nmacro two {one; 2}\norigin 0x10\ntwo", "a macro name inside a macro body"),
+    ] {
+        assert!(asm(source, false).unwrap_err().contains(message), "{source}");
+    }
     // A label names the next instruction, also past an inline pointer; repoint can be inline.
     assert_eq!(asm("origin 0x10\n@ L; pointer p inline 5; 1; L; repoint p inline 9; p", false).unwrap(), [(0x10, 5), (0x11, 1), (0x12, 0x11), (0x13, 9), (0x14, 0x13)]);
     // A symbol may be valued by a pointer or by a label defined above it; a pointer by a symbol.
