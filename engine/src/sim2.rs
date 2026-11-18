@@ -7,8 +7,59 @@ use crate::ink::Ink;
 use crate::netlist::{Components, Kind};
 use crate::sim::{Options, Rng, Simulation};
 
+/// Many short lists in one array (attempt 3): the list of entity e is `items[start[e]..start[e + 1]]`.
+struct Lists {
+    start: Vec<u32>,
+    items: Vec<u32>,
+}
+
+impl Lists {
+    fn new(lists: &[Vec<u32>]) -> Lists {
+        let mut start = vec![0u32];
+        let mut items = Vec::new();
+        for list in lists {
+            items.extend(list);
+            start.push(items.len() as u32);
+        }
+        Lists { start, items }
+    }
+
+    #[inline(always)]
+    fn of(&self, e: usize) -> &[u32] {
+        &self.items[self.start[e] as usize..self.start[e + 1] as usize]
+    }
+}
+
+/// What an entity does when it is evaluated: one byte per entity instead of the netlist's kind and ink.
+#[derive(Clone, Copy, PartialEq)]
+#[repr(u8)]
+enum Op {
+    /// On when any input is on: Buffer, OR, LED, Wireless.
+    Or,
+    /// The same, and a Breakpoint.
+    Breakpoint,
+    /// Not and NOR.
+    Nor,
+    And,
+    Nand,
+    Xor,
+    Xnor,
+    /// Latch On, Latch Off, and a VMem pin when VMem is not locked.
+    Latch,
+    Pin,
+    /// Clock and Timer: flipped by the schedule, never by their inputs.
+    Scheduled,
+    Random,
+    Trace,
+}
+
 pub struct Engine {
     pub components: Components,
+    ops: Vec<Op>,
+    reads: Lists,
+    writes: Lists,
+    readers: Lists,
+    writers: Lists,
     /// Per entity: a trace is on when any writer is on; a component's value is its output.
     on: Vec<bool>,
     /// Per trace: it went from off to on in the most recent Apply step.
@@ -55,7 +106,25 @@ impl Engine {
             None => 1,
         };
         let rng = Rng::new(board.settings.random_seed as u32);
-        let mut engine = Engine { on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
+        let ops = components.kinds.iter().map(|kind| match kind {
+            Kind::Trace => Op::Trace,
+            Kind::Pin => Op::Pin,
+            Kind::Component(ink) => match ink {
+                Ink::Buffer | Ink::Or | Ink::Led | Ink::Wireless(_) => Op::Or,
+                Ink::Breakpoint => Op::Breakpoint,
+                Ink::Not | Ink::Nor => Op::Nor,
+                Ink::And => Op::And,
+                Ink::Nand => Op::Nand,
+                Ink::Xor => Op::Xor,
+                Ink::Xnor => Op::Xnor,
+                Ink::LatchOn | Ink::LatchOff => Op::Latch,
+                Ink::Clock | Ink::Timer => Op::Scheduled,
+                Ink::Random => Op::Random,
+                other => unreachable!("{other} is not a component"),
+            },
+        }).collect();
+        let (reads, writes, readers, writers) = (Lists::new(&components.reads), Lists::new(&components.writes), Lists::new(&components.readers), Lists::new(&components.writers));
+        let mut engine = Engine { ops, reads, writes, readers, writers, on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
         for (role, pins) in [(1, &engine.components.address_pins), (2, &engine.components.content_pins)] {
             for pin in pins {
                 engine.pin_role[*pin as usize] = role;
@@ -74,7 +143,7 @@ impl Engine {
                 // Observed (random-pulse board): unlike a clock, a timer starts off.
                 Kind::Component(Ink::Timer) => engine.timers.push(e as u32),
                 Kind::Component(Ink::LatchOn) => engine.on[e] = true,
-                Kind::Component(ink @ (Ink::Not | Ink::Nor | Ink::Nand | Ink::Xnor)) => engine.on[e] = engine.evaluate(e, *ink),
+                Kind::Component(Ink::Not | Ink::Nor | Ink::Nand | Ink::Xnor) => engine.on[e] = engine.evaluate(e, engine.ops[e]),
                 _ => {}
             }
         }
@@ -96,25 +165,23 @@ impl Engine {
     }
 
     /// The output a component would have after this tick, from the trace states of the previous tick.
-    fn evaluate(&self, e: usize, ink: Ink) -> bool {
-        let reads = &self.components.reads[e];
+    #[inline(always)]
+    fn evaluate(&self, e: usize, op: Op) -> bool {
+        let reads = self.reads.of(e);
         let active = reads.iter().filter(|t| self.on[**t as usize]).count();
-        let risen = || reads.iter().filter(|t| self.rose[**t as usize]).count();
-        match ink {
-            Ink::Buffer | Ink::Or | Ink::Led | Ink::Breakpoint | Ink::Wireless(_) => active > 0,
-            Ink::Not | Ink::Nor => active == 0,
-            Ink::And => active > 0 && active == reads.len(),
+        match op {
+            Op::Or | Op::Breakpoint => active > 0,
+            Op::Nor => active == 0,
+            Op::And => active > 0 && active == reads.len(),
             // Observed: a NAND with no inputs is off, so this is not the exact inverse of AND.
-            Ink::Nand => active < reads.len(),
-            Ink::Xor => active % 2 == 1,
-            Ink::Xnor => active % 2 == 0,
+            Op::Nand => active < reads.len(),
+            Op::Xor => active % 2 == 1,
+            Op::Xnor => active % 2 == 0,
             // Observed: toggles once per input that rose, so two inputs rising together cancel out.
-            Ink::LatchOn | Ink::LatchOff => self.on[e] != (risen() % 2 == 1),
-            // Clocks flip from the schedule in `step`, never from their inputs (observed).
-            Ink::Clock => self.on[e],
-            // Timers flip from the schedule too.
-            Ink::Timer => self.on[e],
-            other => unreachable!("{other} is not evaluated here"),
+            Op::Latch | Op::Pin => self.on[e] != (reads.iter().filter(|t| self.rose[**t as usize]).count() % 2 == 1),
+            // Clocks and timers flip from the schedule in `step`, never from their inputs (observed).
+            Op::Scheduled => self.on[e],
+            Op::Random | Op::Trace => unreachable!("not evaluated here"),
         }
     }
 }
@@ -128,10 +195,9 @@ impl Engine {
     /// After components or pins flipped: recompute the traces they write, mark the ones that rose,
     /// and queue the readers of every trace that changed for the next tick.
     fn propagate(&mut self, flipped: &[u32]) {
-        let c = &self.components;
         for &e in flipped {
-            for &t in &c.writes[e as usize] {
-                let now = c.writers[t as usize].iter().any(|w| self.on[*w as usize]);
+            for &t in self.writes.of(e as usize) {
+                let now = self.writers.of(t as usize).iter().any(|w| self.on[*w as usize]);
                 if now == self.on[t as usize] {
                     continue;
                 }
@@ -140,7 +206,7 @@ impl Engine {
                     self.rose[t as usize] = true;
                     self.rose_list.push(t);
                 }
-                for &reader in &c.readers[t as usize] {
+                for &reader in self.readers.of(t as usize) {
                     if !self.queued[reader as usize] {
                         self.queued[reader as usize] = true;
                         self.dirty.push(reader);
@@ -154,7 +220,6 @@ impl Engine {
 impl Simulation for Engine {
     fn step(&mut self) {
         self.tick += 1;
-        let c = &self.components;
 
         // The components queued for this tick move to `work`; `dirty` (empty, with its capacity) collects the next tick's.
         std::mem::swap(&mut self.dirty, &mut self.work);
@@ -165,21 +230,19 @@ impl Simulation for Engine {
         flips.clear();
         for &e in &dirty {
             self.queued[e as usize] = false;
-            let ink = match c.kinds[e as usize] {
-                Kind::Component(ink) => ink,
-                // A pin is a latch, except that VMem rejects its input while locked (the input is lost).
-                Kind::Pin if self.locked => continue,
-                Kind::Pin => Ink::LatchOff,
-                Kind::Trace => unreachable!("traces are never queued"),
-            };
-            let next = if ink == Ink::Random {
+            let op = self.ops[e as usize];
+            // A pin is a latch, except that VMem rejects its input while locked (the input is lost).
+            if op == Op::Pin && self.locked {
+                continue;
+            }
+            let next = if op == Op::Random {
                 // Observed (random recorder boards): a Random draws every time it is evaluated, that is, whenever
                 // one of its inputs changed. When an input rose the output is that draw. The draw made when the
                 // input falls is used up without effect. The output stays on while an input stays on (observed).
                 let draw = self.rng.next_bit();
-                draw && c.reads[e as usize].iter().any(|t| self.on[*t as usize])
+                draw && self.reads.of(e as usize).iter().any(|t| self.on[*t as usize])
             } else {
-                self.evaluate(e as usize, ink)
+                self.evaluate(e as usize, op)
             };
             if next != self.on[e as usize] {
                 flips.push(e);
@@ -199,7 +262,7 @@ impl Simulation for Engine {
         self.breakpoint_hit = false;
         for &e in &flips {
             self.on[e as usize] = !self.on[e as usize];
-            if c.kinds[e as usize] == Kind::Component(Ink::Breakpoint) && self.on[e as usize] {
+            if self.ops[e as usize] == Op::Breakpoint && self.on[e as usize] {
                 self.breakpoint_hit = true;
             }
         }

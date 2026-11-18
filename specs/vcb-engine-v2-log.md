@@ -9,6 +9,7 @@ Every optimisation that was tried on the v2 engine, what it gained, and whether 
 | 0 | Scaffolding: v2 as a copy of v1's core | not measured separately (the same code) | kept |
 | 1 | No allocation in a tick | 1.68 (quick run) | accepted |
 | 2 | Compiler settings | 1.004 (quick run) | rejected |
+| 3 | The wiring in flat arrays | 1.085 (quick run) | accepted |
 
 ## The profile and the ranked plan
 
@@ -184,6 +185,35 @@ Start-up unchanged (0.06 to 0.08 s). Every program stopped at the same tick with
 Every program stopped at the same tick with the same output. v1 was not measured: with no gain on v2 there is nothing to re-baseline.
 
 **Verdict.** Rejected: no gain (seven of ten programs slightly slower; the 1.149 of day 3 part 2 is the old build's one slow run, 10.10 against about 10.9 for its neighbours). The hot loop is one function in one crate that chases indices through memory; there is nothing across crate borders to inline and nothing for wider vector instructions to work on. The four settings were tried together only; worth trying again after the flat arrays (attempt 3) and input counting (attempt 4), when the loop is plain arithmetic. The code is on the local tag `v2-attempt-02-rejected`.
+
+### 3. The wiring in flat arrays (2026-11-19): accepted
+**Idea.** The netlist keeps the readers, writers, reads and writes of every entity as a list of its own, each in its own block of memory, and the kind as an enum with the ink inside. v2 now copies each of the four into one array with an offset per entity, and keeps what an entity does as one byte.
+
+**Expected.** 1.1 to 1.3: `propagate` and `evaluate` follow one pointer less per list, and neighbouring entities share cache lines.
+
+**Changed.** In `sim2.rs`: a `Lists` type (offsets and items), an `Op` byte per entity, built once in `Engine::new`; `evaluate`, `propagate` and `step` use them. The netlist itself is untouched and still serves the pins and start-up.
+
+**Measured.** Quick run (one run per program, 20 million ticks). Old = attempt 1, new = this attempt, both `--engine v2`.
+
+| Program | Old, M ticks/s | New | Ratio |
+|---|---|---|---|
+| day1/part1 | 10.46 | 11.49 | 1.099 |
+| day1/part2 | 10.26 | 10.72 | 1.045 |
+| day2/part1 | 10.69 | 11.35 | 1.062 |
+| day2/part2 | 10.29 | 11.26 | 1.095 |
+| day3/part1 | 11.07 | 12.27 | 1.108 |
+| day3/part2 | 10.80 | 11.54 | 1.068 |
+| day4/part1 | 10.50 | 11.14 | 1.061 |
+| day4/part2 | 10.16 | 11.24 | 1.106 |
+| sample-primes | 9.10 | 10.17 | 1.119 |
+| sample-compact-primes | 21.07 | 23.04 | 1.093 |
+| **Score** | | | **1.085** |
+
+Start-up unchanged. Every program stopped at the same tick with the same output.
+
+**Equality.** `cargo test` and `cargo test --release --test v2 -- --include-ignored` (2 passed).
+
+**Verdict.** Accepted: 1.085, every program faster (1.045 to 1.119). Just under the estimate's lower end. Bounds checks are still in place; removing them with unsafe indexing is a possible later attempt.
 
 ## Ideas not tried
 
