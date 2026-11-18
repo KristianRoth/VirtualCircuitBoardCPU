@@ -63,6 +63,9 @@ pub struct Engine {
     /// Per component: how many of the traces it reads are on. Per trace: how many of its writers are on.
     /// Kept up to date when a trace or a writer changes, so nothing is counted when a component is evaluated (attempt 4).
     count: Vec<u32>,
+    /// Per gate whose output depends only on a count passing one value: that value (1 for OR and NOR, the
+    /// number of inputs for AND and NAND). Such a gate is woken only when its count passes it (attempt 5).
+    threshold: Vec<u32>,
     /// Per entity: a trace is on when any writer is on; a component's value is its output.
     on: Vec<bool>,
     /// Per trace: it went from off to on in the most recent Apply step.
@@ -127,7 +130,7 @@ impl Engine {
             },
         }).collect();
         let (reads, writes, readers, writers) = (Lists::new(&components.reads), Lists::new(&components.writes), Lists::new(&components.readers), Lists::new(&components.writers));
-        let mut engine = Engine { ops, reads, writes, readers, writers, count: vec![0; n], on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
+        let mut engine = Engine { ops, reads, writes, readers, writers, count: vec![0; n], threshold: vec![0; n], on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
         for (role, pins) in [(1, &engine.components.address_pins), (2, &engine.components.content_pins)] {
             for pin in pins {
                 engine.pin_role[*pin as usize] = role;
@@ -167,6 +170,7 @@ impl Engine {
         for e in 0..n {
             let inputs = if engine.ops[e] == Op::Trace { engine.writers.of(e) } else { engine.reads.of(e) };
             engine.count[e] = inputs.iter().filter(|i| engine.on[**i as usize]).count() as u32;
+            engine.threshold[e] = if matches!(engine.ops[e], Op::And | Op::Nand) { inputs.len() as u32 } else { 1 };
         }
         Ok(engine)
     }
@@ -222,8 +226,18 @@ impl Engine {
                 }
                 let step = if now { 1 } else { u32::MAX };
                 for &reader in self.readers.of(t as usize) {
-                    self.count[reader as usize] = self.count[reader as usize].wrapping_add(step);
-                    if !self.queued[reader as usize] {
+                    let old = self.count[reader as usize];
+                    let new = old.wrapping_add(step);
+                    self.count[reader as usize] = new;
+                    // A gate that is not queued has the output its count gives. It can only change when the count
+                    // passes its threshold: the higher of the two counts is then the threshold.
+                    let wake = match self.ops[reader as usize] {
+                        Op::Or | Op::Breakpoint | Op::Nor | Op::And | Op::Nand => old.max(new) == self.threshold[reader as usize],
+                        Op::Xor | Op::Xnor | Op::Random => true, // a Random draws at every change of an input
+                        Op::Latch | Op::Pin => now,              // only a rising input toggles a latch
+                        Op::Scheduled | Op::Trace => false,
+                    };
+                    if wake && !self.queued[reader as usize] {
                         self.queued[reader as usize] = true;
                         self.dirty.push(reader);
                     }
