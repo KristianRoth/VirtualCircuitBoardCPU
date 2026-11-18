@@ -13,9 +13,3 @@ serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"
 toml = "0.8"
 zstd = "0.13"
-
-# v2 attempt 2 (specs/vcb-engine-v2-log.md): whole-program optimisation. The native CPU is set in .cargo/config.toml.
-[profile.release]
-lto = "fat"
-codegen-units = 1
-panic = "abort"

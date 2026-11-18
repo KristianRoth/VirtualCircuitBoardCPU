@@ -8,6 +8,7 @@ Every optimisation that was tried on the v2 engine, what it gained, and whether 
 |---|---|---|---|
 | 0 | Scaffolding: v2 as a copy of v1's core | not measured separately (the same code) | kept |
 | 1 | No allocation in a tick | 1.68 (quick run) | accepted |
+| 2 | Compiler settings | 1.004 (quick run) | rejected |
 
 ## The profile and the ranked plan
 
@@ -156,6 +157,33 @@ Start-up unchanged (0.06 to 0.08 s). Every program stopped at the same tick with
 **Equality.** `cargo test` (71 passed) and `cargo test --release --test v2 -- --include-ignored` (2 passed).
 
 **Verdict.** Accepted: 1.68, above the estimate. Freeing and growing the lists cost more than the profile's 35% suggested, probably because the allocator calls also disturbed the cache between ticks.
+
+### 2. Compiler settings (2026-11-19): rejected
+**Idea.** Let the compiler optimise the whole program at once and for this machine's CPU: `lto = "fat"`, `codegen-units = 1`, `panic = "abort"` in the release profile, and `-C target-cpu=native`.
+
+**Expected.** 1.05 to 1.15, for both engines.
+
+**Changed.** Six lines in `engine/Cargo.toml` and a new `engine/.cargo/config.toml`. Build time went from 4 to 19 seconds.
+
+**Measured.** Quick run (one run per program, 20 million ticks; from now on every attempt gets this first, at the user's request). Old = attempt 1, new = this attempt, both `--engine v2`.
+
+| Program | Old, M ticks/s | New | Ratio |
+|---|---|---|---|
+| day1/part1 | 10.56 | 10.53 | 0.997 |
+| day1/part2 | 10.54 | 10.61 | 1.006 |
+| day2/part1 | 10.88 | 10.71 | 0.985 |
+| day2/part2 | 10.93 | 10.59 | 0.969 |
+| day3/part1 | 11.14 | 10.68 | 0.959 |
+| day3/part2 | 10.10 | 11.60 | 1.149 |
+| day4/part1 | 11.38 | 11.27 | 0.990 |
+| day4/part2 | 10.87 | 10.84 | 0.997 |
+| sample-primes | 9.59 | 9.38 | 0.978 |
+| sample-compact-primes | 22.27 | 22.78 | 1.023 |
+| **Score** | | | **1.004** |
+
+Every program stopped at the same tick with the same output. v1 was not measured: with no gain on v2 there is nothing to re-baseline.
+
+**Verdict.** Rejected: no gain (seven of ten programs slightly slower; the 1.149 of day 3 part 2 is the old build's one slow run, 10.10 against about 10.9 for its neighbours). The hot loop is one function in one crate that chases indices through memory; there is nothing across crate borders to inline and nothing for wider vector instructions to work on. The four settings were tried together only; worth trying again after the flat arrays (attempt 3) and input counting (attempt 4), when the loop is plain arithmetic. The code is on the local tag `v2-attempt-02-rejected`.
 
 ## Ideas not tried
 
