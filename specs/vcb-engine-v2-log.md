@@ -6,7 +6,8 @@ Every optimisation that was tried on the v2 engine, what it gained, and whether 
 
 | # | Attempt | Effect on the mean | Verdict |
 |---|---|---|---|
-| | (none yet) | | |
+| 0 | Scaffolding: v2 as a copy of v1's core | not measured separately (the same code) | kept |
+| 1 | No allocation in a tick | 1.68 (quick run) | accepted |
 
 ## The profile and the ranked plan
 
@@ -122,7 +123,39 @@ Attempt 8 is judged on a full run of day 4 part 2 with start-up included, as the
 
 ## Attempts
 
-None yet.
+### 0. Scaffolding (2026-11-19, commit `8bf45ee`)
+v2 is a copy of v1's core in `engine/src/sim2.rs`; `vcb run --engine v2` runs it and `--stats` names the engine. With `--probe` or `--render` the run is done by v1, with the notice line. Equality: `tests/v2.rs` steps both engines side by side and compares every signal after every tick, on every fixture board and (ignored by default) over the 44 million ticks of day 1 part 1.
+
+Not done yet from the spec's Scaffolding: the event primitive ("advance to the next event or to tick N") and `--verify`. The profile showed the per-tick run loop costs nothing measurable, so attempts 1 to 6 do not need the primitive; it is due before idle-tick jumps or replay. v2 against v1 was not measured as its own row: it is the same code, and the "old" column below (5.9 to 6.4) is v1's speed.
+
+### 1. No allocation in a tick (2026-11-19): accepted
+**Idea.** `step` built a new `flips` list and a new `dirty` list every tick. v2 keeps both between ticks (`work`, `flips`) and swaps them, so a tick allocates nothing.
+
+**Expected.** 1.3 to 1.5: allocation was about 35% of the time in the profile.
+
+**Changed.** Twelve lines in `sim2.rs`: two fields, a swap at the start of `step`, the lists handed back at its end.
+
+**Measured.** At the user's request a quick run, not the rule's five: one run per program, 20 million ticks, old = attempt 0 (`--engine v2`), new = this attempt. The noise of such a short run was not measured; the result is far outside anything seen in the noise runs.
+
+| Program | Old, M ticks/s | New | Ratio |
+|---|---|---|---|
+| day1/part1 | 5.88 | 9.73 | 1.653 |
+| day1/part2 | 5.91 | 9.86 | 1.670 |
+| day2/part1 | 5.86 | 10.14 | 1.729 |
+| day2/part2 | 5.90 | 10.49 | 1.778 |
+| day3/part1 | 6.36 | 11.73 | 1.846 |
+| day3/part2 | 6.42 | 11.14 | 1.734 |
+| day4/part1 | 6.24 | 11.08 | 1.777 |
+| day4/part2 | 6.38 | 10.43 | 1.634 |
+| sample-primes | 5.92 | 9.45 | 1.597 |
+| sample-compact-primes | 14.47 | 20.51 | 1.417 |
+| **Score** | | | **1.68** |
+
+Start-up unchanged (0.06 to 0.08 s). Every program stopped at the same tick with the same output on both builds.
+
+**Equality.** `cargo test` (71 passed) and `cargo test --release --test v2 -- --include-ignored` (2 passed).
+
+**Verdict.** Accepted: 1.68, above the estimate. Freeing and growing the lists cost more than the profile's 35% suggested, probably because the allocator calls also disturbed the cache between ticks.
 
 ## Ideas not tried
 
