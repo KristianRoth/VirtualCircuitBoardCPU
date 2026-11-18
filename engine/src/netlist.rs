@@ -185,7 +185,9 @@ impl Components {
                     const NAMES: [&str; 4] = ["left to right", "top to bottom", "right to left", "bottom to top"];
                     for d in 0..4 {
                         let Some(behind) = step(i, (d + 2) % 4).filter(|n| px[*n].joinable()) else { continue };
-                        let same_ink = |j: Option<usize>| j.filter(|j| px[*j].joinable() && key(board.inks[*j]) == key(board.inks[behind]));
+                        // Model (question 12): a bus at a tunnel is matched by its own colour, although touching bus pixels of any
+                        // colour are one bus. The game's compact 32-bit sample computer needs it: a Bus 4 pair with Bus 3 between.
+                        let same_ink = |j: Option<usize>| j.filter(|j| px[*j].joinable() && board.inks[*j] == board.inks[behind]);
                         let mut q = step(i, d);
                         loop {
                             let Some(t) = q else {
