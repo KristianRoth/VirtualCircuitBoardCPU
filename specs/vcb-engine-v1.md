@@ -285,7 +285,7 @@ Decisions still owed by the user:
 - Who makes test boards → Claude generates as much as possible; the user helps where needed.
 - Debug aids → both per-tick pixel probes and PNG snapshots.
 - External `.vcbmem` → supported in v1.
-- Core model → dirty list + recompute. Counters are left for v2, so the differential test compares two independent mechanisms.
+- Core model → dirty list + recompute. Counters are left for v2. (v2 starts as a copy of this core and moves away from it attempt by attempt; see `vcb-engine-v2.md`.)
 - Rust → `brew install rustup`, stable 1.100.0.
 - Pending fixtures → not in the repo until observed.
 - Commits → locally per milestone when tests pass; never pushed by Claude.
