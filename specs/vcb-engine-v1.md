@@ -76,7 +76,7 @@ Every rule below is a **model** until a fixture observes it. Pixels connect only
 
 **The key of a pixel** is what "same ink" means in rules 4–7: its exact ink, including the colour for a trace pixel. Read and Write are their own keys. Bus pixels of any colour share one key. This is the model for question 12.
 
-Step 1, pins. When VMem is enabled, each pixel at a pin position from `vmem_settings` becomes a **pin** entity of its own, starting off. A pin never merges with a neighbouring latch or pin. A pin size other than 1×1, a pin outside the board, or two pins on one pixel is an error naming the pin.
+Step 1, pins. When VMem is enabled, each pixel at a pin position from `vmem_settings` becomes a **pin** entity of its own, starting off. A pin never merges with a neighbouring latch or pin. A pin of size 1×n is one pin entity over the n pixels downwards from its position (a **model**, question 4, added 2026-11-18 for the game's 32-bit sample computer, whose pins are 1×2). A pin wider than 1, a pin outside the board, or two pins on one pixel is an error naming the pin.
 
 Step 2, adjacency.
 1. **Traces:** touching pixels of any trace colour, Read or Write form one trace entity.
@@ -273,7 +273,7 @@ All game questions are in the facts file. This table says which model v1 uses me
 |---|---|---|
 | 22 Random draw order in mixed cases | breadth-first walk of each trace; traces in the order they changed | when a board needs it |
 | 8 a non-zero word 0 preloaded in the file | zeroed on load, warn | when a board needs it |
-| 4 pin size other than 1×1 | error | M5 done |
+| 4 pin size other than 1×1 | 1×n: one pin over n pixels downwards (model); wider: error | M5 done; 1×n added 2026-11-18 |
 
 Decisions still owed by the user:
 - **ALU on its own** (framework rung D): not needed; the whole CPU matched the game on the first run.
