@@ -104,6 +104,7 @@ Assemble onto a clean board: words of an earlier program that the new one does n
 | `tools/board-generators/` | Python scripts that wrote the larger `boards/*.txt` files, and `asm_probes.py` for the assembler probe programs (`boards/asm-*.vcbasm`). Run from `engine/`. |
 | `tools/random-search/` | The scripts that identified the game's random generator from the recordings. Run from the repo root. |
 | `examples/diff_boards.rs` | Shows the pixels that differ between two boards |
+| `examples/trace.rs` | Inspects a board: text art of an area, what an entity connects to, a bus and the traces touching it, and the on/off changes of chosen entities during a run |
 
 ## How correctness is established
 

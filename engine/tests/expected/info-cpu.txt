@@ -6,12 +6,12 @@ vmem: enabled
 vmem_settings: [16, 1067, 222, 5, 0, 1, 1, 16, 1067, 246, 5, 0, 1, 1, 0, 0]
 vmem non-zero words: 5
 inks: 40
-  Trace 0: 456
-  Trace 1: 9796
-  Trace 2: 1243
-  Trace 3: 878
-  Trace 4: 872
-  Trace 5: 1622
+  Trace 0: 464
+  Trace 1: 9804
+  Trace 2: 1251
+  Trace 3: 886
+  Trace 4: 880
+  Trace 5: 1630
   Trace 6: 490
   Trace 7: 540
   Trace 8: 5785
@@ -28,7 +28,7 @@ inks: 40
   Tunnel: 274
   Bus 0: 4171
   Bus 1: 2443
-  Bus 2: 7370
+  Bus 2: 7396
   Bus 3: 548
   Bus 4: 7243
   Bus 5: 2197
