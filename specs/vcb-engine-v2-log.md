@@ -9,6 +9,10 @@ Every optimisation that was tried on the v2 engine, what it gained, and whether 
 | 0 | Scaffolding: v2 as a copy of v1's core | not measured separately (the same code) | kept |
 | 1 | No allocation in a tick | 1.68 (quick run) | accepted |
 | 2 | Compiler settings | 1.004 (quick run) | rejected |
+| 3 | The wiring in flat arrays | 1.085 (quick run) | accepted |
+| 4 | Input counting | 1.072 (three runs) | accepted |
+| 5 | Gates that cannot change are not woken | 1.16 (quick run) | accepted |
+| 6 | Dropping what cannot cause an event | 1.35 (quick run) | accepted |
 
 ## The profile and the ranked plan
 
@@ -184,6 +188,130 @@ Start-up unchanged (0.06 to 0.08 s). Every program stopped at the same tick with
 Every program stopped at the same tick with the same output. v1 was not measured: with no gain on v2 there is nothing to re-baseline.
 
 **Verdict.** Rejected: no gain (seven of ten programs slightly slower; the 1.149 of day 3 part 2 is the old build's one slow run, 10.10 against about 10.9 for its neighbours). The hot loop is one function in one crate that chases indices through memory; there is nothing across crate borders to inline and nothing for wider vector instructions to work on. The four settings were tried together only; worth trying again after the flat arrays (attempt 3) and input counting (attempt 4), when the loop is plain arithmetic. The code is on the local tag `v2-attempt-02-rejected`.
+
+### 3. The wiring in flat arrays (2026-11-19): accepted
+**Idea.** The netlist keeps the readers, writers, reads and writes of every entity as a list of its own, each in its own block of memory, and the kind as an enum with the ink inside. v2 now copies each of the four into one array with an offset per entity, and keeps what an entity does as one byte.
+
+**Expected.** 1.1 to 1.3: `propagate` and `evaluate` follow one pointer less per list, and neighbouring entities share cache lines.
+
+**Changed.** In `sim2.rs`: a `Lists` type (offsets and items), an `Op` byte per entity, built once in `Engine::new`; `evaluate`, `propagate` and `step` use them. The netlist itself is untouched and still serves the pins and start-up.
+
+**Measured.** Quick run (one run per program, 20 million ticks). Old = attempt 1, new = this attempt, both `--engine v2`.
+
+| Program | Old, M ticks/s | New | Ratio |
+|---|---|---|---|
+| day1/part1 | 10.46 | 11.49 | 1.099 |
+| day1/part2 | 10.26 | 10.72 | 1.045 |
+| day2/part1 | 10.69 | 11.35 | 1.062 |
+| day2/part2 | 10.29 | 11.26 | 1.095 |
+| day3/part1 | 11.07 | 12.27 | 1.108 |
+| day3/part2 | 10.80 | 11.54 | 1.068 |
+| day4/part1 | 10.50 | 11.14 | 1.061 |
+| day4/part2 | 10.16 | 11.24 | 1.106 |
+| sample-primes | 9.10 | 10.17 | 1.119 |
+| sample-compact-primes | 21.07 | 23.04 | 1.093 |
+| **Score** | | | **1.085** |
+
+Start-up unchanged. Every program stopped at the same tick with the same output.
+
+**Equality.** `cargo test` and `cargo test --release --test v2 -- --include-ignored` (2 passed).
+
+**Verdict.** Accepted: 1.085, every program faster (1.045 to 1.119). Just under the estimate's lower end. Bounds checks are still in place; removing them with unsafe indexing is a possible later attempt.
+
+### 4. Input counting (2026-11-19): accepted
+**Idea.** A component no longer counts its inputs when it is evaluated. Each component keeps the number of traces it reads that are on, and each trace the number of its writers that are on; the numbers are adjusted when a writer or a trace changes.
+
+**Expected.** 1.2 to 1.4: the 27 input reads per tick and the writer scans go away.
+
+**Changed.** In `sim2.rs`: one `count` per entity, filled at tick 0. `propagate` first adjusts the writer counts of every flipped component and then looks at the traces, in v1's order. The two passes matter: a trace that loses one writer and gains another in the same tick must not change, and must not count as risen. `evaluate` compares the count with the number of inputs. A latch still looks at its inputs to see which rose.
+
+**Measured.** The quick run gave 1.044 with one program at 0.873, too close to the bar to decide. Repeated with three runs per program, 20 million ticks, best of three. Old = attempt 3, new = this attempt, both `--engine v2`.
+
+| Program | Old, M ticks/s | New | Ratio |
+|---|---|---|---|
+| day1/part1 | 10.85 | 11.36 | 1.047 |
+| day1/part2 | 10.91 | 11.71 | 1.073 |
+| day2/part1 | 10.98 | 11.83 | 1.078 |
+| day2/part2 | 11.05 | 11.72 | 1.060 |
+| day3/part1 | 12.83 | 13.37 | 1.042 |
+| day3/part2 | 12.25 | 12.95 | 1.057 |
+| day4/part1 | 12.24 | 12.71 | 1.039 |
+| day4/part2 | 11.93 | 12.74 | 1.068 |
+| sample-primes | 10.44 | 11.74 | 1.125 |
+| sample-compact-primes | 23.84 | 26.95 | 1.131 |
+| **Score** | | | **1.072** |
+
+Start-up unchanged. Every program stopped at the same tick with the same output.
+
+**Equality.** `cargo test` and `cargo test --release --test v2 -- --include-ignored` (2 passed).
+
+**Verdict.** Accepted: 1.072, every program faster. Well under the estimate: the reads that went away are paid for by a count update for every reader of every trace that changes (about 20 per tick). The larger use of the counts is attempt 5, which can now tell from a count that a gate's output cannot change and leave it asleep.
+
+### 5. Gates that cannot change are not woken (2026-11-19): accepted
+**Idea.** When a trace changes, v1 queues every component that reads it. Half of those evaluations flip nothing: an AND with another input off, an OR with another input on. With the counts of attempt 4 this is known when the trace changes, so such a gate is not queued.
+
+**Expected.** 1.05 to 1.2.
+
+**Changed.** In `propagate` of `sim2.rs`, with one `threshold` per gate (1 for OR, NOR, Buffer, LED, Breakpoint; the number of inputs for AND and NAND): a gate is queued only when its count reaches or leaves the threshold. A latch or pin is queued only by a rising input. Clocks and timers are never queued. XOR, XNOR and Random are always queued (a Random draws at every change of an input, so its draws stay in v1's order).
+
+Why it is exact: a gate that is not queued has the output its count gives, and an output that depends on the count passing one value can only change when the count passes it. Two changes in one tick that cancel out queue the gate at the first of them, and the evaluation then finds nothing to flip, as in v1.
+
+**Measured.** Quick run (one run per program, 20 million ticks). Old = attempt 4, new = this attempt, both `--engine v2`.
+
+| Program | Old, M ticks/s | New | Ratio |
+|---|---|---|---|
+| day1/part1 | 11.70 | 12.81 | 1.095 |
+| day1/part2 | 11.44 | 12.86 | 1.125 |
+| day2/part1 | 12.05 | 13.35 | 1.108 |
+| day2/part2 | 11.95 | 13.38 | 1.120 |
+| day3/part1 | 13.34 | 15.64 | 1.172 |
+| day3/part2 | 13.13 | 14.28 | 1.087 |
+| day4/part1 | 12.18 | 14.77 | 1.213 |
+| day4/part2 | 11.84 | 14.02 | 1.184 |
+| sample-primes | 11.44 | 15.03 | 1.313 |
+| sample-compact-primes | 26.32 | 31.80 | 1.208 |
+| **Score** | | | **1.16** |
+
+Start-up unchanged. Every program stopped at the same tick with the same output.
+
+**Equality.** `cargo test` and `cargo test --release --test v2 -- --include-ignored` (2 passed): every signal equal at every tick, although v2 now evaluates fewer components than v1.
+
+**Verdict.** Accepted: 1.16, every program faster (1.09 to 1.31), inside the estimate.
+
+### 6. Dropping what cannot cause an event (2026-11-19): accepted
+**Idea.** An event is a VMem load or write or a Breakpoint. A component that cannot reach a VMem pin or a Breakpoint through any chain of traces and components cannot cause one, so v2 does not simulate it. A Random is kept with everything that feeds it, because each of its evaluations uses up a draw and so changes what the other Randoms give.
+
+**Expected.** 1.03 to 1.05: the profile only counted the LEDs (4% of the evaluations).
+
+**Changed.** In `Engine::new` of `sim2.rs`: a walk backwards from the pins, Breakpoints and Randoms (a component needs the traces it reads, a trace needs its writers). Components outside it get the operation `Dead`: never queued, never on a clock's list. `live()` says which entities are simulated; `state()` is meaningful only for those. The equality tests compare every simulated signal at every tick, and all of VMem and the Breakpoint as before. `engine/examples/live.rs` prints the share for a board.
+
+| Board | Entities | Simulated by v2 | Dropped |
+|---|---|---|---|
+| the user's CPU | 10,593 | 3,279 | 69.0% |
+| sample | 9,113 | 5,124 | 43.8% |
+| sample compact | 6,465 | 3,141 | 51.4% |
+
+**Measured.** Quick run (one run per program, 20 million ticks). Old = attempt 5, new = this attempt, both `--engine v2`.
+
+| Program | Old, M ticks/s | New | Ratio |
+|---|---|---|---|
+| day1/part1 | 12.01 | 17.45 | 1.453 |
+| day1/part2 | 12.60 | 17.81 | 1.413 |
+| day2/part1 | 13.17 | 18.92 | 1.437 |
+| day2/part2 | 12.74 | 18.73 | 1.470 |
+| day3/part1 | 14.81 | 21.01 | 1.418 |
+| day3/part2 | 13.60 | 20.02 | 1.472 |
+| day4/part1 | 13.73 | 19.29 | 1.405 |
+| day4/part2 | 11.76 | 17.79 | 1.512 |
+| sample-primes | 14.61 | 14.64 | 1.002 |
+| sample-compact-primes | 30.35 | 30.63 | 1.009 |
+| **Score** | | | **1.35** |
+
+Start-up unchanged. Every program stopped at the same tick with the same output. A full run of day 4 part 2 on v2: tick 1,339,421,264, answer 9182, 71.4 s (18.7 million ticks per second; 109 s before this attempt).
+
+**Equality.** `cargo test` (71 passed) and `cargo test --release --test v2 -- --include-ignored` (2 passed).
+
+**Verdict.** Accepted: 1.35, and 1.4 to 1.5 on the user's CPU, far above the estimate. The profile counted LEDs only; on the user's CPU a large part of the logic that works every tick ends in LEDs or nowhere and never reaches the memory pins or the Breakpoint. On the two sample boards what is dropped is logic that was idle anyway (the display and input side, with input removed from their program), so nothing is gained there. Not looked at: which parts of the user's CPU these are.
 
 ## Ideas not tried
 

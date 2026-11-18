@@ -19,10 +19,13 @@ fn same_for(board: &Board, ticks: u64, name: &str) {
     let Ok(components) = Components::build(board) else { return };
     let mut v1 = sim::Engine::new(board, components.clone(), &options).unwrap();
     let mut v2 = sim2::Engine::new(board, components, &options).unwrap();
+    assert!(v1.state().iter().zip(v2.state()).zip(v2.live()).all(|((a, b), live)| a == b || !live), "{name}: v2 differs from v1 at tick 0");
     for _ in 0..ticks {
         v1.step();
         v2.step();
-        let same = v1.state() == v2.state() && v1.breakpoint_hit() == v2.breakpoint_hit() && v1.vmem_access() == v2.vmem_access() && v1.vmem_changed() == v2.vmem_changed();
+        // v2 does not simulate what cannot reach a VMem pin, a Breakpoint or a Random; everything else must be equal.
+        let signals = v1.state().iter().zip(v2.state()).zip(v2.live()).all(|((a, b), live)| a == b || !live);
+        let same = signals && v1.breakpoint_hit() == v2.breakpoint_hit() && v1.vmem_access() == v2.vmem_access() && v1.vmem_changed() == v2.vmem_changed();
         assert!(same, "{name}: v2 differs from v1 at tick {}", v1.tick());
     }
     assert!(v1.vmem() == v2.vmem(), "{name}: VMem differs after {ticks} ticks");
