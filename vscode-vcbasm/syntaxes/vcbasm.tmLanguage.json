@@ -1,0 +1,39 @@
+{
+  "name": "VCB Assembly",
+  "scopeName": "source.vcbasm",
+  "patterns": [
+    { "name": "comment.line.number-sign.vcbasm", "match": "#.*$" },
+    {
+      "comment": "A label definition: @ NAME",
+      "match": "(@)\\s*([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.control.label.vcbasm" },
+        "2": { "name": "entity.name.function.label.vcbasm" }
+      }
+    },
+    {
+      "comment": "A directive that defines or removes a name: symbol add 0xFF",
+      "match": "\\b(symbol|resymb|unsymb|pointer|repoint|unpoint|macro|remac|unmac)\\b(?:\\s+([A-Za-z_][A-Za-z0-9_]*))?",
+      "captures": {
+        "1": { "name": "keyword.control.directive.vcbasm" },
+        "2": { "name": "entity.name.type.vcbasm" }
+      }
+    },
+    {
+      "comment": "Bookmarks: the rest of the line is the bookmark's name",
+      "match": "\\b(bookmark|sub_bookmark)\\b\\s*([^#;]*)",
+      "captures": {
+        "1": { "name": "keyword.control.directive.vcbasm" },
+        "2": { "name": "markup.heading.vcbasm" }
+      }
+    },
+    { "name": "keyword.control.directive.vcbasm", "match": "\\b(origin|orgprev|orgbase|inline)\\b" },
+    { "name": "variable.parameter.placeholder.vcbasm", "match": "\\b[a-z]\\?" },
+    { "name": "constant.numeric.hex.vcbasm", "match": "(?<![A-Za-z0-9_])[-+]?0x[0-9A-Fa-f_]+\\b" },
+    { "name": "constant.numeric.binary.vcbasm", "match": "(?<![A-Za-z0-9_])[-+]?0b[01_]+\\b" },
+    { "name": "constant.numeric.decimal.vcbasm", "match": "(?<![A-Za-z0-9_])[-+]?[0-9][0-9_]*\\b" },
+    { "name": "keyword.operator.vcbasm", "match": "<<|>>|[-+*/%~&|^]" },
+    { "name": "punctuation.terminator.statement.vcbasm", "match": ";" },
+    { "name": "punctuation.section.braces.vcbasm", "match": "[{}()]" }
+  ]
+}
