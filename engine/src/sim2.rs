@@ -51,6 +51,8 @@ enum Op {
     Scheduled,
     Random,
     Trace,
+    /// A component that cannot reach a VMem pin, a Breakpoint or a Random: never evaluated (attempt 6).
+    Dead,
 }
 
 pub struct Engine {
@@ -63,6 +65,9 @@ pub struct Engine {
     /// Per component: how many of the traces it reads are on. Per trace: how many of its writers are on.
     /// Kept up to date when a trace or a writer changes, so nothing is counted when a component is evaluated (attempt 4).
     count: Vec<u32>,
+    /// Per entity: whether it can reach a VMem pin, a Breakpoint or a Random. The others are not simulated,
+    /// so their entries in `state()` are not meaningful.
+    live: Vec<bool>,
     /// Per gate whose output depends only on a count passing one value: that value (1 for OR and NOR, the
     /// number of inputs for AND and NAND). Such a gate is woken only when its count passes it (attempt 5).
     threshold: Vec<u32>,
@@ -130,7 +135,23 @@ impl Engine {
             },
         }).collect();
         let (reads, writes, readers, writers) = (Lists::new(&components.reads), Lists::new(&components.writes), Lists::new(&components.readers), Lists::new(&components.writers));
-        let mut engine = Engine { ops, reads, writes, readers, writers, count: vec![0; n], threshold: vec![0; n], on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
+        // Only what can reach a VMem pin, a Breakpoint or a Random can cause an event (a Random matters because
+        // each of its evaluations uses up a draw). Walk backwards from those: a component needs the traces it
+        // reads, a trace needs its writers.
+        let mut ops: Vec<Op> = ops;
+        let mut live = vec![false; n];
+        let mut todo: Vec<usize> = (0..n).filter(|e| matches!(ops[*e], Op::Pin | Op::Breakpoint | Op::Random)).collect();
+        while let Some(e) = todo.pop() {
+            if !std::mem::replace(&mut live[e], true) {
+                todo.extend((if ops[e] == Op::Trace { writers.of(e) } else { reads.of(e) }).iter().map(|i| *i as usize));
+            }
+        }
+        for e in 0..n {
+            if !live[e] && ops[e] != Op::Trace {
+                ops[e] = Op::Dead;
+            }
+        }
+        let mut engine = Engine { ops, reads, writes, readers, writers, count: vec![0; n], live, threshold: vec![0; n], on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
         for (role, pins) in [(1, &engine.components.address_pins), (2, &engine.components.content_pins)] {
             for pin in pins {
                 engine.pin_role[*pin as usize] = role;
@@ -140,6 +161,9 @@ impl Engine {
         // Observed (gates board): at tick 0 every component already has the output it gets with all
         // inputs off, so Latch On and the inverting gates start on.
         for (e, kind) in c.kinds.iter().enumerate() {
+            if engine.ops[e] == Op::Dead {
+                continue;
+            }
             match kind {
                 // Observed (general boards): a clock is on at tick 0 and flips at every multiple of the interval.
                 Kind::Component(Ink::Clock) => {
@@ -160,7 +184,7 @@ impl Engine {
                 engine.rose[e] = true;
                 engine.rose_list.push(e as u32);
                 for &reader in &c.readers[e] {
-                    if !engine.queued[reader as usize] {
+                    if !engine.queued[reader as usize] && engine.ops[reader as usize] != Op::Dead {
                         engine.queued[reader as usize] = true;
                         engine.dirty.push(reader);
                     }
@@ -191,8 +215,15 @@ impl Engine {
             Op::Latch | Op::Pin => self.on[e] != (self.reads.of(e).iter().filter(|t| self.rose[**t as usize]).count() % 2 == 1),
             // Clocks and timers flip from the schedule in `step`, never from their inputs (observed).
             Op::Scheduled => self.on[e],
-            Op::Random | Op::Trace => unreachable!("not evaluated here"),
+            Op::Random | Op::Trace | Op::Dead => unreachable!("not evaluated here"),
         }
+    }
+}
+
+impl Engine {
+    /// Per entity: whether v2 simulates it. `state()` is only meaningful for these.
+    pub fn live(&self) -> &[bool] {
+        &self.live
     }
 }
 
@@ -235,7 +266,7 @@ impl Engine {
                         Op::Or | Op::Breakpoint | Op::Nor | Op::And | Op::Nand => old.max(new) == self.threshold[reader as usize],
                         Op::Xor | Op::Xnor | Op::Random => true, // a Random draws at every change of an input
                         Op::Latch | Op::Pin => now,              // only a rising input toggles a latch
-                        Op::Scheduled | Op::Trace => false,
+                        Op::Scheduled | Op::Trace | Op::Dead => false,
                     };
                     if wake && !self.queued[reader as usize] {
                         self.queued[reader as usize] = true;
