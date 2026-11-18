@@ -11,6 +11,7 @@ Every optimisation that was tried on the v2 engine, what it gained, and whether 
 | 2 | Compiler settings | 1.004 (quick run) | rejected |
 | 3 | The wiring in flat arrays | 1.085 (quick run) | accepted |
 | 4 | Input counting | 1.072 (three runs) | accepted |
+| 5 | Gates that cannot change are not woken | 1.16 (quick run) | accepted |
 
 ## The profile and the ranked plan
 
@@ -244,6 +245,37 @@ Start-up unchanged. Every program stopped at the same tick with the same output.
 **Equality.** `cargo test` and `cargo test --release --test v2 -- --include-ignored` (2 passed).
 
 **Verdict.** Accepted: 1.072, every program faster. Well under the estimate: the reads that went away are paid for by a count update for every reader of every trace that changes (about 20 per tick). The larger use of the counts is attempt 5, which can now tell from a count that a gate's output cannot change and leave it asleep.
+
+### 5. Gates that cannot change are not woken (2026-11-19): accepted
+**Idea.** When a trace changes, v1 queues every component that reads it. Half of those evaluations flip nothing: an AND with another input off, an OR with another input on. With the counts of attempt 4 this is known when the trace changes, so such a gate is not queued.
+
+**Expected.** 1.05 to 1.2.
+
+**Changed.** In `propagate` of `sim2.rs`, with one `threshold` per gate (1 for OR, NOR, Buffer, LED, Breakpoint; the number of inputs for AND and NAND): a gate is queued only when its count reaches or leaves the threshold. A latch or pin is queued only by a rising input. Clocks and timers are never queued. XOR, XNOR and Random are always queued (a Random draws at every change of an input, so its draws stay in v1's order).
+
+Why it is exact: a gate that is not queued has the output its count gives, and an output that depends on the count passing one value can only change when the count passes it. Two changes in one tick that cancel out queue the gate at the first of them, and the evaluation then finds nothing to flip, as in v1.
+
+**Measured.** Quick run (one run per program, 20 million ticks). Old = attempt 4, new = this attempt, both `--engine v2`.
+
+| Program | Old, M ticks/s | New | Ratio |
+|---|---|---|---|
+| day1/part1 | 11.70 | 12.81 | 1.095 |
+| day1/part2 | 11.44 | 12.86 | 1.125 |
+| day2/part1 | 12.05 | 13.35 | 1.108 |
+| day2/part2 | 11.95 | 13.38 | 1.120 |
+| day3/part1 | 13.34 | 15.64 | 1.172 |
+| day3/part2 | 13.13 | 14.28 | 1.087 |
+| day4/part1 | 12.18 | 14.77 | 1.213 |
+| day4/part2 | 11.84 | 14.02 | 1.184 |
+| sample-primes | 11.44 | 15.03 | 1.313 |
+| sample-compact-primes | 26.32 | 31.80 | 1.208 |
+| **Score** | | | **1.16** |
+
+Start-up unchanged. Every program stopped at the same tick with the same output.
+
+**Equality.** `cargo test` and `cargo test --release --test v2 -- --include-ignored` (2 passed): every signal equal at every tick, although v2 now evaluates fewer components than v1.
+
+**Verdict.** Accepted: 1.16, every program faster (1.09 to 1.31), inside the estimate.
 
 ## Ideas not tried
 
