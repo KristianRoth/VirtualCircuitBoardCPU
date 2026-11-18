@@ -16,6 +16,9 @@ pub struct Engine {
     rose_list: Vec<u32>,
     /// Components to evaluate on the next tick.
     dirty: Vec<u32>,
+    /// The two lists a tick works on, kept between ticks so that a tick allocates nothing (attempt 1).
+    work: Vec<u32>,
+    flips: Vec<u32>,
     queued: Vec<bool>,
     clocks: Vec<u32>,
     clock_interval: u64,
@@ -52,7 +55,7 @@ impl Engine {
             None => 1,
         };
         let rng = Rng::new(board.settings.random_seed as u32);
-        let mut engine = Engine { on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
+        let mut engine = Engine { on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
         for (role, pins) in [(1, &engine.components.address_pins), (2, &engine.components.content_pins)] {
             for pin in pins {
                 engine.pin_role[*pin as usize] = role;
@@ -153,10 +156,13 @@ impl Simulation for Engine {
         self.tick += 1;
         let c = &self.components;
 
-        let dirty = std::mem::take(&mut self.dirty);
+        // The components queued for this tick move to `work`; `dirty` (empty, with its capacity) collects the next tick's.
+        std::mem::swap(&mut self.dirty, &mut self.work);
+        let dirty = std::mem::take(&mut self.work);
 
         // 1. Evaluate: decide every flip before anything changes.
-        let mut flips = Vec::new();
+        let mut flips = std::mem::take(&mut self.flips);
+        flips.clear();
         for &e in &dirty {
             self.queued[e as usize] = false;
             let ink = match c.kinds[e as usize] {
@@ -233,6 +239,9 @@ impl Simulation for Engine {
             }
             self.locked = address_flipped;
         }
+        self.flips = flips;
+        self.work = dirty;
+        self.work.clear();
     }
 
     fn tick(&self) -> u64 {
