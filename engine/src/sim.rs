@@ -102,13 +102,13 @@ pub struct Options {
 
 /// MT19937, the generator the game uses for Random ink (std::mt19937 seeded with the board's seed).
 /// Verified against 2 x 4064 recorded bits (random-vmem-seed-1 and -2).
-struct Rng {
+pub(crate) struct Rng {
     state: [u32; 624],
     index: usize,
 }
 
 impl Rng {
-    fn new(seed: u32) -> Rng {
+    pub(crate) fn new(seed: u32) -> Rng {
         let mut state = [0u32; 624];
         state[0] = seed;
         for i in 1..624 {
@@ -134,7 +134,7 @@ impl Rng {
     }
 
     /// The game uses the low bit of each draw.
-    fn next_bit(&mut self) -> bool {
+    pub(crate) fn next_bit(&mut self) -> bool {
         self.next_u32() & 1 == 1
     }
 }

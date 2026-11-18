@@ -196,7 +196,10 @@ fn stop_and_engine_arguments_are_checked() {
     assert!(error(&[]).contains("--ticks is required"));
     assert!(error(&["--ticks", "5", "--break-addr", "1:read"]).contains("expected fetch, write or any"));
     assert!(error(&["--ticks", "5", "--break-addr", "0x100000"]).contains("not a VMem address"));
-    assert!(error(&["--ticks", "5", "--engine", "v2"]).contains("v2 engine does not exist yet"));
+    // v2 gives the same output as v1; with --probe the run is done by v1 and says so.
+    let out = |args: &[&str]| String::from_utf8(vcb(&[&["run", &timing, "--ticks", "40"], args].concat()).stdout).unwrap();
+    assert_eq!(out(&["--engine", "v2", "--verbose"]), out(&["--engine", "v1", "--verbose"]));
+    assert!(last_line(&vcb(&["run", &timing, "--ticks", "5", "--engine", "v2", "--probe", "0,0"]), true).len() > 0);
     assert!(error(&["--ticks", "5", "--engine", "v3"]).contains("expected v1 or v2"));
     assert!(vcb(&["run", &timing, "--ticks", "5", "--engine", "v1"]).status.success());
     // No VMem, nothing to stop on.
