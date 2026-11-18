@@ -20,7 +20,7 @@ Related documents:
 - **Event:** something a user can observe during a run. Defined under "What must be equal".
 - **Attempt:** one optimisation idea, implemented, measured and judged. It has one entry in the log.
 - **Stage:** a group of attempts. A stage ends with full benchmark runs and a stop for the user's decision.
-- **The benchmark set:** the real-input Advent of Code programs in `AoC2025/days/` (not the `-example` ones), each run on `AoC2025/cpu-32bit-autorun-aoc1p1.vcb` with `--asm`. Today that is eight: days 1 to 4, parts 1 and 2. The set is fixed for the length of a stage; a new day joins at a stage boundary, and the baseline is measured again.
+- **The benchmark set:** the real-input Advent of Code programs in `AoC2025/days/` (not the `-example` ones), each run on `AoC2025/cpu-32bit-autorun-aoc1p1.vcb` with `--asm`. Today that is eight: days 1 to 4, parts 1 and 2. A ninth was added at the user's request on 2026-11-18, before any attempt: the game's 32-bit sample computer, a different CPU design, with its program edited to run its primes program without input (`saves/bench/32-bit-cpu-primes.vcb`; the game's own board, so git-ignored and not in the repository). It has no Breakpoint and always runs to the tick limit. The set is fixed for the length of a stage; a new day joins at a stage boundary, and the baseline is measured again.
 - **Measured run:** a benchmark program run to its Breakpoint or to 100 million ticks, whichever comes first.
 - **Milestones** are named Profile, Scaffolding, Stage 1, Stage 2 and so on (not V0, V1: that reads like the engines).
 
@@ -169,9 +169,9 @@ Compiler settings must leave `cargo build --release` (with the documented enviro
 ## Interface
 ```
 vcb run <board.vcb> [--engine v2|v1] [--verify] ...
-engine/tools/bench.sh [--old <binary>] [--full]
+python3 engine/tools/bench.py --old <binary> --new <binary> [--old-engine v1|v2] [--new-engine v1|v2] [--full]
 ```
-- `bench.sh` runs the benchmark set alternately on two builds (by default v1 and v2 of the current build; with `--old`, the last accepted binary and the current one) and prints per program: ticks, both speeds, the ratio, start-up, and whether events, stop and VMem were equal. Its last line is the score. Any unequal row makes it exit with an error. `--full` runs to the Breakpoints.
+- `bench.py` runs the benchmark set alternately on two builds (`--old` and `--new`, each with the engine named for it; the same binary twice compares v1 with v2) and prints per program: ticks, both speeds, the ratio, start-up, and whether events, stop and VMem were equal. Its last line is the score. Any unequal row makes it exit with an error. `--full` runs to the Breakpoints.
 - `--engine` with another value: `--engine v3: expected v1 or v2`.
 
 ## Errors
