@@ -7,7 +7,7 @@ A 32-bit CPU built in the Steam game Virtual Circuit Board (VCB), and `engine/`:
 - `specs/vcb-engine-v1.md`: the v1 design, the milestone table with status (Rollout), open questions, and the decision log. This is the plan being followed.
 - `specs/vcb-game-facts.md`: everything observed about the game and the `.vcb` format, and every open question about the game. New facts about the game go here, with the date and the board that showed them.
 - `specs/vcb-engine.md`: the framework spec (goals, CLI, stop rules). The v1 spec lists where it overrides this.
-- `specs/vcb-engine-v2.md` and `specs/vcb-engine-v2-log.md`: the fast engine (specified 2026-11-18, nothing built yet) and the log of every optimisation attempt. Next step: the Profile milestone, which ends with a stop for the user's go. Rules it adds: v2 must show the same events as v1; a change to v1's model must reach v2 in the same commit; the first answer of a new puzzle program is confirmed with `--verify` (or `--engine v1`) before it is submitted.
+- `specs/vcb-engine-v2.md` and `specs/vcb-engine-v2-log.md`: the fast engine (specified 2026-11-18, nothing built yet) and the log of every optimisation attempt. The Profile milestone is done (2026-11-18): the log holds the measurements, the noise (0.5%) and the ranked plan. **Next: the user's go on that plan; then Scaffolding.** Benchmark: `python3 engine/tools/bench.py --old <bin> --new <bin>` from `engine/`, with nothing else heavy running. Rules it adds: v2 must show the same events as v1; a change to v1's model must reach v2 in the same commit; the first answer of a new puzzle program is confirmed with `--verify` (or `--engine v1`) before it is submitted.
 - `specs/vcb-assembler.md`: the assembler's spec (written 2026-11-16, not built yet): milestones A1–A3, the verified/unverified/undefined gate, the probe boards. Its game questions are question 23 in the facts file.
 - `engine/README.md`: build, commands, layout, how to run a program on the CPU.
 - `manual/*.md`: the game's User Guide, transcribed. Git-ignored on purpose (the game's copyrighted text, public repo). Do not commit it.
@@ -38,7 +38,7 @@ A 32-bit CPU built in the Steam game Virtual Circuit Board (VCB), and `engine/`:
 
 ## What could come next (the user decides)
 - AoC day 1 part 2 (`AoC2025/days/day1/part2.vcbasm`), and AoC 2026 in `AoC2026/`.
-- The v2 engine, as `specs/vcb-engine-v2.md` lays out: first its Profile milestone.
+- The v2 engine: Scaffolding and then Stage 1 of the ranked plan in `specs/vcb-engine-v2-log.md`, once the user has approved or reordered it.
 - Measuring the game's own speed on the Windows PC, to compare with the engine.
 
 ## Building
