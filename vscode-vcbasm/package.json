@@ -1,0 +1,93 @@
+{
+  "name": "vcbasm",
+  "displayName": "VCB Assembly",
+  "description": "Syntax colouring for Virtual Circuit Board assembly files (.vcbasm)",
+  "version": "0.4.0",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "vcbasm",
+        "aliases": [
+          "VCB Assembly",
+          "vcbasm"
+        ],
+        "extensions": [
+          ".vcbasm"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "vcbasm",
+        "scopeName": "source.vcbasm",
+        "path": "./syntaxes/vcbasm.tmLanguage.json"
+      }
+    ],
+    "semanticTokenTypes": [
+      {
+        "id": "vcbSymbol",
+        "superType": "enumMember",
+        "description": "A name defined with symbol"
+      },
+      {
+        "id": "vcbPointer",
+        "superType": "variable",
+        "description": "A name defined with pointer"
+      },
+      {
+        "id": "vcbMacro",
+        "superType": "macro",
+        "description": "A name defined with macro"
+      },
+      {
+        "id": "vcbLabel",
+        "superType": "function",
+        "description": "A label defined with @"
+      }
+    ],
+    "semanticTokenScopes": [
+      {
+        "language": "vcbasm",
+        "scopes": {
+          "vcbSymbol": [
+            "support.type.symbol.vcbasm"
+          ],
+          "vcbPointer": [
+            "variable.other.pointer.vcbasm"
+          ],
+          "vcbMacro": [
+            "support.function.macro.vcbasm"
+          ],
+          "vcbLabel": [
+            "entity.name.function.label.vcbasm"
+          ]
+        }
+      }
+    ],
+    "configurationDefaults": {
+      "[vcbasm]": {
+        "editor.semanticHighlighting.enabled": true
+      },
+      "editor.semanticTokenColorCustomizations": {
+        "rules": {
+          "vcbSymbol": "#C792EA",
+          "vcbPointer": "#FFCB6B",
+          "vcbMacro": "#F78C6C",
+          "vcbLabel": "#82AAFF"
+        }
+      }
+    }
+  },
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:vcbasm"
+  ]
+}
