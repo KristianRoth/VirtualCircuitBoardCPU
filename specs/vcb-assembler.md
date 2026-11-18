@@ -143,6 +143,8 @@ Also without an observed rule: `remac` of a name that is not a macro, and the us
 - a placeholder may be glued to the end of a name: `StringStarta?` with the argument `0` is the name `StringStart0`;
 - the earlier rejection ("Unexpected statement terminator (;) in a line with a macro definition") was for a `;` after the closing brace.
 
+Confirmed the same day on the user's own CPU board (fixture `engine/tests/boards/asm-macros.assembled.vcb`): thirteen such macros with variable and label names as arguments, one label defined after its use, a placeholder used twice in a body. The game's 37 words equal the engine's.
+
 Not observed, and gate hits in the engine: such a macro used inside an expression or with tokens before it, and a directive (`symbol`, `origin`, …) inside a body.
 
 ## Behavior

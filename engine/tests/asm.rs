@@ -620,3 +620,15 @@ fn probe_programs_are_well_formed() {
         assert!(ids.contains(&format!("# case {letter}-")), "no probe case for 23{letter}");
     }
 }
+
+#[test]
+fn macros_of_several_statements_match_the_game() {
+    // The user's CPU board, assembled by the game on 2026-11-18: thirteen macros of several statements, with
+    // variable and label names as arguments (one label is defined after its use).
+    let game = Board::read(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/boards/asm-macros.assembled.vcb")).unwrap();
+    // The board held three other words before; assembling again over the game's memory must change nothing.
+    let mut ours = game.clone();
+    let report = assemble(&game.assembly, "asm-macros", &mut ours, false).unwrap();
+    assert_eq!((report.words.len(), report.replaced), (37, 0));
+    assert!(ours.vmem == game.vmem, "the engine's words differ from the game's");
+}
