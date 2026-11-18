@@ -10,6 +10,7 @@ Every optimisation that was tried on the v2 engine, what it gained, and whether 
 | 1 | No allocation in a tick | 1.68 (quick run) | accepted |
 | 2 | Compiler settings | 1.004 (quick run) | rejected |
 | 3 | The wiring in flat arrays | 1.085 (quick run) | accepted |
+| 4 | Input counting | 1.072 (three runs) | accepted |
 
 ## The profile and the ranked plan
 
@@ -214,6 +215,35 @@ Start-up unchanged. Every program stopped at the same tick with the same output.
 **Equality.** `cargo test` and `cargo test --release --test v2 -- --include-ignored` (2 passed).
 
 **Verdict.** Accepted: 1.085, every program faster (1.045 to 1.119). Just under the estimate's lower end. Bounds checks are still in place; removing them with unsafe indexing is a possible later attempt.
+
+### 4. Input counting (2026-11-19): accepted
+**Idea.** A component no longer counts its inputs when it is evaluated. Each component keeps the number of traces it reads that are on, and each trace the number of its writers that are on; the numbers are adjusted when a writer or a trace changes.
+
+**Expected.** 1.2 to 1.4: the 27 input reads per tick and the writer scans go away.
+
+**Changed.** In `sim2.rs`: one `count` per entity, filled at tick 0. `propagate` first adjusts the writer counts of every flipped component and then looks at the traces, in v1's order. The two passes matter: a trace that loses one writer and gains another in the same tick must not change, and must not count as risen. `evaluate` compares the count with the number of inputs. A latch still looks at its inputs to see which rose.
+
+**Measured.** The quick run gave 1.044 with one program at 0.873, too close to the bar to decide. Repeated with three runs per program, 20 million ticks, best of three. Old = attempt 3, new = this attempt, both `--engine v2`.
+
+| Program | Old, M ticks/s | New | Ratio |
+|---|---|---|---|
+| day1/part1 | 10.85 | 11.36 | 1.047 |
+| day1/part2 | 10.91 | 11.71 | 1.073 |
+| day2/part1 | 10.98 | 11.83 | 1.078 |
+| day2/part2 | 11.05 | 11.72 | 1.060 |
+| day3/part1 | 12.83 | 13.37 | 1.042 |
+| day3/part2 | 12.25 | 12.95 | 1.057 |
+| day4/part1 | 12.24 | 12.71 | 1.039 |
+| day4/part2 | 11.93 | 12.74 | 1.068 |
+| sample-primes | 10.44 | 11.74 | 1.125 |
+| sample-compact-primes | 23.84 | 26.95 | 1.131 |
+| **Score** | | | **1.072** |
+
+Start-up unchanged. Every program stopped at the same tick with the same output.
+
+**Equality.** `cargo test` and `cargo test --release --test v2 -- --include-ignored` (2 passed).
+
+**Verdict.** Accepted: 1.072, every program faster. Well under the estimate: the reads that went away are paid for by a count update for every reader of every trace that changes (about 20 per tick). The larger use of the counts is attempt 5, which can now tell from a count that a gate's output cannot change and leave it asleep.
 
 ## Ideas not tried
 
