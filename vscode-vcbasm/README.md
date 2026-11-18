@@ -13,7 +13,9 @@ Every name the program defines is coloured by what it is, where it is defined an
 | `macro` | orange `#F78C6C` |
 | `@` (a label) | blue `#82AAFF` |
 
-Cmd+click on a name (Ctrl+click on Windows and Linux, or F12) jumps to the line that defines it: the `symbol`, `pointer` or `macro` line, or the `@` label. It works from a use to its definition; there is no list of uses.
+Cmd+click on a name (Ctrl+click on Windows and Linux, or F12) jumps to the line that defines it: the `symbol`, `pointer` or `macro` line, or the `@` label.
+
+Cmd+click on the definition itself (or Shift+F12 anywhere on a name) lists every place the name is used, in a small window you can step through.
 
 A name that is not defined in the file stays uncoloured, which makes a misspelt name easy to see. The names are read from the file that is open; a name keeps the kind of its last definition.
 
