@@ -153,6 +153,8 @@ struct Asm<'a> {
     used: Vec<&'static str>,
     names: HashMap<String, Kind>,
     macros: HashMap<String, Vec<Tok>>,
+    /// Every name a `macro` or `remac` line defines anywhere in the source.
+    macros_seen: HashSet<String>,
     labels: HashMap<String, Option<i64>>,
     pointers: Vec<(String, i64)>,
 }
@@ -453,6 +455,24 @@ fn is_placeholder(s: &str) -> bool {
     s.len() == 2 && s.ends_with('?') && s.starts_with(|c: char| c.is_ascii_lowercase())
 }
 
+/// The placeholder letters in a body token (0 for `a?`). A placeholder may be glued to the end of a name:
+/// `StringStarta?` with the argument 0 is `StringStart0` (observed in the game's compact sample computer).
+fn placeholders(s: &str) -> impl Iterator<Item = u8> + '_ {
+    s.as_bytes().windows(2).filter(|w| w[1] == b'?' && w[0].is_ascii_lowercase()).map(|w| w[0] - b'a')
+}
+
+/// A body token with its placeholders filled in. A token that is only a placeholder keeps the argument's column.
+fn fill(body_tok: &Tok, call: &[Tok], col: usize) -> Tok {
+    if is_placeholder(&body_tok.s) {
+        return call.get((body_tok.s.as_bytes()[0] - b'a') as usize).unwrap_or(body_tok).clone();
+    }
+    let mut s = body_tok.s.clone();
+    for (letter, arg) in call.iter().enumerate() {
+        s = s.replace(&format!("{}?", (b'a' + letter as u8) as char), &arg.s);
+    }
+    Tok { s, col }
+}
+
 /// Splits the source into statements. Comments are removed first; a `;` ends a statement like a newline.
 fn statements(asm: &mut Asm, source: &str) -> Vec<Stmt> {
     let mut out = Vec::new();
@@ -468,16 +488,24 @@ fn statements(asm: &mut Asm, source: &str) -> Vec<Stmt> {
             None => full_line,
         };
         let first = code.split_whitespace().next().unwrap_or("");
-        if code.contains(';') && matches!(first, "macro" | "remac") {
-            asm.rejected("a ; on the line of a macro definition", line, code.find(';').unwrap() + 1);
+        // A macro body may hold several statements: a `;` inside the braces belongs to the body (observed in the
+        // game's compact sample computer). A `;` after the closing brace is rejected by the game.
+        let body_end = code.find('}').filter(|_| matches!(first, "macro" | "remac"));
+        let after_body = body_end.map_or(0, |end| end + 1);
+        if let Some(at) = code[after_body..].find(';').map(|at| at + after_body).filter(|_| matches!(first, "macro" | "remac")) {
+            asm.rejected("a ; on the line of a macro definition", line, at + 1);
         }
+        let pieces: Vec<&str> = match body_end {
+            Some(end) => std::iter::once(&code[..=end]).chain(code[end + 1..].split(';')).collect(),
+            None => code.split(';').collect(),
+        };
         let mut start = 0;
-        for piece in code.split(';') {
+        for piece in pieces {
             let mut toks: Vec<Tok> = Vec::new();
             let mut word_start = None;
             let mut glued_brace = false;
             for (i, c) in piece.char_indices().chain([(piece.len(), ' ')]) {
-                let bracket = matches!(c, '(' | ')' | '{' | '}');
+                let bracket = matches!(c, '(' | ')' | '{' | '}' | ';'); // a `;` is only left inside a macro body
                 if c.is_whitespace() || bracket {
                     if let Some(s) = word_start.take() {
                         toks.push(Tok { s: piece[s..i].to_string(), col: start + s + 1 });
@@ -504,6 +532,57 @@ fn statements(asm: &mut Asm, source: &str) -> Vec<Stmt> {
     out
 }
 
+/// Replaces each use of a macro whose body holds several statements (`;`) by those statements. Only labels and
+/// instructions are known to work in such a body. One-statement macros are left to `walk`, which expands them
+/// inside expressions.
+fn expand_statement_macros(asm: &mut Asm, stmts: Vec<Stmt>) -> Vec<Stmt> {
+    let mut bodies: HashMap<String, Vec<Tok>> = HashMap::new();
+    let mut out = Vec::new();
+    for st in stmts {
+        let (head, line) = (st.toks[0].s.clone(), st.line);
+        match head.as_str() {
+            "macro" | "remac" if st.toks.len() >= 4 && st.toks[2].s == "{" && st.toks.last().unwrap().s == "}" => {
+                let body = st.toks[3..st.toks.len() - 1].to_vec();
+                if body.iter().any(|t| t.s == ";") {
+                    bodies.insert(st.toks[1].s.clone(), body);
+                } else {
+                    bodies.remove(&st.toks[1].s);
+                }
+            }
+            "unmac" if st.toks.len() == 2 => {
+                bodies.remove(&st.toks[1].s);
+            }
+            _ => {}
+        }
+        let Some(at) = st.toks.iter().position(|t| bodies.contains_key(&t.s)).filter(|_| !KEYWORDS.contains(&head.as_str()) && head != "@") else {
+            out.push(st);
+            continue;
+        };
+        let (name, body) = (&st.toks[at], &bodies[&st.toks[at].s]);
+        let count = body.iter().flat_map(|t| placeholders(&t.s)).collect::<HashSet<_>>().len();
+        let call = &st.toks[at + 1..];
+        if at != 0 || call.len() != count {
+            if call.len() < count {
+                asm.rejected(&format!("the macro '{}' takes {count} arguments, not {}", name.s, call.len()), line, name.col);
+            } else {
+                asm.undefined("", "a macro of several statements used inside an expression", line, name.col);
+            }
+            continue;
+        }
+        for piece in body.split(|t| t.s == ";").filter(|piece| !piece.is_empty()) {
+            let toks: Vec<Tok> = piece.iter().map(|t| fill(t, call, name.col)).collect();
+            if KEYWORDS.contains(&toks[0].s.as_str()) {
+                asm.undefined("", "a directive inside a macro body", line, name.col);
+            } else if toks.iter().any(|t| asm.macros_seen.contains(&t.s)) {
+                asm.rejected("a macro name inside a macro body", line, name.col);
+            } else {
+                out.push(Stmt { toks, line, text: st.text.clone() });
+            }
+        }
+    }
+    out
+}
+
 /// Assembles `source` into `board.vmem`, as the game does when a simulation starts.
 /// `source_name` is used in messages. On an error the board is unchanged, and the message has one line per
 /// gate hit followed by the real error, if any.
@@ -521,6 +600,7 @@ pub fn assemble(source: &str, source_name: &str, board: &mut Board, allow_unveri
         used: Vec::new(),
         names: HashMap::new(),
         macros: HashMap::new(),
+        macros_seen: HashSet::new(),
         labels: HashMap::new(),
         pointers: Vec::new(),
     };
@@ -558,6 +638,8 @@ fn walk(asm: &mut Asm, source: &str) -> Result<Vec<Word>, Fatal> {
         }
     }
     let stmts = statements(asm, source);
+    asm.macros_seen = stmts.iter().filter(|st| matches!(st.toks[0].s.as_str(), "macro" | "remac")).filter_map(|st| st.toks.get(1)).map(|t| t.s.clone()).collect();
+    let stmts = expand_statement_macros(asm, stmts);
 
     // Labels are global, so their names are needed before the first use.
     for st in &stmts {
@@ -722,7 +804,7 @@ fn walk(asm: &mut Asm, source: &str) -> Result<Vec<Word>, Fatal> {
                     continue;
                 }
                 let body = toks[3..toks.len() - 1].to_vec();
-                let mut letters: Vec<u8> = body.iter().filter(|t| is_placeholder(&t.s)).map(|t| t.s.as_bytes()[0] - b'a').collect();
+                let mut letters: Vec<u8> = body.iter().flat_map(|t| placeholders(&t.s)).collect();
                 letters.sort();
                 letters.dedup();
                 if letters.iter().enumerate().any(|(i, l)| *l as usize != i) {
@@ -759,7 +841,7 @@ fn walk(asm: &mut Asm, source: &str) -> Result<Vec<Word>, Fatal> {
                         continue;
                     };
                     in_macro = in_macro.or(Some(tok.s.clone()));
-                    let placeholders = body.iter().filter(|t| is_placeholder(&t.s)).map(|t| t.s.as_bytes()[0]).collect::<HashSet<_>>().len();
+                    let placeholders = body.iter().flat_map(|t| placeholders(&t.s)).collect::<HashSet<_>>().len();
                     let call = &toks[k..(k + placeholders).min(toks.len())];
                     k += call.len();
                     if call.len() != placeholders {
@@ -778,7 +860,7 @@ fn walk(asm: &mut Asm, source: &str) -> Result<Vec<Word>, Fatal> {
                         asm.undefined("", "the use of a macro with an empty body", line, tok.col);
                         usable = false;
                     }
-                    expanded.extend(body.iter().map(|t| if is_placeholder(&t.s) { call.get((t.s.as_bytes()[0] - b'a') as usize).unwrap_or(t).clone() } else { Tok { s: t.s.clone(), col: tok.col } }));
+                    expanded.extend(body.iter().map(|t| fill(t, call, tok.col)));
                 }
                 let hits_before = asm.hits.len();
                 let ast = match usable {
