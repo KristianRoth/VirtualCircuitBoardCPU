@@ -210,6 +210,19 @@ fn vmem_settings_the_engine_cannot_honour_are_errors() {
 }
 
 #[test]
+fn a_pin_two_pixels_high_is_one_pin() {
+    // Model (question 4), from the game's 32-bit sample computer: a pin of size 1x2 covers its pixel and the one below.
+    let mut board = textboard::parse("vmem.address = 4,6,0,2,0\nvmem.content = 4,6,3,2,0\n\nl").unwrap().board;
+    board.settings.vmem_settings[6] = 2;
+    let (x, y) = (board.settings.vmem_settings[1] as usize, board.settings.vmem_settings[2] as usize);
+    let c = Components::build(&board).unwrap();
+    assert_eq!(c.entity_at(x, y), c.entity_at(x, y + 1));
+    assert_eq!((c.address_pins.len(), c.kinds.iter().filter(|k| **k == vcb::netlist::Kind::Pin).count()), (4, 8));
+    board.settings.vmem_settings[5] = 2;
+    assert!(Components::build(&board).err().unwrap().contains("pin size 2x2 is not supported"));
+}
+
+#[test]
 fn touching_crosses_are_an_error() {
     let tb = textboard::parse("\n5++5").unwrap();
     assert!(Components::build(&tb.board).err().unwrap().contains("Cross at 17,16"));

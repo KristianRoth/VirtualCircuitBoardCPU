@@ -76,7 +76,7 @@ Every rule below is a **model** until a fixture observes it. Pixels connect only
 
 **The key of a pixel** is what "same ink" means in rules 4–7: its exact ink, including the colour for a trace pixel. Read and Write are their own keys. Bus pixels of any colour share one key. This is the model for question 12.
 
-Step 1, pins. When VMem is enabled, each pixel at a pin position from `vmem_settings` becomes a **pin** entity of its own, starting off. A pin never merges with a neighbouring latch or pin. A pin size other than 1×1, a pin outside the board, or two pins on one pixel is an error naming the pin.
+Step 1, pins. When VMem is enabled, each pixel at a pin position from `vmem_settings` becomes a **pin** entity of its own, starting off. A pin never merges with a neighbouring latch or pin. A pin of size 1×n is one pin entity over the n pixels downwards from its position (a **model**, question 4, added 2026-11-18 for the game's 32-bit sample computer, whose pins are 1×2). A pin wider than 1, a pin outside the board, or two pins on one pixel is an error naming the pin.
 
 Step 2, adjacency.
 1. **Traces:** touching pixels of any trace colour, Read or Write form one trace entity.
@@ -86,7 +86,7 @@ Step 2, adjacency.
 Step 3, joins that depend only on pixels (any order):
 
 4. **Cross:** the pixel left of a cross pixel is joined with the pixel right of it, and the one above with the one below, when both are the same kind (trace with trace of any colour, bus with bus, component with the same component ink). Two touching cross pixels are an error naming the pixel, because the game calls that invalid.
-5. **Tunnel:** for a tunnel pixel P and a direction d, let N be the pixel on the side of P opposite to d. If N is a trace, component or bus pixel, scan from the pixel after P in direction d. At the first tunnel pixel Q whose neighbour in direction d has the same key as N, join N with that neighbour and stop. As in the game (observed), it is an error if the board edge is reached first, or if a tunnel pixel with the same key behind it (another entrance) comes first.
+5. **Tunnel:** for a tunnel pixel P and a direction d, let N be the pixel on the side of P opposite to d. If N is a trace, component or bus pixel, scan from the pixel after P in direction d. At the first tunnel pixel Q whose neighbour in direction d has the same ink as N, join N with that neighbour and stop. Here "same ink" is the exact ink, also for a bus: a bus colour is matched by a bus of that colour only (a **model**, question 12, added 2026-11-18 for the game's compact 32-bit sample computer; elsewhere all bus colours share one key). As in the game (observed), it is an error if the board edge is reached first, or if a tunnel pixel with the same key behind it (another entrance) comes first.
 6. **Mesh:** take every trace, component and bus pixel that touches a mesh pixel anywhere on the board. Pixels with the same key are joined.
 
 Step 4, bus (after step 3, because steps 4–6 can merge buses):
@@ -273,7 +273,7 @@ All game questions are in the facts file. This table says which model v1 uses me
 |---|---|---|
 | 22 Random draw order in mixed cases | breadth-first walk of each trace; traces in the order they changed | when a board needs it |
 | 8 a non-zero word 0 preloaded in the file | zeroed on load, warn | when a board needs it |
-| 4 pin size other than 1×1 | error | M5 done |
+| 4 pin size other than 1×1 | 1×n: one pin over n pixels downwards (model); wider: error | M5 done; 1×n added 2026-11-18 |
 
 Decisions still owed by the user:
 - **ALU on its own** (framework rung D): not needed; the whole CPU matched the game on the first run.
@@ -285,7 +285,7 @@ Decisions still owed by the user:
 - Who makes test boards → Claude generates as much as possible; the user helps where needed.
 - Debug aids → both per-tick pixel probes and PNG snapshots.
 - External `.vcbmem` → supported in v1.
-- Core model → dirty list + recompute. Counters are left for v2, so the differential test compares two independent mechanisms.
+- Core model → dirty list + recompute. Counters are left for v2. (v2 starts as a copy of this core and moves away from it attempt by attempt; see `vcb-engine-v2.md`.)
 - Rust → `brew install rustup`, stable 1.100.0.
 - Pending fixtures → not in the repo until observed.
 - Commits → locally per milestone when tests pass; never pushed by Claude.
