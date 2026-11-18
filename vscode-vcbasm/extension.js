@@ -1,5 +1,5 @@
 // Colours the names a .vcbasm program defines, wherever they are used: symbols, pointers, macros and
-// labels each get their own token type. It also provides go-to-definition for those names.
+// labels each get their own token type. It also provides go-to-definition and find-references for those names.
 // The plain syntax colouring is in syntaxes/vcbasm.tmLanguage.json.
 
 const TOKEN_TYPES = ['vcbSymbol', 'vcbPointer', 'vcbMacro', 'vcbLabel'];
@@ -54,6 +54,16 @@ function definitionsAt(text, line, column) {
   return tokens.filter((t) => t.declaration && lines[t.line].substr(t.start, t.length) === name);
 }
 
+/** Every place the name at (line, column) occurs, definitions included when asked for. */
+function referencesAt(text, line, column, includeDeclaration) {
+  const tokens = classify(text);
+  const lines = text.split(/\r?\n/);
+  const here = tokens.find((t) => t.line === line && t.start <= column && column <= t.start + t.length);
+  if (!here) return [];
+  const name = lines[line].substr(here.start, here.length);
+  return tokens.filter((t) => (includeDeclaration || !t.declaration) && lines[t.line].substr(t.start, t.length) === name);
+}
+
 function activate(context) {
   const vscode = require('vscode');
   const legend = new vscode.SemanticTokensLegend(TOKEN_TYPES, ['declaration']);
@@ -76,6 +86,16 @@ function activate(context) {
     },
   };
   context.subscriptions.push(vscode.languages.registerDefinitionProvider({ language: 'vcbasm' }, definitions));
+  // Shift+F12 lists every use of a name. Cmd+click on a definition does the same: VS Code falls back to
+  // the references when "go to definition" lands where the cursor already is.
+  const references = {
+    provideReferences(document, position, options) {
+      return referencesAt(document.getText(), position.line, position.character, options.includeDeclaration).map(
+        (t) => new vscode.Location(document.uri, new vscode.Range(t.line, t.start, t.line, t.start + t.length))
+      );
+    },
+  };
+  context.subscriptions.push(vscode.languages.registerReferenceProvider({ language: 'vcbasm' }, references));
 }
 
-module.exports = { activate, deactivate() {}, classify, definitionsAt };
+module.exports = { activate, deactivate() {}, classify, definitionsAt, referencesAt };
