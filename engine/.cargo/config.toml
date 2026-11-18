@@ -1,0 +1,3 @@
+# v2 attempt 2: build for the CPU of this machine. A binary built here may not run on an older CPU.
+[build]
+rustflags = ["-C", "target-cpu=native"]
