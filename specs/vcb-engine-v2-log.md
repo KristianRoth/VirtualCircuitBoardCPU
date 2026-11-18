@@ -12,6 +12,7 @@ Every optimisation that was tried on the v2 engine, what it gained, and whether 
 | 3 | The wiring in flat arrays | 1.085 (quick run) | accepted |
 | 4 | Input counting | 1.072 (three runs) | accepted |
 | 5 | Gates that cannot change are not woken | 1.16 (quick run) | accepted |
+| 6 | Dropping what cannot cause an event | 1.35 (quick run) | accepted |
 
 ## The profile and the ranked plan
 
@@ -276,6 +277,41 @@ Start-up unchanged. Every program stopped at the same tick with the same output.
 **Equality.** `cargo test` and `cargo test --release --test v2 -- --include-ignored` (2 passed): every signal equal at every tick, although v2 now evaluates fewer components than v1.
 
 **Verdict.** Accepted: 1.16, every program faster (1.09 to 1.31), inside the estimate.
+
+### 6. Dropping what cannot cause an event (2026-11-19): accepted
+**Idea.** An event is a VMem load or write or a Breakpoint. A component that cannot reach a VMem pin or a Breakpoint through any chain of traces and components cannot cause one, so v2 does not simulate it. A Random is kept with everything that feeds it, because each of its evaluations uses up a draw and so changes what the other Randoms give.
+
+**Expected.** 1.03 to 1.05: the profile only counted the LEDs (4% of the evaluations).
+
+**Changed.** In `Engine::new` of `sim2.rs`: a walk backwards from the pins, Breakpoints and Randoms (a component needs the traces it reads, a trace needs its writers). Components outside it get the operation `Dead`: never queued, never on a clock's list. `live()` says which entities are simulated; `state()` is meaningful only for those. The equality tests compare every simulated signal at every tick, and all of VMem and the Breakpoint as before. `engine/examples/live.rs` prints the share for a board.
+
+| Board | Entities | Simulated by v2 | Dropped |
+|---|---|---|---|
+| the user's CPU | 10,593 | 3,279 | 69.0% |
+| sample | 9,113 | 5,124 | 43.8% |
+| sample compact | 6,465 | 3,141 | 51.4% |
+
+**Measured.** Quick run (one run per program, 20 million ticks). Old = attempt 5, new = this attempt, both `--engine v2`.
+
+| Program | Old, M ticks/s | New | Ratio |
+|---|---|---|---|
+| day1/part1 | 12.01 | 17.45 | 1.453 |
+| day1/part2 | 12.60 | 17.81 | 1.413 |
+| day2/part1 | 13.17 | 18.92 | 1.437 |
+| day2/part2 | 12.74 | 18.73 | 1.470 |
+| day3/part1 | 14.81 | 21.01 | 1.418 |
+| day3/part2 | 13.60 | 20.02 | 1.472 |
+| day4/part1 | 13.73 | 19.29 | 1.405 |
+| day4/part2 | 11.76 | 17.79 | 1.512 |
+| sample-primes | 14.61 | 14.64 | 1.002 |
+| sample-compact-primes | 30.35 | 30.63 | 1.009 |
+| **Score** | | | **1.35** |
+
+Start-up unchanged. Every program stopped at the same tick with the same output. A full run of day 4 part 2 on v2: tick 1,339,421,264, answer 9182, 71.4 s (18.7 million ticks per second; 109 s before this attempt).
+
+**Equality.** `cargo test` (71 passed) and `cargo test --release --test v2 -- --include-ignored` (2 passed).
+
+**Verdict.** Accepted: 1.35, and 1.4 to 1.5 on the user's CPU, far above the estimate. The profile counted LEDs only; on the user's CPU a large part of the logic that works every tick ends in LEDs or nowhere and never reaches the memory pins or the Breakpoint. On the two sample boards what is dropped is logic that was idle anyway (the display and input side, with input removed from their program), so nothing is gained there. Not looked at: which parts of the user's CPU these are.
 
 ## Ideas not tried
 
