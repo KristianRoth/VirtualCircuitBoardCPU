@@ -12,6 +12,9 @@ use vcb::netlist::{Components, Kind};
 use vcb::sim::{Engine, Simulation};
 use vcb::Board;
 
+/// Only boards with Timer ink use it (the compact sample computer; its timers do not reach the memory).
+const OPTIONS: vcb::sim::Options = vcb::sim::Options { timer_ticks: Some(1000) };
+
 /// A fast 64-bit hash of an on/off vector (FNV-style over 8-byte chunks).
 fn hash(state: &[bool], seed: u64) -> u64 {
     let mut h = seed ^ 0xcbf2_9ce4_8422_2325;
@@ -46,7 +49,7 @@ fn main() -> Result<(), String> {
             let reads_of: Vec<Vec<u32>> = c.reads.clone();
             let writers_of: Vec<Vec<u32>> = c.writers.clone();
             let mut by_ink: HashMap<String, u64> = HashMap::new();
-            let mut engine = Engine::new(&board, c, &Default::default())?;
+            let mut engine = Engine::new(&board, c, &OPTIONS)?;
             let mut previous = engine.state().to_vec();
             let (mut trace_changes, mut component_flips, mut evaluations, mut inputs_scanned, mut writer_scans, mut reader_visits) = (0u64, 0u64, 0u64, 0u64, 0u64, 0u64);
             let mut queued = vec![u64::MAX; n];
@@ -102,7 +105,7 @@ fn main() -> Result<(), String> {
         }
         // How often the circuit is in a state it has been in before, and for how long it then repeats.
         "repeats" => {
-            let mut engine = Engine::new(&board, c, &Default::default())?;
+            let mut engine = Engine::new(&board, c, &OPTIONS)?;
             // The key of a tick: the state after it and the state before it (which fixes what rose and what is pending).
             let mut seen: HashMap<u64, u64> = HashMap::new();
             let mut keys: Vec<u64> = Vec::with_capacity(count as usize);
@@ -152,7 +155,7 @@ fn main() -> Result<(), String> {
         }
         // Speed of the bare step loop in consecutive windows, to the Breakpoint: does the start resemble the rest?
         "windows" => {
-            let mut engine = Engine::new(&board, c, &Default::default())?;
+            let mut engine = Engine::new(&board, c, &OPTIONS)?;
             let mut line = Vec::new();
             loop {
                 let started = Instant::now();
@@ -170,7 +173,7 @@ fn main() -> Result<(), String> {
         }
         // The step loop with nothing around it.
         "bare" => {
-            let mut engine = Engine::new(&board, c, &Default::default())?;
+            let mut engine = Engine::new(&board, c, &OPTIONS)?;
             let started = Instant::now();
             let mut done = 0u64;
             while done < count && !engine.breakpoint_hit() {
