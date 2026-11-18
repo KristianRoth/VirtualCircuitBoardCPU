@@ -199,7 +199,7 @@ The in-game User Guide is transcribed in [`../manual/`](../manual/README.md). Th
 Owner: the user (in-game checks) and the engine author (research). Numbers are kept from the original spec; 1, 2 and 5 are answered above.
 
 3. **The newer inks** (before the ladder rung that uses them): the manual gives the rules above. What is still unobserved is split into questions 11–21. Timer is answered: real milliseconds.
-4. **`vmem_settings`** (before rung C): what a pin Size other than 1×1 does. The last two values are answered (Persistent Memory From and To). Content width under 32 bits is question 21.
+4. **`vmem_settings`** (before rung C): what a pin Size other than 1×1 does. Partly seen 2026-11-18, in the engine only: the game's 32-bit sample computer (the user's save `32-bit-cpu.vcb`, not in the repository) has pins of size 1×2, and at each pin position it draws a Latch Off two pixels high (the pin's pixel and the one below). The engine models a 1×n pin as one pin over those n pixels; with that model the sample's primes program gives the right verdict for 4 to 59. Not yet compared with the game tick for tick, and a pin wider than 1 is still an error (which way it extends is unknown). The last two values are answered (Persistent Memory From and To). Content width under 32 bits is question 21.
 6. **First-tick behaviour:** answered 2026-11-15, see "Observed on the `gates` board".
 7. **`layers[1]` and `layers[2]`:** presumably decoration. Not needed for v1; the writer emits empty layers.
 8. **VMem address 0:** at run time it is ordinary memory: a value written to address 0 reads back (answered 2026-11-16). It is not included in a Persistent Memory save. Still unobserved: whether a non-zero word 0 preloaded in the file reaches the circuit.
