@@ -212,7 +212,7 @@ The log:
 ## Rollout
 | Milestone | Contents | Ends with |
 |---|---|---|
-| Profile | The measurements, the noise and the ranked plan, in the log | a stop: the user approves or reorders the plan |
+| Profile | The measurements, the noise and the ranked plan, in the log | a stop: the user approves or reorders the plan. Written 2026-11-18; waiting for the user |
 | Scaffolding | The trait change; v2 as a copy; `--engine v2`; `--verify`; the equality tests and the generator; the benchmark script | commits; attempt 0 in the log |
 | Stage 1, 2, … | The attempts of each stage, as the approved plan groups them | full runs, the table, a stop for the user's decision |
 
