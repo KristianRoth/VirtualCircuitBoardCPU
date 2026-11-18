@@ -2,7 +2,18 @@
 
 Syntax colouring for `.vcbasm` files, the assembly language of the game Virtual Circuit Board.
 
-It colours comments (`#`), the directives (`symbol`, `pointer`, `origin`, `macro` and the rest), the name a directive defines, labels (`@ NAME`), numbers (decimal, `0x`, `0b`, with underscores), macro placeholders (`a?`), operators and `;`. Instruction names are not coloured specially, because every program defines its own with `symbol`.
+It colours comments (`#`), the directives (`symbol`, `pointer`, `origin`, `macro` and the rest), labels (`@ NAME`), numbers (decimal, `0x`, `0b`, with underscores), macro placeholders (`a?`), operators and `;`.
+
+Every name the program defines is coloured by what it is, where it is defined and wherever it is used:
+
+| Defined with | Default colour |
+|---|---|
+| `symbol` | purple `#C792EA` |
+| `pointer` | yellow `#FFCB6B` |
+| `macro` | orange `#F78C6C` |
+| `@` (a label) | blue `#82AAFF` |
+
+A name that is not defined in the file stays uncoloured, which makes a misspelt name easy to see. The names are read from the file that is open; a name keeps the kind of its last definition.
 
 ## Install
 
@@ -24,4 +35,19 @@ rm "$HOME/.vscode/extensions/vcbasm"
 
 ## Changing the colours
 
-The rules are in `syntaxes/vcbasm.tmLanguage.json`. The colours themselves come from your VS Code theme. After a change, run "Developer: Reload Window".
+The four colours above can be changed in your VS Code `settings.json`:
+
+```json
+"editor.semanticTokenColorCustomizations": {
+  "rules": {
+    "vcbSymbol": "#C792EA",
+    "vcbPointer": "#FFCB6B",
+    "vcbMacro": "#F78C6C",
+    "vcbLabel": "#82AAFF"
+  }
+}
+```
+
+A rule can also set a style, for example `"vcbLabel": { "foreground": "#82AAFF", "bold": true }`, and `"vcbSymbol.declaration"` styles only the place where a symbol is defined.
+
+The other colours (comments, numbers, directives) come from your theme. Their rules are in `syntaxes/vcbasm.tmLanguage.json`; the name colouring is in `extension.js`. After a change to either, run "Developer: Reload Window".
