@@ -8,6 +8,7 @@ pub mod ink;
 pub mod netlist;
 pub mod render;
 pub mod sim;
+pub mod sim2;
 pub mod textboard;
 
 pub use board::Board;

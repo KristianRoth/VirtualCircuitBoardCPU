@@ -79,7 +79,7 @@ struct RunArgs {
     /// Stop once VMem has not changed for this many ticks.
     #[arg(long)]
     quiescent: Option<u64>,
-    /// Which engine to run. Only v1 exists.
+    /// Which engine to run: v1 (the reference, the default) or v2 (the fast one, which shows the same events).
     #[arg(long)]
     engine: Option<String>,
     /// Print the on/off state of the entity at this pixel every tick: x,y or x,y=label. Repeatable.
@@ -380,8 +380,7 @@ fn run(mut args: RunArgs) -> Result<()> {
     }
     let max_ticks = args.ticks.ok_or("--ticks is required (or `ticks` in the config file), so a cut-off run cannot look like a finished one")?;
     match args.engine.as_deref() {
-        None | Some("v1") => {}
-        Some("v2") => return Err("--engine v2: the v2 engine does not exist yet".into()),
+        None | Some("v1") | Some("v2") => {}
         Some(other) => return Err(format!("--engine {other}: expected v1 or v2")),
     }
     let mut board = Board::read(&args.board)?;
@@ -486,39 +485,19 @@ fn run(mut args: RunArgs) -> Result<()> {
         check_overwrite(path, args.force)?;
     }
 
-    let mut engine = Engine::new(&board, components, &Options { timer_ticks: args.timer_ticks })?;
-    let mut render_error = None;
-    let started = Instant::now();
+    let options = Options { timer_ticks: args.timer_ticks };
     let stops = StopSet { max_ticks, breakpoint: !args.no_breakpoint, watch: break_addresses, quiescent: args.quiescent, interrupt: Some(interrupt) };
-    let mut last_progress = (Instant::now(), 0u64);
-    let report = engine.run_until(&stops, |engine| {
-        // With --stats: a progress line every 5 seconds. The clock is read only every 65,536 ticks.
-        if args.stats && engine.tick() & 0xffff == 0 && last_progress.0.elapsed().as_secs() >= 5 {
-            let speed = (engine.tick() - last_progress.1) as f64 / last_progress.0.elapsed().as_secs_f64();
-            eprintln!("tick {}  TPS: {speed:.0}", engine.tick());
-            last_progress = (Instant::now(), engine.tick());
+    let run = Run { args: &args, board: &board, stops: &stops, watch: &watch, probes: &probes, renders: &renders };
+    // --probe and --render need every signal at every tick, which only v1 promises.
+    let (report, elapsed, vmem) = if args.engine.as_deref() == Some("v2") && probes.is_empty() && renders.is_empty() {
+        run.simulate(vcb::sim2::Engine::new(&board, components, &options)?, None, "v2")?
+    } else {
+        if args.engine.as_deref() == Some("v2") {
+            eprintln!("using engine v1: {} needs every tick", if probes.is_empty() { "--render" } else { "--probe" });
         }
-        if args.verbose && engine.vmem_changed() {
-            if let (_, Some(address)) = engine.vmem_access() {
-                if watch.is_empty() || watch.contains(&address) {
-                    let value = engine.vmem()[address];
-                    println!("tick {}: {address:#010X} = {value:#010X} ({value})", engine.tick());
-                }
-            }
-        }
-        if !probes.is_empty() {
-            let values: Vec<String> = probes.iter().map(|(label, e)| format!("{label}={}", engine.state()[*e as usize] as u8)).collect();
-            println!("tick {}: {}", engine.tick(), values.join(" "));
-        }
-        for (_, path) in renders.iter().filter(|(tick, _)| *tick == engine.tick()) {
-            let written = vcb::render::render(&board, Some((&engine.components, engine.state())), &[]).and_then(|image| write_file(path, &image.to_png()));
-            render_error = render_error.take().or(written.err());
-        }
-    });
-    let elapsed = started.elapsed().as_secs_f64();
-    if let Some(e) = render_error {
-        return Err(e);
-    }
+        let for_render = (!renders.is_empty()).then(|| components.clone());
+        run.simulate(Engine::new(&board, components, &options)?, for_render.as_ref(), "v1")?
+    };
 
     let reasons: Vec<String> = report.reasons.iter().map(|reason| match (*reason, report.watch_address) {
         ("address-watch", Some(address)) => format!("address-watch {address:#010X}"),
@@ -531,11 +510,11 @@ fn run(mut args: RunArgs) -> Result<()> {
     }
     println!("{line}");
     for address in watch {
-        let value = engine.vmem()[address];
+        let value = vmem[address];
         println!("{address:#010X} = {value:#010X} ({value})");
     }
     if let Some(path) = &args.dump_vmem {
-        write_file(path, vmem_dump(engine.vmem()).as_bytes())?;
+        write_file(path, vmem_dump(&vmem).as_bytes())?;
     }
     if let Some((tick, path)) = renders.iter().find(|(tick, _)| *tick > report.tick) {
         return Err(format!("--render {tick}:{}: the run stopped at tick {} before that tick", path.display(), report.tick));
@@ -544,4 +523,56 @@ fn run(mut args: RunArgs) -> Result<()> {
         eprintln!("ticks: {}  time: {elapsed:.3} s  TPS: {:.0}", report.tick, report.tick as f64 / elapsed.max(1e-9));
     }
     Ok(())
+}
+
+/// What a run needs besides the engine, so that the same loop drives v1 and v2.
+struct Run<'a> {
+    args: &'a RunArgs,
+    board: &'a Board,
+    stops: &'a StopSet,
+    watch: &'a [usize],
+    probes: &'a [(String, u32)],
+    renders: &'a [(u64, PathBuf)],
+}
+
+impl Run<'_> {
+    /// Runs to the first stop. Returns the report, the seconds it took and the final VMem.
+    fn simulate<E: Simulation>(&self, mut engine: E, components: Option<&Components>, name: &str) -> Result<(vcb::sim::StopReport, f64, Vec<u32>)> {
+        let Run { args, board, stops, watch, probes, renders } = *self;
+        let mut render_error = None;
+        let started = Instant::now();
+        let mut last_progress = (Instant::now(), 0u64);
+        let report = engine.run_until(stops, |engine| {
+            // With --stats: a progress line every 5 seconds. The clock is read only every 65,536 ticks.
+            if args.stats && engine.tick() & 0xffff == 0 && last_progress.0.elapsed().as_secs() >= 5 {
+                let speed = (engine.tick() - last_progress.1) as f64 / last_progress.0.elapsed().as_secs_f64();
+                eprintln!("tick {}  TPS: {speed:.0}", engine.tick());
+                last_progress = (Instant::now(), engine.tick());
+            }
+            if args.verbose && engine.vmem_changed() {
+                if let (_, Some(address)) = engine.vmem_access() {
+                    if watch.is_empty() || watch.contains(&address) {
+                        let value = engine.vmem()[address];
+                        println!("tick {}: {address:#010X} = {value:#010X} ({value})", engine.tick());
+                    }
+                }
+            }
+            if !probes.is_empty() {
+                let values: Vec<String> = probes.iter().map(|(label, e)| format!("{label}={}", engine.state()[*e as usize] as u8)).collect();
+                println!("tick {}: {}", engine.tick(), values.join(" "));
+            }
+            for (_, path) in renders.iter().filter(|(tick, _)| *tick == engine.tick()) {
+                let written = vcb::render::render(board, components.map(|c| (c, engine.state())), &[]).and_then(|image| write_file(path, &image.to_png()));
+                render_error = render_error.take().or(written.err());
+            }
+        });
+        let elapsed = started.elapsed().as_secs_f64();
+        if let Some(e) = render_error {
+            return Err(e);
+        }
+        if args.stats {
+            eprintln!("engine: {name}");
+        }
+        Ok((report, elapsed, engine.vmem().to_vec()))
+    }
 }
