@@ -130,4 +130,4 @@ Every benchmark program run to its end on both engines in one session (one run e
 
 Geometric mean: v2 is **18.4 times** v1. Peak memory of the longest run (day 4 part 2 on v2): 699 MB. Times are ticks divided by speed; start-up (about 0.07 s) is not in them.
 
-How v2 got there, attempt by attempt, is in `../specs/vcb-engine-v2-log.md`; what it does and what is still open, in `../specs/vcb-engine-v2-stage2.md`.
+How v2 got there, attempt by attempt, is in `../specs/vcb-engine-v2-log.md`; what it does and what is still open, in `../specs/vcb-engine-v2.1.md`.

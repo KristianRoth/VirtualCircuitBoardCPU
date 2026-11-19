@@ -121,6 +121,7 @@ impl Table {
     }
 
     /// The node with exactly this state: an existing one, a new one, or NONE when it is new and the table is full.
+    #[cfg_attr(profiling, inline(never))]
     pub fn intern(&mut self, bits: &[u64], dirty: &[u32], rose: &[u32], meta: Meta) -> u32 {
         debug_assert_eq!(bits.len(), self.words);
         let hash = Table::hash(bits, dirty, rose, meta);
@@ -155,6 +156,7 @@ impl Table {
     }
 
     /// Stores that `from` leads over `edge` to `to`. `word` is the word loaded at the event, if it loads.
+    #[cfg_attr(profiling, inline(never))]
     pub fn record(&mut self, from: u32, edge: Edge, word: u32, to: Arrival) {
         let at = self.nodes[from as usize].edge;
         if at == NONE {
@@ -176,6 +178,7 @@ impl Table {
     }
 
     /// Where a node's edge arrives. `word` is the word that the event loads, if it loads.
+    #[cfg_attr(profiling, inline(never))]
     pub fn arrival(&self, from: u32, edge: Edge, word: u32) -> Option<Arrival> {
         if edge.fetch == NONE {
             Some(self.edges[self.nodes[from as usize].edge as usize].1)
