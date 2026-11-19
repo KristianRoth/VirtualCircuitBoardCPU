@@ -490,7 +490,10 @@ fn run(mut args: RunArgs) -> Result<()> {
     let run = Run { args: &args, board: &board, stops: &stops, watch: &watch, probes: &probes, renders: &renders };
     // --probe and --render need every signal at every tick, which only v1 promises.
     let (report, elapsed, vmem) = if args.engine.as_deref() == Some("v2") && probes.is_empty() && renders.is_empty() {
-        run.simulate(vcb::sim2::Engine::new(&board, components, &options)?, None, "v2", true)?
+        let mut engine = vcb::sim2::Engine::new(&board, components, &options)?;
+        // Nothing has to see the VMem events one by one: v2 may run through them.
+        engine.set_chain(!args.verbose && stops.watch.is_empty() && stops.quiescent.is_none());
+        run.simulate(engine, None, "v2", true)?
     } else {
         if args.engine.as_deref() == Some("v2") {
             eprintln!("using engine v1: {} needs every tick", if probes.is_empty() { "--render" } else { "--probe" });
