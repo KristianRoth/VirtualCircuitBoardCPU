@@ -524,6 +524,8 @@ Start-up unchanged (the pre-run is a few hundred ticks). Every program stopped a
 
   The same picture on every board: fine parts recognise their situation almost always (over 95% of their bursts), but a burst there is one or two flips, cheaper to simulate than to look up. Only the coarsest setting (two to seven parts) pays, and it adds 5% to 25% on the user's CPU and a third on the compact sample. As measured, recursion below the first level would cost more than it saves; it would need a lookup about as cheap as one flip (a small part's state and inputs used directly as an index into a table, not hashed).
 
+  **Small parts read from a table: measured, not worth building.** The estimator counts the parts small enough to index a table directly (their simulated signals and inputs, each with "changed in the last tick", in at most 16 or 24 bits). Nearly all fine parts are that small, and together they hold 30% to 80% of the flips left in the misses. But they flip less often than their inputs change: 0.4 to 0.9 flips per lookup on the user's CPU and the compact sample, about 0.2 on the sample. A table lookup, however cheap, is then more work than the simulation it replaces, which already leaves a gate asleep when an input change cannot alter its output (attempt 5). Fine parts are closed as an idea unless a way is found to not look at a part when its input changes without effect, which is what attempt 5 does per gate.
+
 See "Not planned" in the ranked plan. Nothing else yet.
 
 ## Stage results

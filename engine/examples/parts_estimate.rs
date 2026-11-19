@@ -49,6 +49,13 @@ struct Level {
     step_flips_seen: u64,
     miss_events: u64,
     miss_flips_seen: u64,
+    /// Per part: the bits a table would be indexed by: its simulated signals and its inputs, each with
+    /// "changed in the last tick" (which is what decides the pending work).
+    index_bits: Vec<u32>,
+    /// Per limit of index bits (16, 24): inside missed steps, the events of parts that small and all their flips
+    /// (a table knows every situation, so nothing of such a part needs simulating).
+    step_small: [(u64, u64); 2],
+    miss_small: [(u64, u64); 2],
 }
 
 fn mix(a: u64, b: u64) -> u64 {
@@ -96,7 +103,7 @@ fn level(name: String, part: Vec<u32>, parts: usize, c: &Components, simulated: 
             }
         }
     }
-    Level { name, part, parts, feeds, inputs, state: vec![0; parts], input_state: vec![0; parts], changed: vec![0; parts], input_changed: vec![0; parts], event: vec![false; parts], seen_burst: vec![false; parts], known: HashSet::new(), events: 0, events_seen: 0, events_unsettled: 0, flips_in_parts: 0, flips_seen: 0, step_keys: Vec::new(), step_events: 0, step_flips_seen: 0, miss_events: 0, miss_flips_seen: 0 }
+    Level { name, part, parts, feeds, inputs, state: vec![0; parts], input_state: vec![0; parts], changed: vec![0; parts], input_changed: vec![0; parts], event: vec![false; parts], seen_burst: vec![false; parts], known: HashSet::new(), events: 0, events_seen: 0, events_unsettled: 0, flips_in_parts: 0, flips_seen: 0, step_keys: Vec::new(), step_events: 0, step_flips_seen: 0, miss_events: 0, miss_flips_seen: 0, index_bits: Vec::new(), step_small: [(0, 0); 2], miss_small: [(0, 0); 2] }
 }
 
 fn main() -> Result<(), String> {
@@ -158,6 +165,15 @@ fn main() -> Result<(), String> {
         levels.insert(at, level("control".into(), part, parts as usize, &c, &simulated));
     }
 
+    for l in &mut levels {
+        let mut bits = vec![0u32; l.parts];
+        for e in (0..n).filter(|e| live[*e] && l.part[*e] != NONE) {
+            bits[l.part[e] as usize] += 2;
+        }
+        l.index_bits = (0..l.parts).map(|p| bits[p] + 2 * l.inputs[p]).collect();
+    }
+    const SMALL: [u32; 2] = [16, 24];
+
     // Random numbers per entity, so that a part's signals hash as the XOR of those that are on.
     let mut seed = 0x1234_5678_9abc_def1u64;
     let mut random = || {
@@ -212,6 +228,9 @@ fn main() -> Result<(), String> {
                     continue;
                 }
                 l.flips_in_parts += 1;
+                for (k, limit) in SMALL.iter().enumerate() {
+                    l.step_small[k].1 += (l.index_bits[p as usize] <= *limit) as u64;
+                }
                 if l.seen_burst[p as usize] {
                     l.flips_seen += 1;
                     l.step_flips_seen += 1;
@@ -246,6 +265,9 @@ fn main() -> Result<(), String> {
                     let seen = l.known.contains(&key) || l.step_keys.contains(&key);
                     l.step_keys.push(key);
                     l.step_events += 1;
+                    for (k, limit) in SMALL.iter().enumerate() {
+                        l.step_small[k].0 += (l.index_bits[q] <= *limit) as u64;
+                    }
                     l.events += 1;
                     l.events_seen += seen as u64;
                     l.events_unsettled += (l.changed[q] != 0) as u64;
@@ -276,7 +298,11 @@ fn main() -> Result<(), String> {
                     l.known.extend(l.step_keys.iter());
                     l.miss_events += l.step_events;
                     l.miss_flips_seen += l.step_flips_seen;
+                    for k in 0..2 {
+                        l.miss_small[k] = (l.miss_small[k].0 + l.step_small[k].0, l.miss_small[k].1 + l.step_small[k].1);
+                    }
                 }
+                l.step_small = [(0, 0); 2];
                 l.step_keys.clear();
                 (l.step_events, l.step_flips_seen) = (0, 0);
             }
@@ -314,6 +340,15 @@ fn main() -> Result<(), String> {
     for l in &levels {
         let (per_tick, lookups) = (l.miss_flips_seen as f64 / run as f64, l.miss_events as f64 / run as f64);
         println!("{:<9}{:>21.1}%{:>14.3}{:>12.1}{:>10.2}", l.name, pct(l.miss_flips_seen, missed), lookups, l.miss_flips_seen as f64 / l.miss_events.max(1) as f64, per_tick - 8.0 * lookups);
+    }
+    println!();
+    println!("small parts read from a table (index = signals and inputs, each with 'changed last tick'), inside the misses:");
+    println!("{:<9}{:>8}{:>18}{:>20}{:>14}{:>12}", "level", "bits <=", "parts that small", "of the missed flips", "lookups/tick", "per lookup");
+    for l in &levels {
+        for (k, limit) in SMALL.iter().enumerate() {
+            let (events, in_them) = l.miss_small[k];
+            println!("{:<9}{:>8}{:>10} of {:<5}{:>19.1}%{:>14.3}{:>12.2}", l.name, limit, l.index_bits.iter().filter(|b| **b <= *limit).count(), l.parts, pct(in_them, missed), events as f64 / run as f64, in_them as f64 / events.max(1) as f64);
+        }
     }
     Ok(())
 }
