@@ -204,7 +204,7 @@ Proposed 2026-11-19; the user decides. Ordered by what an idea could give, how s
 | 1 (done) | **Estimator for control-keyed replay** (A1, open idea 10): which state bits can leave the key without two futures sharing it, and how much of today's misses that recovers, on all three boards | The only idea with a published result far above where v2 is (99.7% replayed against 45% to 92%). Cheap to measure, expensive to build | a day | Build it (step 6) or drop it |
 | 2 (done) | **The cheap tick items, one attempt each**: cold paths (B2), the loaded word masked (7), the latch's scan (4), the event loop's overhead (5), profile-guided optimisation (3) | Hours each, no risk to correctness beyond the equality tests, and attempt 14 showed the tick's code still had slack | hours each | Each is accepted or rejected by the quick benchmark |
 | 3 (done) | **Cheaper misses in replay**: fewer lookups during a run of misses (9), a hash kept up to date flip by flip (B6) | Packing and lookup were 15% of simulated stretches when last measured; step 0 says what they are now | a day | Skipped if step 0 shows the share is small |
-| 4 | **Layout**: one record per entity (1), then renumbering with 16-bit indices (2), with Arcilator's layout and grouping passes (B1) looked at on the way | Certain but moderate, and every index in v2 changes, so it comes after the small things that would otherwise have to be redone | days | Benchmark |
+| 4 (done) | **Layout**: one record per entity (1), then renumbering with 16-bit indices (2), with Arcilator's layout and grouping passes (B1) looked at on the way | Certain but moderate, and every index in v2 changes, so it comes after the small things that would otherwise have to be redone | days | Benchmark |
 | 5 | **The table across runs and under a limit**: saved between runs (6), entries thrown away at the memory limit (A2, 11) | Worth as much as the same board is run again; needed in any case before a program outgrows 2 GiB | a day or two | How the user works: repeated runs or new programs |
 | 6 | **Control-keyed replay built**, if step 1 says so | The largest possible gain left | a week | Full runs |
 | 7 | **Replay on a board with a simulated Timer** (8) | Only the compact sample gains (3.9 times today, the lowest row). Keeps the benchmark honest across designs; nothing for the user's CPU | unknown | An estimator first |
@@ -288,6 +288,17 @@ Not tried: the event loop's overhead (2.5% of the time), fewer lookups during mi
 On full runs the two accepted attempts give 1.17 together: day 4 part 2 in 11.5 s, 116 M ticks per second. The details are in the log.
 
 **Where the time is now:** 88% in simulating the 9.5% of ticks that are neither replayed nor idle: `propagate` 60%, the rest of the tick 28%. Replay and its bookkeeping are 12%. So what is left on the list for the simulated tick is step 4, the layout: `propagate` touches four arrays per reader (count, operation, threshold, queued flag), which one record per entity would make one.
+
+### Step 4 done (2026-11-19): attempts 20 and 21
+
+| Attempt | What | Result |
+|---|---|---|
+| 20 | One record of eight bytes per entity, where there were six arrays | accepted, 1.028 |
+| 21 | The engine's own numbering, the simulated entities first | rejected, 0.999 |
+
+16-bit indices were not tried; they aim at what attempt 21 showed is not there. Day 4 part 2 runs in 11.1 s.
+
+**What it says:** the simulated tick's cost is not memory. Everything a tick touches already sits in the first cache, in any layout. So ideas B1 (Arcilator's layout passes) and B3 (write and read fused) lose their reason. What is left in the tick is instructions and branches per flip, and the only large lever left is still to simulate fewer ticks.
 
 ### What the research leaves open
 
