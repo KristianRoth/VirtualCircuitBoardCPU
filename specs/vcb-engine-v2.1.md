@@ -381,6 +381,51 @@ Found nothing useful, so not to be searched again: Hashlife on graphs, affine or
 
 A one-input gate flips a tick after its input, always, so it was put straight among the next tick's flips, with no count, compare or evaluation. Score 0.957: slower on all of the user's CPU's programs, 1.02 on the sample where such gates make four flips of five. With attempt 25 this closes the kernel ideas that save work per reader told or per gate woken (the second research pass's C1 and C2 among them): that work is already nearly free, and whatever is added to the loop over readers costs more.
 
+### Group A estimated (2026-11-19): a fixed part of each step can be proven, two thirds of the flips
+
+Two estimators on the reference engine: `examples/ternary_estimate.rs` (A1, A2) and `examples/group_a_estimate.rs` (the net change, A3, A7). A **context** here is what is known when a step starts: the kind of event before it and the address loaded there (380 to 730 per program). 5 million ticks of each program (3 million for the samples); the steps counted are the ones replay misses today.
+
+**A1: what can be proven.** A signal that is not the same at the start of every step of its context starts as unknown; the unknowns are followed through the step by the rules of three-valued simulation (the reference engine supplies the values, the tool the known/unknown marks, which gives the same answer). A flip of a signal known before and after is the same for any data.
+
+| | day 1 part 2 | day 2 part 1 | day 3 part 2 | day 4 part 2 | sample | compact sample |
+|---|---|---|---|---|---|---|
+| flips per missed step | 331 | 329 | 268 | 301 | 307 | 289 |
+| proven the same for any data | 63% | 60% | 68% | 68% | 67% | 60% |
+| **left to simulate** when a signal unknown at any tick is simulated all through the step | 41% (137) | 43% (142) | 37% (99) | 34% (102) | 44% (134) | 50% (145) |
+| flips of the fixed part to hand to the variable part, at their tick | 18 | 17 | 15 | 13 | 21 | 22 |
+| fixed signals that differ at the end / readers to adjust | 32 / 61 | 43 / 74 | 45 / 76 | 47 / 78 | 40 / 80 | 31 / 62 |
+| steps that would fail a record's check and need a new proof | 2.9% | 5.8% | 4.3% | 6.4% | 11.1% | 6.4% |
+| steps in a context whose steps differ in length | 25% | 25% | 21% | 27% | 35% | 37% |
+
+So the proof gives what step 8 had only observed (62 to 70% of flips the same in every step of a context), and it holds on all three CPU designs. Three-valued simulation was expected to be pessimistic (a latch stays unknown once it may have toggled); it costs little here.
+
+**A2: what an engine would do with it** (per-context residual simulation, not built). Per context one record: the fixed signals with their values at the start, the fixed flips that a variable gate reads with their tick, the fixed part's net change and count adjustments at the end. A step whose start agrees with the record on the fixed signals simulates only the variable part. By the table a missed step would cost 100 to 145 flips, about 15 to 20 timed count updates and about 100 to 130 writes at the end, where it costs 270 to 330 flips today: **about twice as fast on the steps replay misses**, less the check at the start, the new proofs (3 to 11% of steps, each about a step's work twice), and the steps whose length differs within a context (a record can end early there). 88% of the run is in those steps. This is the largest gain still on the table, and the largest build: the proof inside the engine, records, a tick loop that leaves the fixed gates alone but keeps their counts, VMem events that come from the record when the pins are fixed, the pending work at the end of a step. Attempt 12 was projected at 1.25 to 1.6 and lost; the difference here is that the saving is measured in flips not made, which attempts 25 and 26 showed to be the cost that counts.
+
+**The net change (measurement N).** A missed step flips about 330 signals (of all that matter) and 137 to 154 differ at its end: under half, not a tenth. Applying a whole step's result is so about half the price of simulating it.
+
+**A3: one mask per context on the replay key.** The share of ticks in replayed steps would rise from 26% to 37% (day 1 part 2), 33% to 41–44% (day 4 part 2), 56% to 67% (compact sample), and not at all on the sample (52%); the mask is 1,000 to 1,200 of 3,279 signals. That is close to the read-set limit (41 to 47%), with one lookup. But a hit under a mask cannot stay in the table (its end state is new), so it pays the net change, about half a step; and the mask has to be learnt or proven on every simulated step. Worth about a tenth at best. Closed in favour of A2, which takes the same regularity further.
+
+**A7: known states inside a step.** 7% (day 1 part 2) and 19% (day 4 part 2) of the ticks in missed steps come after the circuit has come to rest in a state it rested in before. Too good (the word the step loads is left out), and many of those ticks are idle ticks v2 jumps already. Small; open.
+
+A4 (read-set replay with a cheaper lookup) falls with A3. A5 (copy and affine summaries) and A6 (divergence from a reference run) were not estimated: A2 covers what they aim at.
+
+### Attempt 27 (2026-11-19): A2 built, accepted; and what splitting on bits would add
+
+The fixed part of a step is applied from a proven record and only the variable part is simulated (`src/sim2/split.rs`; the log has the numbers). 1.055 on the quick benchmark and **1.20 with every program run to its Breakpoint** (the user's CPU 1.04 to 1.41; day 4 part 2 in 8.7 s where it took 11.1 s, plain builds). A step with a record costs 1.6 µs against 3.4 µs.
+
+**Splitting a context on single bits** (the user's question: "1xxx… always identical and 0xxx… always identical"), estimated with `examples/split_estimate.rs` while the above was built. Instead of calling a start bit that varies unknown, a context is split on it, so that each half has its own record in which the bit is known. The bit is chosen without board knowledge: the varying start bit that leaves the fewest varying start bits in the two halves. Share of the flips of missed steps left to simulate / steps needing a new proof / missed steps alone in their sub-context:
+
+| Splits | day 1 part 2 | day 4 part 2 | sample |
+|---|---|---|---|
+| 0 | 41% / 2.9% / 2.6% | 34% / 6.4% / 0.4% | 44% / 11.1% / 2.6% |
+| 1 | 34% / 4.3% / 2.6% | 22% / 8.3% / 1.1% | 34% / 11.6% / 4.0% |
+| 2 | 28% / 6.4% / 2.6% | 18% / 10.6% / 2.8% | 27% / 12.8% / 8.9% |
+| 3 | 21% / 9.4% / 2.6% | 15% / 13.6% / 4.1% | 21% / 14.5% / 11.4% |
+| 4 | 17% / 13.8% / 2.8% | 11% / 16.8% / 5.4% | 14% / 15.3% / 15.1% |
+| 6 | 11% / 25.7% / 5.0% | 6.5% / 16.9% / 20.0% | 8% / 11.2% / 28.8% |
+
+Two to four splits halve the work that is left, at the price of more proofs and more steps with nothing to reuse. Too good in one way: the bits are chosen with hindsight over the whole run, and an engine has to choose them while learning. Attempt 27 already goes a little way there: it keeps six records per context, and an older record (proven when less was unknown) is exactly a record for one value of the bits that varied later. What is missing is proving on purpose with a control bit held known. With a proof at 35 µs (ten steps), each extra record has to be used about 25 times to pay. **Next, if wanted: choose split bits while learning** (a bit whose being unknown makes the most signals unknown in the proof), up to two or three per context.
+
 ### What the research leaves open
 
 1. Can the split into control and data be found from a netlist, and how much of today's misses would a control-only key recover? (Decides A1.)

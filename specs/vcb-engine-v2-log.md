@@ -31,6 +31,7 @@ Every optimisation that was tried on the v2 engine, what it gained, and whether 
 | 24 | v2.1: profile-guided optimisation (`tools/build-pgo.sh`) | 1.12 (three runs), trained on one program | accepted |
 | 25 | v2.1: watched inputs (an AND/OR gate listens only to the input that settles it) | 0.98 (three runs); the sample 1.5, the user's CPU 0.94 | rejected |
 | 26 | v2.1: one-input gates flip a tick after their input, without count or evaluation | 0.957 (three runs); the sample 1.02 | rejected |
+| 27 | v2.1: the fixed part of a step applied from a proven record, only the variable part simulated (`sim2/split.rs`) | 1.055 quick (three runs); **1.20 to the Breakpoints** (the user's CPU 1.04 to 1.41) | accepted |
 | 23 | v2.1: replay on boards with a simulated Timer | 1.07 over three runs: the compact sample 2.1, the rest unchanged | accepted |
 | 22 | v2.1: the replay table emptied at its limit; saved between runs (`--replay-cache`) | 1.001 on the benchmark; a second run of day 4 part 2 in 1.3 s | accepted (a feature, not a speed-up of a first run) |
 
@@ -849,6 +850,40 @@ On a full run of the compact sample (100 million ticks): 63 to 169 M ticks per s
 **What it shows.** The same as attempt 25: the count update, the compare and the evaluation of a woken gate cost almost nothing, since the gate's record is in the first cache and the branches are predicted. What was added, a test of the mark on every reader told (about 24 a tick) and a second list to append, costs more than what was removed. Even the sample, where four flips of five are one-input gates, gains only 2%. Not profiled further.
 
 **Verdict.** Rejected. The code is on the tag `v2-attempt-26-rejected`.
+
+## Attempt 27 (2026-11-19): the fixed part of a step from a record — accepted
+
+**Why.** The estimate of group A (see the v2.1 file): in the steps replay misses, two thirds of the flips can be proven the same for any data, per context. The user asked for the simple version to be built and tested, and for the variant that splits a context on single bits to be estimated beside it.
+
+**What** (`src/sim2/split.rs`, which explains it in full). A context is what replay keeps beside the signals (VMem address, lock, place in the clock's cycle). Per context the engine notes which signals have differed at the start of its steps: those are unknown. A step that agrees with what is known is simulated once while the unknowns are followed through it by the rules of three-valued simulation (the **proof**, event-driven: only readers of something that changed its value or its being known are looked at). What never became unknown is the fixed part; it goes into a **record** with its flips. A later step that agrees with a record on everything the proof took as known simulates only the variable part: fixed gates are not woken, fixed flips that a variable gate reads are handed to it at their tick, and when the step ends the fixed signals and the counts among them are set from the record. Pins, Breakpoints and clock-driven components are always simulated, so events come from the circuit, and a step may end before or after the record's did. A context keeps six records and earns a proof after eight steps that fitted none. Not on a board with Random ink or a simulated Timer.
+
+**Faults found on the way.** One: the check at a step's start compared only the fixed signals, but the proof also relies on signals that are known and yet always simulated (a VMem pin). Found by `examples/split_check.rs` (v2 with the split against v2 without, at every event and at stops inside steps, with the counts checked). The first build was correct after that and 0.69: a proof cost 70 µs against 3 µs for a step, and starting a step walked all simulated signals. Now a proof is about 35 µs and a start 0.17 µs.
+
+**Equality.** `cargo test --release` and `-- --ignored` (the whole-program runs against v1 with stops inside steps; the replay test now also checks every count and that the split was at work); `split_check` on day 1 part 1 and 2, day 3 part 1, day 4 part 2 and the sample, 20 million ticks each, with and without stops inside steps; both benchmarks end at the same tick with the same memory on all ten programs.
+
+**Numbers** (plain builds, against attempt 24).
+
+| Program | 20 million ticks, three runs | to the Breakpoint, one run |
+|---|---|---|
+| day1/part1 | 1.293 | 1.358 |
+| day1/part2 | 1.203 | 1.318 |
+| day2/part1 | 0.944 | 1.042 |
+| day2/part2 | 0.776 | 1.056 |
+| day3/part1 | 1.191 | 1.405 |
+| day3/part2 | 1.058 | 1.259 |
+| day4/part1 | 1.150 | 1.358 |
+| day4/part2 | 1.025 | 1.272 |
+| sample-primes | 0.984 | 1.020 (100 million ticks) |
+| sample-compact-primes (split off: a Timer) | 1.030 | 0.980 |
+| **Score** | **1.055** | **1.197** |
+
+Day 4 part 2 to its Breakpoint: 11.1 s to 8.7 s. On it 93% of the steps replay misses run with a record (675,412 of 729,424 in the first 300 million ticks, 3,578 proofs).
+
+**What it shows.** A step with a record costs about 1.6 µs against 3.4 µs whole, as the estimate said (half the flips, half the ticks: 18 against 41). The rest of the estimate's "twice" is lost to steps that fit no record (5 to 25%) and to proofs. A proof pays for itself after about 25 uses of its record, so short runs gain less and day 2 part 2 loses in the first 20 million ticks (85% of it is replayed and what is left is varied); over the whole program every program gains. The policy (wait 8, never prove on a step that just widened the unknowns) was the best of six tried on three programs at 20 million ticks: proving at once costs more than it finds (0.47 to 1.07), waiting 16 learns too slowly.
+
+**Verdict.** Accepted: 1.055 on the quick benchmark, 1.20 to the Breakpoints.
+
+**Open after it.** Splitting a context on single start bits (estimated beside this attempt, see the v2.1 file): three splits would halve what is left to simulate. Records for the compact sample (a Timer). Records are not kept in `--replay-cache`. A cheaper proof (it still looks at every reader of everything unknown in its second tick).
 
 ## Ideas not tried
 
