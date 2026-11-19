@@ -31,5 +31,16 @@ fn main() -> Result<(), String> {
     println!("how the ticks were crossed: replayed {:.1}%, idle {:.1}%, simulated {:.1}%", pct(replayed), pct(p.ticks_idle), pct(p.ticks_simulated));
     println!("events (stops of advance): {stops}, one per {:.0} ticks; replayed steps {}; states looked up or stored {}; states restored {}; nodes kept {nodes} ({:.0} MiB)", t / stops as f64, p.replay_steps, p.interns, p.restores, bytes as f64 / (1 << 20) as f64);
     println!("in a simulated tick: {:.2} components evaluated, {:.2} flips; per simulated step (between two events): {:.1} ticks simulated", p.evaluations as f64 / p.ticks_simulated.max(1) as f64, p.flips as f64 / p.ticks_simulated.max(1) as f64, p.ticks_simulated as f64 / p.interns.max(1) as f64);
+    let f = p.feeds;
+    let all: u64 = f.iter().sum();
+    let per = |x: u64| x as f64 / p.ticks_simulated.max(1) as f64;
+    println!("per simulated tick: {:.2} flips of components, {:.2} writer counts adjusted on shared traces, {:.2} such traces changed", per(p.flips), per(p.trace_counts), per(p.trace_flips));
+    println!("per simulated tick: {:.2} times a flip was applied to a reader:", per(all));
+    println!("    an AND-like or OR-like gate whose output could change (woken):     {:.2}", per(f[0]));
+    println!("    an AND-like or OR-like gate held by another input (count only):    {:.2}  = {:.0}% of all", per(f[1]), 100.0 * f[1] as f64 / all.max(1) as f64);
+    println!("    an XOR (always woken):                                             {:.2}", per(f[2]));
+    println!("    a latch or pin, rising input (woken):                              {:.2}", per(f[3]));
+    println!("    a latch or pin, falling input (nothing to do):                     {:.2}  = {:.0}% of all", per(f[4]), 100.0 * f[4] as f64 / all.max(1) as f64);
+    println!("    something on the schedule or otherwise not evaluated:              {:.2}", per(f[5]));
     Ok(())
 }
