@@ -28,6 +28,23 @@ fn gm<T>(v: &mut [T], i: usize) -> &mut T {
     unsafe { v.get_unchecked_mut(i) }
 }
 
+/// An entity as the tick's loops see it.
+#[derive(Clone, Copy)]
+struct Cell {
+    /// Per component: how many of the traces it reads are on. Per trace: how many of its writers are on.
+    count: u16,
+    /// Per gate whose output depends only on the count passing one value: that value (1 for OR and NOR, the
+    /// number of inputs for AND and NAND). Such a gate is woken only when its count passes it.
+    threshold: u16,
+    op: Op,
+    /// A trace is on when any writer is on; a component's value is its output.
+    on: bool,
+    /// Waiting to be evaluated in the next tick.
+    queued: bool,
+    /// Per latch or pin: whether the inputs that rose since it was last evaluated would toggle it.
+    toggle: bool,
+}
+
 /// Many short lists in one array (attempt 3): the list of entity e is `items[start[e]..start[e + 1]]`.
 struct Lists {
     start: Vec<u32>,
@@ -190,7 +207,11 @@ pub struct Profile {
 pub struct Engine {
     pub components: Components,
     pub profile: Profile,
-    ops: Vec<Op>,
+    /// What the tick's loops need of an entity, in one place: eight bytes, one cache line for eight entities
+    /// (attempt 20). It was six arrays before.
+    cell: Vec<Cell>,
+    /// The signals as `state()` shows them: a copy of the cells' `on`, brought up to date by `sync` and `step`.
+    view: Vec<bool>,
     reads: Lists,
     writes: Lists,
     readers: Lists,
@@ -200,33 +221,19 @@ pub struct Engine {
     /// Per component or pin: the readers of the traces that only it writes. Such a trace always equals its
     /// writer, so it is not simulated: its readers read the writer itself (attempt 10).
     direct: Lists,
-    /// Per component: how many of the traces it reads are on. Per trace: how many of its writers are on.
-    /// Kept up to date when a trace or a writer changes, so nothing is counted when a component is evaluated (attempt 4).
-    count: Vec<u32>,
     /// Per entity: whether it is simulated: it can reach a VMem pin, a Breakpoint or a Random, and it is not a
     /// trace with one writer (which always equals that writer). For the others `state()` is not meaningful.
     live: Vec<bool>,
-    /// Per gate whose output depends only on a count passing one value: that value (1 for OR and NOR, the
-    /// number of inputs for AND and NAND). Such a gate is woken only when its count passes it (attempt 5).
-    threshold: Vec<u32>,
-    /// Per entity: a trace is on when any writer is on; a component's value is its output.
-    on: Vec<bool>,
-    /// Per trace: it went from off to on in the most recent Apply step.
     /// The simulated signals as one bit each, in `live_list` order, kept up to date at every change, so that a
     /// state is ready to be looked up without being packed (attempt 19). `slot` is an entity's bit; an entity
     /// that is not simulated points at a spare word after the real ones.
     packed: Vec<u64>,
     slot: Vec<u32>,
-    /// Per latch or pin: whether the inputs that rose since it was last evaluated would toggle it (an odd
-    /// number of them). Set when a rising input feeds it, which also queues it; cleared when it is evaluated.
-    /// It stands in for marking every signal that just rose (attempt 18).
-    toggle: Vec<bool>,
     /// Components to evaluate on the next tick.
     dirty: Vec<u32>,
     /// The two lists a tick works on, kept between ticks so that a tick allocates nothing (attempt 1).
     work: Vec<u32>,
     flips: Vec<u32>,
-    queued: Vec<bool>,
     clocks: Vec<u32>,
     /// The next tick at which the clocks, the timers and the schedule flip something (u64::MAX: never). Kept
     /// so that a tick does not divide to find out (attempt 13). `set_due` renews them when the tick counter
@@ -358,14 +365,14 @@ impl Engine {
         // within its interval would be part of every state, so states would hardly ever repeat).
         let timed = (0..n).any(|e| live[e] && components.kinds[e] == Kind::Component(Ink::Timer));
         let replay = (!ops.contains(&Op::Random) && !timed).then(|| Table::new(live_list.len().div_ceil(64), MEMORY_LIMIT));
-        let mut engine = Engine { profile: Profile::default(), loaded_word: 0, replay, live_list, node: NONE, node_tick: 0, real: true, arrays_node: NONE, forced: Vec::new(), pending: Vec::new(), schedule, ops, reads, writes, readers, writers, direct, count: vec![0; n], live, threshold: vec![0; n], on: vec![false; n], toggle: vec![false; n], packed: Vec::new(), slot: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_due: u64::MAX, timer_due: u64::MAX, schedule_due: u64::MAX, clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
+        let mut engine = Engine { profile: Profile::default(), loaded_word: 0, replay, live_list, node: NONE, node_tick: 0, real: true, arrays_node: NONE, forced: Vec::new(), pending: Vec::new(), schedule, cell: ops.iter().map(|op| Cell { count: 0, threshold: 0, op: *op, on: false, queued: false, toggle: false }).collect(), view: vec![false; n], reads, writes, readers, writers, direct, live, packed: Vec::new(), slot: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(),  clocks: Vec::new(), clock_due: u64::MAX, timer_due: u64::MAX, schedule_due: u64::MAX, clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
         for (role, pins) in [(1, &engine.components.address_pins), (2, &engine.components.content_pins)] {
             for pin in pins {
                 engine.pin_role[*pin as usize] = role;
             }
         }
         for e in 0..n {
-            if engine.ops[e] == Op::Breakpoint {
+            if engine.cell[e].op == Op::Breakpoint {
                 engine.pin_role[e] |= 4;
             }
         }
@@ -373,7 +380,7 @@ impl Engine {
         // Observed (gates board): at tick 0 every component already has the output it gets with all
         // inputs off, so Latch On and the inverting gates start on.
         for (e, kind) in c.kinds.iter().enumerate() {
-            if engine.ops[e] == Op::Dead {
+            if engine.cell[e].op == Op::Dead {
                 continue;
             }
             match kind {
@@ -382,27 +389,27 @@ impl Engine {
                     if !keep[e] {
                         engine.clocks.push(e as u32);
                     }
-                    engine.on[e] = true;
+                    engine.cell[e].on = true;
                 }
                 // Observed (random-pulse board): unlike a clock, a timer starts off.
                 Kind::Component(Ink::Timer) => engine.timers.push(e as u32),
-                Kind::Component(Ink::LatchOn) => engine.on[e] = true,
+                Kind::Component(Ink::LatchOn) => engine.cell[e].on = true,
                 // (Written out, not evaluated: a component on the schedule has no operation to evaluate.)
-                Kind::Component(Ink::Not | Ink::Nor | Ink::Xnor) => engine.on[e] = true,
-                Kind::Component(Ink::Nand) => engine.on[e] = !c.reads[e].is_empty(),
+                Kind::Component(Ink::Not | Ink::Nor | Ink::Xnor) => engine.cell[e].on = true,
+                Kind::Component(Ink::Nand) => engine.cell[e].on = !c.reads[e].is_empty(),
                 _ => {}
             }
         }
         // Their traces are on at tick 0 too, and count as having just risen: a latch reading one toggles at tick 1.
         for e in 0..n {
-            if c.kinds[e] == Kind::Trace && c.writers[e].iter().any(|w| engine.on[*w as usize]) {
-                engine.on[e] = true;
+            if c.kinds[e] == Kind::Trace && c.writers[e].iter().any(|w| engine.cell[*w as usize].on) {
+                engine.cell[e].on = true;
                 for &reader in &c.readers[e] {
-                    if matches!(engine.ops[reader as usize], Op::Latch | Op::Pin) {
-                        engine.toggle[reader as usize] ^= true;
+                    if matches!(engine.cell[reader as usize].op, Op::Latch | Op::Pin) {
+                        engine.cell[reader as usize].toggle ^= true;
                     }
-                    if !engine.queued[reader as usize] && engine.ops[reader as usize] != Op::Dead {
-                        engine.queued[reader as usize] = true;
+                    if !engine.cell[reader as usize].queued && engine.cell[reader as usize].op != Op::Dead {
+                        engine.cell[reader as usize].queued = true;
                         engine.dirty.push(reader);
                     }
                 }
@@ -414,20 +421,26 @@ impl Engine {
         engine.packed = vec![0; words + 1];
         for (i, &e) in engine.live_list.iter().enumerate() {
             engine.slot[e as usize] = i as u32;
-            engine.packed[i >> 6] |= (engine.on[e as usize] as u64) << (i & 63);
+            engine.packed[i >> 6] |= (engine.cell[e as usize].on as u64) << (i & 63);
         }
         for e in 0..n {
-            let inputs = if engine.ops[e] == Op::Trace { engine.writers.of(e) } else { engine.reads.of(e) };
-            engine.count[e] = inputs.iter().filter(|i| engine.on[**i as usize]).count() as u32;
-            engine.threshold[e] = if matches!(engine.ops[e], Op::And | Op::Nand) { inputs.len() as u32 } else { 1 };
+            let inputs = if engine.cell[e].op == Op::Trace { engine.writers.of(e) } else { engine.reads.of(e) };
+            engine.cell[e].count = inputs.iter().filter(|i| engine.cell[**i as usize].on).count() as u16;
+            engine.cell[e].threshold = if matches!(engine.cell[e].op, Op::And | Op::Nand) { inputs.len() as u16 } else { 1 };
+            if inputs.len() > u16::MAX as usize {
+                return Err(format!("an entity with {} inputs: the v2 engine counts up to 65,535 (use --engine v1)", inputs.len()));
+            }
         }
+        engine.show();
         Ok(engine)
     }
 
     /// The output a component would have after this tick, from the trace states of the previous tick.
     #[inline(always)]
     fn evaluate(&self, e: usize, op: Op) -> bool {
-        let (active, inputs) = (g(&self.count, e), g(&self.reads.start, e + 1) - g(&self.reads.start, e));
+        let cell = g(&self.cell, e);
+        // For AND and NAND the threshold is the number of inputs.
+        let (active, inputs) = (cell.count, cell.threshold);
         match op {
             Op::Or | Op::Breakpoint => active > 0,
             Op::Nor => active == 0,
@@ -437,9 +450,9 @@ impl Engine {
             Op::Xor => active % 2 == 1,
             Op::Xnor => active % 2 == 0,
             // Observed: toggles once per input that rose, so two inputs rising together cancel out.
-            Op::Latch | Op::Pin => g(&self.on, e) != g(&self.toggle, e),
+            Op::Latch | Op::Pin => g(&self.cell, e).on != g(&self.cell, e).toggle,
             // Clocks and timers flip from the schedule in `step`, never from their inputs (observed).
-            Op::Scheduled => g(&self.on, e),
+            Op::Scheduled => g(&self.cell, e).on,
             Op::Random | Op::Trace | Op::Dead => unreachable!("not evaluated here"),
         }
     }
@@ -455,7 +468,7 @@ impl Engine {
 impl Engine {
     /// The number held by a group of pins, bit 0 first.
     fn pins_value(&self, pins: &[u32]) -> u32 {
-        pins.iter().enumerate().map(|(k, pin)| (self.on[*pin as usize] as u32) << k).sum()
+        pins.iter().enumerate().map(|(k, pin)| (self.cell[*pin as usize].on as u32) << k).sum()
     }
 
     /// After components or pins flipped: recompute the traces they write, mark the ones that rose,
@@ -465,9 +478,9 @@ impl Engine {
         // First every writer count, then the traces: a trace that loses one writer and gains another in the
         // same tick does not change, exactly as when all its writers are looked at afterwards.
         for &e in flipped {
-            let step = if g(&self.on, e as usize) { 1 } else { u32::MAX }; // +1 or -1
+            let step = if g(&self.cell, e as usize).on { 1 } else { u16::MAX }; // +1 or -1
             for &t in self.writes.of(e as usize) {
-                let c = gm(&mut self.count, t as usize);
+                let c = &mut gm(&mut self.cell, t as usize).count;
                 *c = c.wrapping_add(step);
             }
         }
@@ -475,7 +488,7 @@ impl Engine {
             // The traces only this component writes: their readers see the component itself.
             let (from, to) = (g(&self.direct.start, e as usize) as usize, g(&self.direct.start, e as usize + 1) as usize);
             if from != to {
-                let now = g(&self.on, e as usize);
+                let now = g(&self.cell, e as usize).on;
                 for i in from..to {
                     self.feed(g(&self.direct.items, i), now);
                 }
@@ -483,11 +496,11 @@ impl Engine {
             let (from, to) = (g(&self.writes.start, e as usize) as usize, g(&self.writes.start, e as usize + 1) as usize);
             for i in from..to {
                 let t = g(&self.writes.items, i);
-                let now = g(&self.count, t as usize) > 0;
-                if now == g(&self.on, t as usize) {
+                let now = g(&self.cell, t as usize).count > 0;
+                if now == g(&self.cell, t as usize).on {
                     continue;
                 }
-                *gm(&mut self.on, t as usize) = now;
+                gm(&mut self.cell, t as usize).on = now;
                 self.flip_bit(t);
                 for k in g(&self.readers.start, t as usize) as usize..g(&self.readers.start, t as usize + 1) as usize {
                     self.feed(g(&self.readers.items, k), now);
@@ -508,26 +521,26 @@ impl Engine {
     /// One input of `reader` turned on (`now`) or off: adjusts its count and queues it if its output can change.
     #[inline(always)]
     fn feed(&mut self, reader: u32, now: bool) {
-        let old = g(&self.count, reader as usize);
-        let new = old.wrapping_add(if now { 1 } else { u32::MAX });
-        *gm(&mut self.count, reader as usize) = new;
+        let old = g(&self.cell, reader as usize).count;
+        let new = old.wrapping_add(if now { 1 } else { u16::MAX });
+        gm(&mut self.cell, reader as usize).count = new;
         // A gate that is not queued has the output its count gives. It can only change when the count
         // passes its threshold: the higher of the two counts is then the threshold.
-        let wake = match g(&self.ops, reader as usize) {
-            Op::Or | Op::Breakpoint | Op::Nor | Op::And | Op::Nand => old.max(new) == g(&self.threshold, reader as usize),
+        let wake = match g(&self.cell, reader as usize).op {
+            Op::Or | Op::Breakpoint | Op::Nor | Op::And | Op::Nand => old.max(new) == g(&self.cell, reader as usize).threshold,
             Op::Xor | Op::Xnor | Op::Random => true, // a Random draws at every change of an input
             // Only a rising input toggles a latch; two rising together cancel out (observed).
             Op::Latch | Op::Pin => {
                 if now {
-                    let toggle = gm(&mut self.toggle, reader as usize);
+                    let toggle = &mut gm(&mut self.cell, reader as usize).toggle;
                     *toggle = !*toggle;
                 }
                 now
             }
             Op::Scheduled | Op::Trace | Op::Dead => false,
         };
-        if wake && !g(&self.queued, reader as usize) {
-            *gm(&mut self.queued, reader as usize) = true;
+        if wake && !g(&self.cell, reader as usize).queued {
+            gm(&mut self.cell, reader as usize).queued = true;
             self.dirty.push(reader);
         }
     }
@@ -546,8 +559,8 @@ impl Engine {
             self.loaded_word = word;
             let mut loaded = Vec::new();
             for (k, &pin) in self.components.content_pins.iter().enumerate() {
-                if self.on[pin as usize] != (word >> k & 1 == 1) {
-                    self.on[pin as usize] = !self.on[pin as usize];
+                if self.cell[pin as usize].on != (word >> k & 1 == 1) {
+                    self.cell[pin as usize].on = !self.cell[pin as usize].on;
                     let slot = self.slot[pin as usize] as usize;
                     self.packed[slot >> 6] ^= 1 << (slot & 63);
                     loaded.push(pin);
@@ -577,7 +590,7 @@ impl Engine {
     #[inline(never)]
     fn draw(&mut self, e: u32) -> bool {
         let draw = self.rng.next_bit();
-        draw && self.count[e as usize] > 0
+        draw && self.cell[e as usize].count > 0
     }
 
     #[cfg_attr(profiling, inline(never))]
@@ -599,16 +612,16 @@ impl Engine {
         // After a restore the flips of this tick are already known (see `forced`); nothing is queued then.
         flips.append(&mut self.forced);
         for &e in &dirty {
-            *gm(&mut self.queued, e as usize) = false;
-            let op = g(&self.ops, e as usize);
+            gm(&mut self.cell, e as usize).queued = false;
+            let op = g(&self.cell, e as usize).op;
             // A pin is a latch, except that VMem rejects its input while locked (the input is lost).
             if op == Op::Pin && self.locked {
-                *gm(&mut self.toggle, e as usize) = false;
+                gm(&mut self.cell, e as usize).toggle = false;
                 continue;
             }
             let next = if op == Op::Random { self.draw(e) } else { self.evaluate(e as usize, op) };
-            *gm(&mut self.toggle, e as usize) = false;
-            if next != g(&self.on, e as usize) {
+            gm(&mut self.cell, e as usize).toggle = false;
+            if next != g(&self.cell, e as usize).on {
                 flips.push(e);
             }
         }
@@ -636,7 +649,7 @@ impl Engine {
         // Only replay looks at the packed state; a board without replay does not keep it.
         let packing = self.replay.is_some();
         for &e in &flips {
-            let on = gm(&mut self.on, e as usize);
+            let on = &mut gm(&mut self.cell, e as usize).on;
             *on = !*on;
             if packing {
                 let slot = g(&self.slot, e as usize) as usize;
@@ -645,7 +658,7 @@ impl Engine {
             pins_flipped |= g(&self.pin_role, e as usize);
         }
         if pins_flipped & 4 != 0 {
-            self.breakpoint_hit = flips.iter().any(|e| self.ops[*e as usize] == Op::Breakpoint && self.on[*e as usize]);
+            self.breakpoint_hit = flips.iter().any(|e| self.cell[*e as usize].op == Op::Breakpoint && self.cell[*e as usize].on);
         }
         self.propagate(&flips);
 
@@ -679,8 +692,22 @@ impl Engine {
 
     /// Makes `state()` true for the current tick. Replay moves on without the circuit; this brings it along.
     pub fn sync(&mut self) {
+        self.settle();
+        self.show();
+    }
+
+    /// Puts the circuit where the tick counter is, if replay has run ahead of it.
+    #[inline(always)]
+    fn settle(&mut self) {
         if !self.real {
             self.restore(self.node);
+        }
+    }
+
+    /// Copies the signals to where `state()` shows them.
+    fn show(&mut self) {
+        for (shown, cell) in self.view.iter_mut().zip(&self.cell) {
+            *shown = cell.on;
         }
     }
 
@@ -709,8 +736,8 @@ impl Engine {
         let mut pending = std::mem::take(&mut self.pending);
         pending.clear();
         for &e in if self.forced.is_empty() { &self.dirty } else { &self.forced } {
-            let op = self.ops[e as usize];
-            if !self.forced.is_empty() || (!(op == Op::Pin && self.locked) && self.evaluate(e as usize, op) != self.on[e as usize]) {
+            let op = self.cell[e as usize].op;
+            if !self.forced.is_empty() || (!(op == Op::Pin && self.locked) && self.evaluate(e as usize, op) != self.cell[e as usize].on) {
                 pending.push(e);
             }
         }
@@ -732,19 +759,19 @@ impl Engine {
         let (bits, dirty, rose, meta) = table.node(id);
         let (bits, pending, _, meta) = (bits, dirty, rose, meta);
         for e in self.dirty.drain(..) {
-            self.queued[e as usize] = false;
-            self.toggle[e as usize] = false;
+            self.cell[e as usize].queued = false;
+            self.cell[e as usize].toggle = false;
         }
         self.forced.clear();
         self.forced.extend_from_slice(pending);
         if self.arrays_node == NONE {
             for (i, e) in self.live_list.iter().enumerate() {
-                self.on[*e as usize] = bits[i >> 6] >> (i & 63) & 1 == 1;
+                self.cell[*e as usize].on = bits[i >> 6] >> (i & 63) & 1 == 1;
             }
             // The counts follow from the signals: a trace counts its writers that are on, a component the traces it reads.
             for &e in &self.live_list {
-                let inputs = if self.ops[e as usize] == Op::Trace { self.writers.of(e as usize) } else { self.reads.of(e as usize) };
-                self.count[e as usize] = inputs.iter().filter(|i| self.on[**i as usize]).count() as u32;
+                let inputs = if self.cell[e as usize].op == Op::Trace { self.writers.of(e as usize) } else { self.reads.of(e as usize) };
+                self.cell[e as usize].count = inputs.iter().filter(|i| self.cell[**i as usize].on).count() as u16;
             }
         } else {
             // The arrays hold another node: flip only the signals that differ, and adjust the counts they feed.
@@ -754,12 +781,12 @@ impl Engine {
                 while differ != 0 {
                     let e = self.live_list[w << 6 | differ.trailing_zeros() as usize] as usize;
                     differ &= differ - 1;
-                    self.on[e] = !self.on[e];
-                    let step = if self.on[e] { 1 } else { u32::MAX };
+                    self.cell[e].on = !self.cell[e].on;
+                    let step = if self.cell[e].on { 1 } else { u16::MAX };
                     // A trace feeds its readers; a component feeds the traces it shares and the readers of the traces it owns.
-                    let fed = if self.ops[e] == Op::Trace { [self.readers.of(e), &[]] } else { [self.writes.of(e), self.direct.of(e)] };
+                    let fed = if self.cell[e].op == Op::Trace { [self.readers.of(e), &[]] } else { [self.writes.of(e), self.direct.of(e)] };
                     for &fed in fed.into_iter().flatten() {
-                        self.count[fed as usize] = self.count[fed as usize].wrapping_add(step);
+                        self.cell[fed as usize].count = self.cell[fed as usize].count.wrapping_add(step);
                     }
                 }
             }
@@ -777,9 +804,11 @@ impl Engine {
 impl Simulation for Engine {
     /// One tick, whatever replay knows. Used by tests and tools; `advance` is the fast way.
     fn step(&mut self) {
-        self.sync();
+        self.settle();
         self.node = NONE;
         self.step_real();
+        // `step` is the tick-by-tick way in for tests and tools, which look at `state()` after every tick.
+        self.show();
     }
 
     /// Replay (attempt 8): at a node whose edge and arrival are known, the engine goes to the next event without
@@ -812,7 +841,7 @@ impl Simulation for Engine {
                     }
                 }
             }
-            self.sync();
+            self.settle();
             if self.dirty.is_empty() && self.forced.is_empty() && !self.load_pending && !self.locked {
                 let target = until.min(self.clock_due).min(self.timer_due).min(self.schedule_due);
                 if target > self.tick + 1 {
@@ -845,7 +874,7 @@ impl Simulation for Engine {
     }
 
     fn state(&self) -> &[bool] {
-        &self.on
+        &self.view
     }
 
     fn breakpoint_hit(&self) -> bool {

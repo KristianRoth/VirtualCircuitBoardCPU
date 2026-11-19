@@ -26,6 +26,8 @@ Every optimisation that was tried on the v2 engine, what it gained, and whether 
 | 17 | v2.1: replay keyed on the loaded word's content bits only | 1.000 (quick run) | rejected |
 | 18 | v2.1: a latch keeps a toggle flag; no just-risen marks | 1.045 (three runs) | accepted |
 | 19 | v2.1: the packed state kept up to date at every change | 1.11 (three runs) | accepted |
+| 20 | v2.1: one record per entity | 1.028 (three runs) | accepted |
+| 21 | v2.1: the engine's own numbering, simulated entities first | 0.999 (three runs) | rejected |
 
 ## The profile and the ranked plan
 
@@ -692,6 +694,33 @@ Every program faster, and over the old bar too: with the just-risen marks and th
 **Both together, on full runs** (every program to its end, one run; old = attempt 15): 1.17. Day 4 part 2 runs at 116 M ticks per second, 11.5 s. `cargo test` and `cargo test --release -- --ignored` pass.
 
 **The profile after attempt 19** (day 4 part 2): `propagate` 60% of the time, the rest of the simulated tick 28%, everything to do with replay 12%. The ticks are crossed as before: 63% replayed, 27% idle, 9.5% simulated.
+
+### v2.1, step 4 (2026-11-19): attempts 20 and 21, the layout
+After attempt 19 the function that applies flips was 60% of the time, and for every gate a flip feeds it touched four arrays. The bar is 1.015 from here on. Three runs per program, 20 million ticks.
+
+**20. One record per entity: accepted, 1.028.** Count, threshold, operation, state, queued flag and toggle flag, six arrays before, are one record of eight bytes (`Cell`). The counts became 16 bits wide; a board with a gate of more than 65,535 inputs is refused by v2 with a message that names `--engine v1`. `state()` shows a copy of the signals that `sync` and `step` bring up to date, since the signals themselves now live in the records. Old = attempt 16 as accepted.
+
+| Program | Old, M ticks/s | New | Ratio |
+|---|---|---|---|
+| day1/part1 | 73.53 | 75.47 | 1.026 |
+| day1/part2 | 69.93 | 71.17 | 1.018 |
+| day2/part1 | 181.82 | 194.17 | 1.068 |
+| day2/part2 | 277.78 | 281.69 | 1.014 |
+| day3/part1 | 173.91 | 173.91 | 1.000 |
+| day3/part2 | 149.25 | 152.67 | 1.023 |
+| day4/part1 | 114.94 | 119.76 | 1.042 |
+| day4/part2 | 91.32 | 93.46 | 1.023 |
+| sample-primes | 307.69 | 322.58 | 1.048 |
+| sample-compact-primes | 59.17 | 60.42 | 1.021 |
+| **Score** | | | **1.028** |
+
+No program slower. Less than the profile suggested: the four arrays were already in the first cache, so one access in place of four saved instructions, not waiting. (The first build of this attempt copied all signals for `state()` in every pass of the event loop and ran at a tenth of the speed; the benchmark showed it at once.)
+
+**21. The engine's own numbering, simulated entities first: rejected, 0.999.** The 2,100 simulated entities got the numbers 0 to 2,099 inside the engine, so that their records lie together and an entity's number is its bit in the packed state. Equal to v1 on every test; five programs slower, three faster, none by more than 5%. The whole of what a tick touches fitted the first cache before, so moving it closer together changes nothing. 16-bit indices in the lists were not tried: they aim at the same thing. Tag `v2-attempt-21-rejected`.
+
+**After step 4:** day 4 part 2 to its Breakpoint in 11.1 s (121 M ticks per second). `cargo test` and `cargo test --release -- --ignored` pass.
+
+What this step says about the simulated tick: its cost is not memory. The data is small enough to sit in the first cache whatever its layout. What is left is the number of instructions per flip and the branches in them.
 
 ## Ideas not tried
 
