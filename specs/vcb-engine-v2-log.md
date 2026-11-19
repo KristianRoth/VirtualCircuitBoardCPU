@@ -28,6 +28,7 @@ Every optimisation that was tried on the v2 engine, what it gained, and whether 
 | 19 | v2.1: the packed state kept up to date at every change | 1.11 (three runs) | accepted |
 | 20 | v2.1: one record per entity | 1.028 (three runs) | accepted |
 | 21 | v2.1: the engine's own numbering, simulated entities first | 0.999 (three runs) | rejected |
+| 23 | v2.1: replay on boards with a simulated Timer | 1.07 over three runs: the compact sample 2.1, the rest unchanged | accepted |
 | 22 | v2.1: the replay table emptied at its limit; saved between runs (`--replay-cache`) | 1.001 on the benchmark; a second run of day 4 part 2 in 1.3 s | accepted (a feature, not a speed-up of a first run) |
 
 ## The profile and the ranked plan
@@ -744,6 +745,43 @@ Emptying is better wherever the limit bites, and it shows something about replay
 | day 2 part 2 with day 2 part 1's table | 0.32 s | (no faster than without: another program passes through other states) | |
 
 **Verdict.** Accepted as a feature. It does nothing for a first run (the benchmark is unchanged, 1.001 over three runs) and makes a repeated run of the same program 10 to 40 times faster. A different program gains little from another's table, in line with the finding above that states are local to where a program is. Equality: `cargo test` (73 passed, one new: the cache written, read back, refused for another board, a file cut short, a spoiled number, a file that is something else, a 1 MiB table) and `cargo test --release -- --ignored`.
+
+### v2.1, step 8 (2026-11-19): control replayed, data simulated: measured, not built
+The remaining route to replaying much more than today. An estimator only (`engine/examples/control_estimate.rs`); the full tables and the reasoning are in `vcb-engine-v2.1.md` under "Step 8 done".
+- In the steps replay simulates, 62% to 70% of the flips are the same in every step of their context (a few hundred contexts per program). Ceiling: about 2.3 times on the weak programs.
+- With a fixed split into control entities and data entities, which is what could be built, the control part holds 0.9 to 1.15 of the 8 to 10 flips per tick, and a fifth of the ticks would need a hashed lookup. Net gain: none.
+- The same gates are control in one place of the program and data in another, so no fixed split exists in a netlist.
+
+No attempt number: nothing was changed in the engine. Read-set replay (step 6) is closed with it: a step changes about 320 signals, and putting them into the circuit costs what simulating them costs.
+
+### v2.1, step 7 (2026-11-19): attempt 23, replay on boards with a simulated Timer: accepted
+**Idea.** Replay was off on any board where a Timer is simulated, because the timers' position in their interval would have been part of every state and states would hardly repeat. But a step in which no timer flips does the same wherever the timers are in their interval. So the position stays out of the state, a step is recorded only if no timer flipped during it, and it is replayed only if it ends before the next flip. A step that contains a flip is simulated, as before.
+
+**Expected.** Only the compact sample has such timers; with `--timer-ticks 1000` and steps of about 160 ticks, five steps in six contain no flip.
+
+**Changed.** Three places in `sim2.rs`: replay is no longer switched off for timers; the replay path checks that the step ends before the timers' next flip; a step in which a timer flipped is not recorded.
+
+**Measured.** Three runs per program, 20 million ticks; old = attempt 22.
+
+| Program | Old, M ticks/s | New | Ratio |
+|---|---|---|---|
+| day1/part1 | 76.63 | 75.19 | 0.981 |
+| day1/part2 | 71.17 | 71.17 | 1.000 |
+| day2/part1 | 194.17 | 198.02 | 1.020 |
+| day2/part2 | 285.71 | 281.69 | 0.986 |
+| day3/part1 | 180.18 | 173.91 | 0.965 |
+| day3/part2 | 153.85 | 152.67 | 0.992 |
+| day4/part1 | 117.65 | 121.95 | 1.037 |
+| day4/part2 | 90.09 | 91.74 | 1.018 |
+| sample-primes | 338.98 | 327.87 | 0.967 |
+| sample-compact-primes | 62.70 | 133.33 | 2.127 |
+| **Score** | | | **1.07** |
+
+On a full run of the compact sample (100 million ticks): 63 to 169 M ticks per second, 2.66; replay crosses 72% of its ticks with a table of 26 MiB. The nine programs without a timer are unchanged within the noise (the code they run differs by one comparison per replayed step).
+
+**Equality.** `cargo test` (73) and `cargo test --release -- --ignored` (4). The compact sample with `--verify` over 30 million ticks at `--timer-ticks` 1000, 50, 7 and 1: v1 gives the same 185,737 VMem events, stop and final VMem each time. (With a timer interval of 1 every step contains a flip and nothing is replayed: 24 M ticks per second.)
+
+**Verdict.** Accepted: 1.07, all of it from the one board with timers, which was the weakest row of the stage 1 table (3.9 times v1).
 
 ## Ideas not tried
 

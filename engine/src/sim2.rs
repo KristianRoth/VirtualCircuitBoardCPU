@@ -362,10 +362,10 @@ impl Engine {
             live[e] &= !merged[e];
         }
         let live_list: Vec<u32> = (0..n as u32).filter(|e| live[*e as usize]).collect();
-        // Replay is off with Random ink (each evaluation uses up a draw) and with a simulated Timer (its position
-        // within its interval would be part of every state, so states would hardly ever repeat).
-        let timed = (0..n).any(|e| live[e] && components.kinds[e] == Kind::Component(Ink::Timer));
-        let replay = (!ops.contains(&Op::Random) && !timed).then(|| Table::new(live_list.len().div_ceil(64), MEMORY_LIMIT));
+        // Replay is off with Random ink (each evaluation uses up a draw). A simulated Timer does not switch it
+        // off (attempt 23): a step in which no timer flips does not depend on where the timers are in their
+        // interval, so that position stays out of the states, and only such steps are recorded and replayed.
+        let replay = (!ops.contains(&Op::Random)).then(|| Table::new(live_list.len().div_ceil(64), MEMORY_LIMIT));
         let mut engine = Engine { profile: Profile::default(), loaded_word: 0, replay, live_list, node: NONE, node_tick: 0, real: true, arrays_node: NONE, forced: Vec::new(), pending: Vec::new(), flush_when_full: true, schedule, cell: ops.iter().map(|op| Cell { count: 0, threshold: 0, op: *op, on: false, queued: false, toggle: false }).collect(), view: vec![false; n], reads, writes, readers, writers, direct, live, packed: Vec::new(), slot: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(),  clocks: Vec::new(), clock_due: u64::MAX, timer_due: u64::MAX, schedule_due: u64::MAX, clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
         for (role, pins) in [(1, &engine.components.address_pins), (2, &engine.components.content_pins)] {
             for pin in pins {
@@ -898,7 +898,9 @@ impl Simulation for Engine {
         loop {
             if self.node != NONE && self.node_tick == self.tick {
                 let table = self.replay.as_mut().unwrap();
-                if let Some(edge) = table.edge(self.node).filter(|edge| self.tick + edge.ticks <= until) {
+                // The tick at which the timers flip next. A step may be replayed only if it ends before that.
+                let timer_flip = if self.timers.is_empty() { u64::MAX } else { (self.tick / self.timer_ticks + 1) * self.timer_ticks };
+                if let Some(edge) = table.edge(self.node).filter(|edge| self.tick + edge.ticks <= until && self.tick + edge.ticks < timer_flip) {
                     let word = if edge.fetch == NONE { 0 } else { self.vmem[edge.fetch as usize] };
                     if let Some(arrival) = table.arrival(self.node, edge, word) {
                         table.replayed_ticks += edge.ticks;
@@ -933,7 +935,9 @@ impl Simulation for Engine {
             let event = self.breakpoint_hit || self.fetched.is_some() || self.written.is_some();
             if event && self.replay.is_some() {
                 let reached = self.intern();
-                if self.node != NONE && reached != NONE {
+                // A step in which a timer flipped depends on when it flipped: it is not recorded.
+                let timer_flipped = !self.timers.is_empty() && self.tick / self.timer_ticks != self.node_tick / self.timer_ticks;
+                if self.node != NONE && reached != NONE && !timer_flipped {
                     let address = |a: Option<usize>| a.map_or(NONE, |a| a as u32);
                     let edge = Edge { ticks: self.tick - self.node_tick, fetch: address(self.fetched), write: address(self.written), breakpoint: self.breakpoint_hit };
                     let written = self.written.map_or(0, |a| self.vmem[a]);
