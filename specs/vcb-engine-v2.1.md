@@ -347,6 +347,10 @@ With this, steps 6 and 8 are both answered: a key on what a step reads gives lit
 
 Replay now works on a board with a simulated Timer, for the steps in which no timer flips (the timers' position stays out of the states). The compact sample goes from 63 to 169 M ticks per second on a full run; nothing else changes. Checked with `--verify` at four timer intervals.
 
+### Attempt 24 (2026-11-19): profile-guided optimisation
+
+The item left over from step 2, done once the user had installed `llvm-tools`. `sh tools/build-pgo.sh` builds the engine with a recorded run: 1.12 times faster on every board, also when trained on a single program of one CPU. Day 4 part 2 runs in 10.3 s. A plain `cargo build --release` still works and is that much slower.
+
 ### What the research leaves open
 
 1. Can the split into control and data be found from a netlist, and how much of today's misses would a control-only key recover? (Decides A1.)

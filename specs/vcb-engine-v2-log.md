@@ -28,6 +28,7 @@ Every optimisation that was tried on the v2 engine, what it gained, and whether 
 | 19 | v2.1: the packed state kept up to date at every change | 1.11 (three runs) | accepted |
 | 20 | v2.1: one record per entity | 1.028 (three runs) | accepted |
 | 21 | v2.1: the engine's own numbering, simulated entities first | 0.999 (three runs) | rejected |
+| 24 | v2.1: profile-guided optimisation (`tools/build-pgo.sh`) | 1.12 (three runs), trained on one program | accepted |
 | 23 | v2.1: replay on boards with a simulated Timer | 1.07 over three runs: the compact sample 2.1, the rest unchanged | accepted |
 | 22 | v2.1: the replay table emptied at its limit; saved between runs (`--replay-cache`) | 1.001 on the benchmark; a second run of day 4 part 2 in 1.3 s | accepted (a feature, not a speed-up of a first run) |
 
@@ -782,6 +783,33 @@ On a full run of the compact sample (100 million ticks): 63 to 169 M ticks per s
 **Equality.** `cargo test` (73) and `cargo test --release -- --ignored` (4). The compact sample with `--verify` over 30 million ticks at `--timer-ticks` 1000, 50, 7 and 1: v1 gives the same 185,737 VMem events, stop and final VMem each time. (With a timer interval of 1 every step contains a flip and nothing is replayed: 24 M ticks per second.)
 
 **Verdict.** Accepted: 1.07, all of it from the one board with timers, which was the weakest row of the stage 1 table (3.9 times v1).
+
+### v2.1 (2026-11-19): attempt 24, profile-guided optimisation: accepted
+**Idea.** Left over from step 2: let the compiler see a real run before it lays out the code. The compiler settings of attempt 15 gave 4% without it.
+
+**Changed.** No engine code. `engine/tools/build-pgo.sh` does three steps: a build that records what it runs (`-Cprofile-generate`), a training run, and the build that uses the record (`-Cprofile-use`), into `target/release/vcb`. It needs the toolchain's `llvm-tools` component, which the user had installed for this. The record stays under `target/` and is not committed.
+
+**Is it tuned to the benchmark?** Checked by training on one program only, day 1 part 1 on the engine's own fixture board, and measuring all ten:
+
+| Program | Ordinary build, M ticks/s | Trained on all ten | Ratio | Trained on the fixture only | Ratio |
+|---|---|---|---|---|---|
+| day1/part1 | 77.22 / 72.46 | 88.50 | 1.146 | 80.97 | 1.117 |
+| day1/part2 | 74.07 / 67.57 | 82.99 | 1.120 | 74.91 | 1.109 |
+| day2/part1 | 200.00 / 183.49 | 217.39 | 1.087 | 202.02 | 1.101 |
+| day2/part2 | 294.12 / 263.16 | 327.87 | 1.115 | 277.78 | 1.056 |
+| day3/part1 | 183.49 / 168.07 | 210.53 | 1.147 | 188.68 | 1.123 |
+| day3/part2 | 155.04 / 142.86 | 176.99 | 1.142 | 161.29 | 1.129 |
+| day4/part1 | 123.46 / 114.29 | 138.89 | 1.125 | 126.58 | 1.108 |
+| day4/part2 | 93.90 / 86.58 | 106.95 | 1.139 | 97.56 | 1.127 |
+| sample-primes | 338.98 / 312.50 | 416.67 | 1.229 | 384.62 | 1.231 |
+| sample-compact-primes | 145.99 / 133.33 | 172.41 | 1.181 | 151.52 | 1.136 |
+| **Score** | | | **1.14** | | **1.12** |
+
+(Two sessions, so the ordinary build has two columns of speeds; each ratio is within its session. Three runs per program, 20 million ticks.) Trained on one program of one CPU, the build is 1.12 times faster on all of them, the two other CPU designs included and the most. So the gain is in how the tick's code is laid out, not in anything about a program. The script trains on the fixture only: it then needs nothing outside `engine/`.
+
+**Equality.** The profile-guided binary with `--verify`: day 4 part 2 to its Breakpoint (8,209,757 VMem events, 10.3 s; 11.1 s with the ordinary build), the compact sample and the sample over 30 million ticks each. `cargo test` builds its own, ordinary binary and is unaffected.
+
+**Verdict.** Accepted: 1.12. The cost is in building: `cargo build --release` no longer gives the fastest engine; `sh tools/build-pgo.sh` does, in about 70 seconds. Attempts are still compared with ordinary builds of old and new, which is quicker and measures the same thing; the profile-guided build is for running.
 
 ## Ideas not tried
 
