@@ -137,7 +137,7 @@ Decided by the user on 2026-11-19. The goal is a faster simulator for any board,
 ### The acceptance rule
 - **What is measured.** The last accepted build and the new build are run alternately in one session (old, new, old, new, …) on every program of the benchmark set, as measured runs, five times each. Per program the best of five counts. Start-up time (everything before tick 0) is reported separately and is not part of the speed.
 - **The score** is the geometric mean, over the programs, of new speed divided by old speed.
-- **Accepted** when all equality tests pass and the score is at least 1.03 and exceeds 1 by more than twice the noise the profile measured.
+- **Accepted** when all equality tests pass and the score is at least **1.015** and exceeds 1 by more than twice the noise the profile measured (0.5%, so 1%). The bar was 1.03 through stage 1; the user lowered it on 2026-11-19, in v2.1: the engine is optimised far enough that single steps of 3% have become rare, and 1.5% is still clear of the noise when measured over three runs.
 - **In between** (a gain, but under that bar): measured once more. If it is still under the bar, rejected.
 - **Long-run attempts.** An attempt whose log entry predicts a gain that grows with run length or needs warm-up (a compile step, a cache) may be judged on one full run of the longest program instead, with start-up included. The entry says so before the measurement.
 - **Combined attempts.** Two ideas that only pay off together may be one attempt; the entry says why they are not separate.
