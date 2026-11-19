@@ -351,6 +351,10 @@ Replay now works on a board with a simulated Timer, for the steps in which no ti
 
 The item left over from step 2, done once the user had installed `llvm-tools`. `sh tools/build-pgo.sh` builds the engine with a recorded run: 1.12 times faster on every board, also when trained on a single program of one CPU. Day 4 part 2 runs in 10.3 s. A plain `cargo build --release` still works and is that much slower.
 
+### Attempt 25 (2026-11-19): watched inputs, rejected
+
+Asked for by the user as "a simpler graph". Measured first: a simulated tick flips 6 to 7 components but tells a reader about 24 times (132 on the sample), and two thirds or more of those reach an AND or OR-like gate that another input already settles. The attempt made such a gate listen to one settling input only (the watched literals of SAT solvers). The sample ran 1.5 times faster; the user's CPU 6% slower, because its gates are narrow and the count update that was saved is cheaper than moving a watch. Score 0.98, rejected, tag `v2-attempt-25-rejected`. The lesson for other graph ideas: a wasted count update costs about nothing here; a simpler graph only pays if it removes flips, not notifications.
+
 ### What the research leaves open
 
 1. Can the split into control and data be found from a netlist, and how much of today's misses would a control-only key recover? (Decides A1.)

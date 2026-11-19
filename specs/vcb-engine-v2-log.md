@@ -29,6 +29,7 @@ Every optimisation that was tried on the v2 engine, what it gained, and whether 
 | 20 | v2.1: one record per entity | 1.028 (three runs) | accepted |
 | 21 | v2.1: the engine's own numbering, simulated entities first | 0.999 (three runs) | rejected |
 | 24 | v2.1: profile-guided optimisation (`tools/build-pgo.sh`) | 1.12 (three runs), trained on one program | accepted |
+| 25 | v2.1: watched inputs (an AND/OR gate listens only to the input that settles it) | 0.98 (three runs); the sample 1.5, the user's CPU 0.94 | rejected |
 | 23 | v2.1: replay on boards with a simulated Timer | 1.07 over three runs: the compact sample 2.1, the rest unchanged | accepted |
 | 22 | v2.1: the replay table emptied at its limit; saved between runs (`--replay-cache`) | 1.001 on the benchmark; a second run of day 4 part 2 in 1.3 s | accepted (a feature, not a speed-up of a first run) |
 
@@ -810,6 +811,29 @@ On a full run of the compact sample (100 million ticks): 63 to 169 M ticks per s
 **Equality.** The profile-guided binary with `--verify`: day 4 part 2 to its Breakpoint (8,209,757 VMem events, 10.3 s; 11.1 s with the ordinary build), the compact sample and the sample over 30 million ticks each. `cargo test` builds its own, ordinary binary and is unaffected.
 
 **Verdict.** Accepted: 1.12. The cost is in building: `cargo build --release` no longer gives the fastest engine; `sh tools/build-pgo.sh` does, in about 70 seconds. Attempts are still compared with ordinary builds of old and new, which is quicker and measures the same thing; the profile-guided build is for running.
+
+## Attempt 25 (2026-11-19): watched inputs — rejected
+
+**Why.** The user asked for a simpler graph. The profiling counters (commit before this attempt) showed that a simulated tick flips 6 to 7 components but applies a flip to a reader about 24 times on the user's CPU (132 on the sample, 36 on the compact sample), and that 65 to 93% of those go to an AND or OR-like gate whose output another input already settles: a count is changed and nothing follows.
+
+**What.** The two-watched-literals idea of SAT solvers, with one watch. An AND, NAND, OR or NOR gate (1 to 16 inputs) keeps no count. It stands in the list of one input only, one that settles its output (off for AND, on for OR). When that input changes, the gate looks for another settling input and moves to its list; if there is none its output changes and it joins the lists of all its inputs. Entries left behind are dropped when met. The fixed reader lists lose these gates. Stored states put back by replay notify the changed signals the same way. Off on a board with Random ink. The graph a flip walks through so becomes smaller while the circuit runs.
+
+**Equality.** All of `tests/v2.rs`, fixtures, model and cli tests passed (after one fault: an input told twice in one pass was taken to have stopped settling the gate).
+
+**Numbers** (20 million ticks, plain builds of both, ratio to attempt 24):
+
+| Variant | user's CPU (8 programs) | sample | compact sample | score |
+|---|---|---|---|---|
+| lists as `Vec<Vec<u32>>`, gates with 1+ inputs, one run | 0.80 to 0.91 | 1.45 | 0.95 | 0.89 |
+| 2+ inputs, one run | 0.71 to 1.03 | 1.59 | 0.93 | 0.91 |
+| 3+ inputs, one run | 0.84 to 1.00 | 1.60 | 0.97 | 0.985 |
+| 5+ inputs, one run | 0.88 to 1.09 | 1.02 | 0.93 | 0.95 |
+| lists in one flat array, 3+ inputs, three runs | 0.87 to 0.95 | 1.52 | 0.96 | 0.978 |
+| the mechanism with no gate watched, three runs | 0.93 to 0.99 | 1.14 | 0.98 | 0.980 |
+
+**What it shows.** On the sample, whose gates are wide, the idea does what it promised: 1.5 times. On the user's CPU it loses in every variant. Two reasons. Looking at a signal's list on every flip, and telling the lists after every state put back, costs 3 to 4% before any gate is watched. And the update it replaces is one add and one compare on a record already in the first cache, while moving a watch is a search and two list writes: with gates of two or three inputs the watch moves too often to pay for itself. (The 1.14 of the sample with nothing watched is not explained; a change in how the code is laid out is the likely cause.)
+
+**Verdict.** Rejected: 0.98 against a bar of 1.015. The code is on the tag `v2-attempt-25-rejected`. Left open: switching it on only where a netlist has mostly wide gates would keep the sample's gain, but the fixed cost would have to go first, and the threshold would be a number tuned on two boards.
 
 ## Ideas not tried
 

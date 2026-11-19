@@ -200,6 +200,13 @@ pub struct Profile {
     pub ticks_idle: u64,
     /// Steps taken from the replay table, states looked up or stored, states restored into the circuit.
     pub replay_steps: u64,
+    /// How often a flip was applied to something that reads it, split by what the reader is and whether that
+    /// could change its output: [AND-like or OR-like gate woken, such a gate not woken, XOR, latch or pin
+    /// woken, latch or pin not woken, anything else].
+    pub feeds: [u64; 6],
+    /// Traces that changed, and writer counts adjusted for traces with several writers.
+    pub trace_flips: u64,
+    pub trace_counts: u64,
     pub interns: u64,
     pub restores: u64,
 }
@@ -483,6 +490,9 @@ impl Engine {
             for &t in self.writes.of(e as usize) {
                 let c = &mut gm(&mut self.cell, t as usize).count;
                 *c = c.wrapping_add(step);
+                if cfg!(profiling) {
+                    self.profile.trace_counts += 1;
+                }
             }
         }
         for &e in flipped {
@@ -503,6 +513,9 @@ impl Engine {
                 }
                 gm(&mut self.cell, t as usize).on = now;
                 self.flip_bit(t);
+                if cfg!(profiling) {
+                    self.profile.trace_flips += 1;
+                }
                 for k in g(&self.readers.start, t as usize) as usize..g(&self.readers.start, t as usize + 1) as usize {
                     self.feed(g(&self.readers.items, k), now);
                 }
@@ -540,6 +553,15 @@ impl Engine {
             }
             Op::Scheduled | Op::Trace | Op::Dead => false,
         };
+        if cfg!(profiling) {
+            let kind = match g(&self.cell, reader as usize).op {
+                Op::Or | Op::Breakpoint | Op::Nor | Op::And | Op::Nand => 1 - wake as usize,
+                Op::Xor | Op::Xnor | Op::Random => 2,
+                Op::Latch | Op::Pin => 4 - wake as usize,
+                _ => 5,
+            };
+            self.profile.feeds[kind] += 1;
+        }
         if wake && !g(&self.cell, reader as usize).queued {
             gm(&mut self.cell, reader as usize).queued = true;
             self.dirty.push(reader);
