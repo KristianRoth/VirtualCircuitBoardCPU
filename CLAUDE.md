@@ -50,6 +50,7 @@ cd engine && cargo test
 Use `./target/release/vcb` for long runs; the debug build is far slower.
 
 ## Rules of this project
+- **The engine optimises the simulator, not the user's CPU** (the user, 2026-11-19). Nothing in the engine may come from knowing a particular board: no coordinates, no hand-marked blocks, no constants tuned on one board. What the engine uses it finds in the netlist it is given or learns while running. Looking at a board to see where time goes is fine; building that knowledge into the engine is not. The rule is spelled out in `specs/vcb-engine-v2.md`.
 - **The game is the ground truth.** If the engine disagrees with an observation, the engine is wrong until the user has re-observed that case.
 - **Never guess a game rule silently.** A rule that is not observed is marked as a model in the spec, has a question number in the facts file, and gets a board. A pattern the rules don't define is an error in the engine.
 - **A model change must keep every earlier fixture passing**, and the changed rule is edited in the v1 spec and the facts file in the same commit.
