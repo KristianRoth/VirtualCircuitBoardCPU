@@ -423,5 +423,52 @@ fn main() -> Result<(), String> {
             }
         }
     }
+
+    // The same tree fixed before the run, by size alone (the user's question): split a part while it has more
+    // than `largest` entities, use what comes out as a unit if it has at least `smallest`, simulate the rest.
+    let sizes: Vec<Vec<usize>> = tree.iter().map(|l| {
+        let mut size = vec![0usize; l.parts];
+        for p in l.part.iter().filter(|p| **p != NONE) {
+            size[*p as usize] += 1;
+        }
+        size
+    }).collect();
+    let children_of = |i: usize| {
+        let mut children: Vec<Vec<usize>> = vec![Vec::new(); tree[i].parts];
+        if i + 1 < tree.len() {
+            let mut seen = vec![false; tree[i + 1].parts];
+            for e in 0..n {
+                let (p, c) = (tree[i].part[e], tree[i + 1].part[e]);
+                if p != NONE && c != NONE && !std::mem::replace(&mut seen[c as usize], true) {
+                    children[p as usize].push(c as usize);
+                }
+            }
+        }
+        children
+    };
+    let children: Vec<Vec<Vec<usize>>> = (0..tree.len()).map(children_of).collect();
+    println!();
+    println!("the tree fixed before the run by size alone (a lookup counted as 8 flips):");
+    println!("    {:>9}{:>9}{:>7}{:>22}{:>14}{:>12}{:>8}", "largest", "smallest", "units", "of the missed flips", "lookups/tick", "per lookup", "net");
+    for largest in [4096usize, 1024, 512, 256, 128, 64] {
+        for smallest in [16usize, 32, 64] {
+            if smallest > largest {
+                continue;
+            }
+            let (mut units, mut events, mut flips_known) = (0usize, 0u64, 0u64);
+            let mut todo: Vec<(usize, usize)> = (0..tree[0].parts).map(|p| (0, p)).collect();
+            while let Some((i, p)) = todo.pop() {
+                if sizes[i][p] > largest && !children[i][p].is_empty() {
+                    todo.extend(children[i][p].iter().map(|c| (i + 1, *c)));
+                } else if sizes[i][p] >= smallest && sizes[i][p] <= largest {
+                    units += 1;
+                    events += tree[i].p_miss[p][0];
+                    flips_known += tree[i].p_miss[p][2];
+                }
+            }
+            let (skipped, lookups) = (flips_known as f64 / run as f64, events as f64 / run as f64);
+            println!("    {:>9}{:>9}{:>7}{:>21.1}%{:>14.3}{:>12.1}{:>8.2}", largest, smallest, units, pct(flips_known, missed), lookups, flips_known as f64 / events.max(1) as f64, skipped - 8.0 * lookups);
+        }
+    }
     Ok(())
 }
