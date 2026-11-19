@@ -526,6 +526,17 @@ Start-up unchanged (the pre-run is a few hundred ticks). Every program stopped a
 
   **Small parts read from a table: measured, not worth building.** The estimator counts the parts small enough to index a table directly (their simulated signals and inputs, each with "changed in the last tick", in at most 16 or 24 bits). Nearly all fine parts are that small, and together they hold 30% to 80% of the flips left in the misses. But they flip less often than their inputs change: 0.4 to 0.9 flips per lookup on the user's CPU and the compact sample, about 0.2 on the sample. A table lookup, however cheap, is then more work than the simulation it replaces, which already leaves a gate asleep when an input change cannot alter its output (attempt 5). Fine parts are closed as an idea unless a way is found to not look at a part when its input changes without effect, which is what attempt 5 does per gate.
 
+  **A tree whose depth follows the parts** (the user's idea, 2026-11-19): do not split a part that is small enough, split one that is still large, and use a part as a unit only where that pays. The estimator now keeps the numbers per part and picks, from the root down, for every part the best of three: use it as a unit, split it, or leave it to the plain simulation. With a lookup counted as 8 flips, over 3 million ticks, on top of whole-board replay:
+
+  | Board, program | Units chosen | Share of the missed flips skipped | Flips per lookup | Coarsest level alone, for comparison |
+  |---|---|---|---|---|
+  | the user's CPU, day 4 part 2 | 1 (the large part) | 22.9% | 226 | 22.9% |
+  | the user's CPU, day 1 part 2 | 5, at four different depths (45 to 272 entities) | 50.9% | 18.7 | 4.5% |
+  | sample | 2 | 15.2% | 16.3 | 6.1% |
+  | sample compact | 1 | 41.5% | 149 | 33.2% |
+
+  With a lookup at 4 flips the user's CPU on day 4 part 2 gets 7 units and 41.6%. So variable depth helps where the coarsest part rarely recognises its situation: a few mid-sized parts with few inputs (1 to 20) that know their situation 83% to 100% of the time carry the gain, and the hundreds of tiny parts are never chosen. Two cautions: the choice was made here with the whole run known, where an engine would have to learn while running which parts pay; and the units are chosen by their own numbers, without the cost of the machinery around them. This is the form of part-level skipping worth building, if any.
+
 See "Not planned" in the ranked plan. Nothing else yet.
 
 ## Stage results
