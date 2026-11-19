@@ -277,3 +277,42 @@ fn verbose_prints_changes_to_watched_words_as_they_happen() {
     assert_eq!(text(&out.stdout).lines().count(), 5);
     assert!(text(&out.stdout).starts_with("tick 2: 0x00000000 = 0x00000001 (1)\n"));
 }
+
+#[test]
+fn a_replay_cache_is_written_read_back_and_checked() {
+    let d = dir("cache");
+    let (board, cache) = (fixture("cpu-aoc1p1.vcb"), d.join("cpu.cache"));
+    let run = |board: &str, more: &[&str]| vcb(&[&["run", board, "--ticks", "400000", "--watch", "0x100", "--replay-cache", cache.to_str().unwrap()], more].concat());
+    // The first run writes the table, the second reads it and learns nothing new; both print the same.
+    let first = run(&board, &[]);
+    assert!(first.status.success() && text(&first.stderr).contains("not there yet") && text(&first.stderr).contains("states saved"), "{}", text(&first.stderr));
+    let second = run(&board, &["--verify"]);
+    assert!(text(&second.stderr).contains("states loaded") && text(&second.stderr).contains("nothing new learned") && text(&second.stderr).contains("verified: v1 gives the same"), "{}", text(&second.stderr));
+    assert_eq!(text(&first.stdout), text(&second.stdout));
+    // Another board does not use it, says so, and replaces it.
+    let other = run(&fixture("cpu-aoc1p2.vcb"), &[]);
+    assert!(other.status.success());
+    let same_circuit = text(&other.stderr).contains("states loaded");
+    assert!(same_circuit || text(&other.stderr).contains("not used, it was made for another board"), "{}", text(&other.stderr));
+    // A damaged file is an error, not a wrong answer: cut the file short, then spoil a number in it.
+    std::fs::remove_file(&cache).unwrap();
+    assert!(run(&board, &[]).status.success());
+    let bytes = std::fs::read(&cache).unwrap();
+    std::fs::write(&cache, &bytes[..bytes.len() / 2]).unwrap();
+    assert!(!run(&board, &[]).status.success());
+    let mut spoiled = bytes.clone();
+    let at = spoiled.len() - 6;
+    spoiled[at..at + 4].copy_from_slice(&[0xee; 4]);
+    std::fs::write(&cache, &spoiled).unwrap();
+    let out = run(&board, &[]);
+    assert!(!out.status.success() && text(&out.stderr).contains("damaged"), "{}", text(&out.stderr));
+    // A file that is something else is not used and is replaced.
+    std::fs::write(&cache, b"this is not a replay table, but it is long enough to have a header to read........").unwrap();
+    let out = run(&board, &[]);
+    assert!(out.status.success() && text(&out.stderr).contains("not used, it is not a replay table"), "{}", text(&out.stderr));
+    // A small table still gives the same output.
+    let small = vcb(&["run", &board, "--ticks", "400000", "--watch", "0x100", "--replay-memory", "1"]);
+    assert_eq!(text(&small.stdout), text(&first.stdout));
+    // The cache may not be one of the run's other files.
+    assert_fails(vcb(&["run", &board, "--ticks", "5", "--replay-cache", &board]), "is one of the run's other files");
+}

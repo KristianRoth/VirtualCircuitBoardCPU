@@ -28,6 +28,7 @@ Every optimisation that was tried on the v2 engine, what it gained, and whether 
 | 19 | v2.1: the packed state kept up to date at every change | 1.11 (three runs) | accepted |
 | 20 | v2.1: one record per entity | 1.028 (three runs) | accepted |
 | 21 | v2.1: the engine's own numbering, simulated entities first | 0.999 (three runs) | rejected |
+| 22 | v2.1: the replay table emptied at its limit; saved between runs (`--replay-cache`) | 1.001 on the benchmark; a second run of day 4 part 2 in 1.3 s | accepted (a feature, not a speed-up of a first run) |
 
 ## The profile and the ranked plan
 
@@ -721,6 +722,28 @@ No program slower. Less than the profile suggested: the four arrays were already
 **After step 4:** day 4 part 2 to its Breakpoint in 11.1 s (121 M ticks per second). `cargo test` and `cargo test --release -- --ignored` pass.
 
 What this step says about the simulated tick: its cost is not memory. The data is small enough to sit in the first cache whatever its layout. What is left is the number of instructions per flip and the branches in them.
+
+### v2.1, step 5 (2026-11-19): attempt 22, the replay table across runs and under a limit
+**Emptying the table at its limit.** Until now replay stopped learning when its table reached the memory limit. FastSim's answer is to throw the table away and go on. Measured by giving replay less memory than it wants (whole runs, `engine/examples/replay_stats.rs`):
+
+| Program | Limit | Stops learning (before) | Emptied and learnt again (now) | Unlimited |
+|---|---|---|---|---|
+| day 4 part 2 | 32 MiB | 17.0 s, 41.6% of ticks replayed | 12.5 s, 57.8% (emptied 42 times) | 11.8 s, 64.8%, 1,142 MiB |
+| day 4 part 2 | 128 MiB | 16.5 s, 44.7% | 12.2 s, 62.6% (9 times) | |
+| day 3 part 2 | 32 MiB | 2.70 s, 66.0% | 2.77 s, 65.6% (9 times) | 2.70 s, 68.1%, 293 MiB |
+| day 3 part 2 | 128 MiB | 2.82 s, 66.7% | 2.79 s, 67.5% (twice) | |
+
+Emptying is better wherever the limit bites, and it shows something about replay: a table of 32 MiB is within 6% of one of 1.1 GiB. States are reused soon after they are learnt, not across long stretches of a run. Emptying at the limit is the engine's behaviour now; `--replay-memory <MiB>` sets the limit (default 2048).
+
+**The table saved between runs.** `--replay-cache <file>`: read before the run, written after (through a temporary file; not rewritten when nothing new was learnt). The file carries a fingerprint of the circuit as the engine holds it, its settings and the engine's own executable, so only the same build on the same board uses it; anything else is ignored with a line saying why, and replaced. Every number is checked on reading, since the tick's loops index without bounds checks: a damaged file is an error, never a wrong answer or a crash.
+
+| Run | First time | Again, with the table | The file |
+|---|---|---|---|
+| day 2 part 1 | 0.31 s (0.69 s with start-up and saving) | 0.008 s (0.11 s in all) | 24 MiB |
+| day 4 part 2 | 11.2 s (12.5 s in all) | 0.81 s (1.28 s in all), checked with `--verify` against v1 | 994 MiB |
+| day 2 part 2 with day 2 part 1's table | 0.32 s | (no faster than without: another program passes through other states) | |
+
+**Verdict.** Accepted as a feature. It does nothing for a first run (the benchmark is unchanged, 1.001 over three runs) and makes a repeated run of the same program 10 to 40 times faster. A different program gains little from another's table, in line with the finding above that states are local to where a program is. Equality: `cargo test` (73 passed, one new: the cache written, read back, refused for another board, a file cut short, a spoiled number, a file that is something else, a 1 MiB table) and `cargo test --release -- --ignored`.
 
 ## Ideas not tried
 

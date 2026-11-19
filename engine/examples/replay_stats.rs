@@ -1,4 +1,5 @@
-//! What replay did on a run: cargo run --release --example replay_stats -- <board.vcb> <program.vcbasm or -> <ticks>
+//! What replay did on a run: cargo run --release --example replay_stats -- <board.vcb> <program.vcbasm or -> <ticks> [limit in MiB] [flush]
+//! With a limit the table may use only that much; with `flush` it is emptied when full, otherwise it stops learning.
 use std::path::Path;
 use vcb::netlist::Components;
 use vcb::sim::Simulation;
@@ -10,6 +11,10 @@ fn main() -> Result<(), String> {
     vcb::asm::assemble(&source, &args[2], &mut board, true)?;
     let limit: u64 = args[3].parse().unwrap();
     let mut engine = vcb::sim2::Engine::new(&board, Components::build(&board)?, &vcb::sim::Options { timer_ticks: Some(1000) })?;
+    if let Some(mib) = args.get(4) {
+        engine.set_memory_limit(mib.parse::<usize>().unwrap() << 20);
+        engine.set_flush_when_full(args.get(5).is_some_and(|a| a == "flush"));
+    }
     let started = std::time::Instant::now();
     let mut events = 0u64;
     let mut line = Vec::new();
@@ -26,6 +31,9 @@ fn main() -> Result<(), String> {
     let (nodes, bytes, replayed) = engine.replay_stats();
     let (t, s) = (engine.tick(), started.elapsed().as_secs_f64());
     println!("ticks {t} in {s:.2} s = {:.1} M/s; stops {events}; nodes {nodes}, {:.0} MiB ({:.0} bytes per node); replay crossed {:.1}% of the ticks", t as f64 / s / 1e6, bytes as f64 / (1 << 20) as f64, bytes as f64 / nodes.max(1) as f64, 100.0 * replayed as f64 / t as f64);
+    if engine.replay_flushes() > 0 {
+        println!("the table was emptied {} times", engine.replay_flushes());
+    }
     if !line.is_empty() {
         println!("per 100 million ticks (speed, share replayed): {}", line.join(", "));
     }

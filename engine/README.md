@@ -57,6 +57,8 @@ vcb run <board.vcb> --ticks <n>    simulate
 | `--no-asm` | Assemble nothing; run the memory as the file holds it. |
 | `--engine v1` | Run the reference engine. The default is v2, the fast engine, which shows the same VMem events, stop and final memory. With `--probe` or `--render` a run is done by v1 (it says so). |
 | `--verify` | Run on v2, then again on v1, and fail at any difference. Use it for the first answer of a new program. |
+| `--replay-cache <file>` | Keep what v2's replay learns in this file: it is read before the run if it is there and written after. A second run of a program starts with every step known (day 4 part 2: 12.5 s the first time, 1.3 s the second). The file is used only by the same build of the engine on the same board; anything else is replaced. It can be as large as the memory replay may use. |
+| `--replay-memory <MiB>` | How much memory replay may use (default 2048). When it is full the table is emptied and learnt again; a table of 32 MiB costs about 6% of the speed on the longest program. |
 
 The run ends on the first tick where a stop condition holds and prints every one that held, for example `stopped at tick 7: breakpoint, max-ticks`. Ctrl-C stops after the current tick with reason `interrupted` and still writes the requested outputs.
 
