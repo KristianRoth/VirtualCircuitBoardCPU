@@ -137,6 +137,7 @@ fn v2_replaying_a_whole_program_equals_v1() {
                 v2.sync();
                 assert!(v1.state().iter().zip(v2.state()).zip(v2.live()).all(|((a, b), live)| a == b || !live), "signals differ at tick {}", v1.tick());
                 assert!(v1.vmem() == v2.vmem(), "VMem differs at tick {}", v1.tick());
+                assert_eq!(v2.check_counts(), None, "a count is wrong at tick {}", v1.tick());
             }
             stops += 1;
         }
@@ -144,5 +145,7 @@ fn v2_replaying_a_whole_program_equals_v1() {
         assert_eq!(v1.tick(), 43_146_512);
         assert!(v1.vmem() == v2.vmem() && replayed > v1.tick() / 20, "replay crossed only {replayed} ticks ({nodes} nodes, {bytes} bytes)");
         assert!(memory == usize::MAX || bytes <= memory);
+        // The fixed/variable split (attempt 27) was at work, and stops fell inside its steps.
+        assert!(v2.split_counts().split_steps > 10_000, "{:?}", v2.split_counts());
     }
 }

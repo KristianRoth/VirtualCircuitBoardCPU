@@ -12,7 +12,7 @@ use std::hash::{BuildHasherDefault, Hasher};
 pub const NONE: u32 = u32::MAX;
 
 /// What a node holds besides the signals and the two lists.
-#[derive(Clone, Copy, PartialEq, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Meta {
     /// The address the address pins hold.
     pub address: u32,

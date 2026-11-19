@@ -11,6 +11,8 @@ use crate::sim::{Options, Rng, Simulation};
 /// All of v2's tables and caches together stay under this many bytes (the spec's limit). `set_memory_limit` lowers it.
 const MEMORY_LIMIT: usize = 2 << 30;
 
+mod split;
+
 /// Indexing without the bounds check, for the tick's inner loops (attempt 14). Every index there is an entity
 /// number or a position taken from the netlist's own lists, all made in `Engine::new` for arrays of that size;
 /// a debug build still checks them.
@@ -286,6 +288,8 @@ pub struct Engine {
     vmem_changed: bool,
     /// Per entity: 1 for an address pin, 2 for a content pin, 0 otherwise.
     pin_role: Vec<u8>,
+    /// The fixed part of a step applied from a record (attempt 27, `sim2/split.rs`).
+    split: split::Split,
 }
 
 impl Engine {
@@ -373,7 +377,7 @@ impl Engine {
         // off (attempt 23): a step in which no timer flips does not depend on where the timers are in their
         // interval, so that position stays out of the states, and only such steps are recorded and replayed.
         let replay = (!ops.contains(&Op::Random)).then(|| Table::new(live_list.len().div_ceil(64), MEMORY_LIMIT));
-        let mut engine = Engine { profile: Profile::default(), loaded_word: 0, replay, live_list, node: NONE, node_tick: 0, real: true, arrays_node: NONE, forced: Vec::new(), pending: Vec::new(), flush_when_full: true, schedule, cell: ops.iter().map(|op| Cell { count: 0, threshold: 0, op: *op, on: false, queued: false, toggle: false }).collect(), view: vec![false; n], reads, writes, readers, writers, direct, live, packed: Vec::new(), slot: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(),  clocks: Vec::new(), clock_due: u64::MAX, timer_due: u64::MAX, schedule_due: u64::MAX, clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
+        let mut engine = Engine { profile: Profile::default(), loaded_word: 0, replay, live_list, node: NONE, node_tick: 0, real: true, arrays_node: NONE, forced: Vec::new(), pending: Vec::new(), flush_when_full: true, schedule, cell: ops.iter().map(|op| Cell { count: 0, threshold: 0, op: *op, on: false, queued: false, toggle: false }).collect(), view: vec![false; n], reads, writes, readers, writers, direct, live, packed: Vec::new(), slot: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(),  clocks: Vec::new(), clock_due: u64::MAX, timer_due: u64::MAX, schedule_due: u64::MAX, clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], split: Default::default(), components };
         for (role, pins) in [(1, &engine.components.address_pins), (2, &engine.components.content_pins)] {
             for pin in pins {
                 engine.pin_role[*pin as usize] = role;
@@ -439,6 +443,8 @@ impl Engine {
                 return Err(format!("an entity with {} inputs: the v2 engine counts up to 65,535 (use --engine v1)", inputs.len()));
             }
         }
+        engine.split.due = u64::MAX;
+        engine.set_split(true);
         engine.show();
         Ok(engine)
     }
@@ -594,7 +600,14 @@ impl Engine {
                     loaded.push(pin);
                 }
             }
-            self.propagate(&loaded);
+            if self.split.mode == split::SPLIT {
+                self.propagate_split(&loaded, false);
+            } else {
+                self.propagate(&loaded);
+            }
+            if self.split.mode != split::NORMAL {
+                self.split.loaded = loaded;
+            }
         }
         let (address_flipped, content_flipped) = (pins_flipped & 1 != 0, pins_flipped & 2 != 0);
         if content_flipped {
@@ -688,7 +701,11 @@ impl Engine {
         if pins_flipped & 4 != 0 {
             self.breakpoint_hit = flips.iter().any(|e| self.cell[*e as usize].op == Op::Breakpoint && self.cell[*e as usize].on);
         }
-        self.propagate(&flips);
+        if self.split.mode == split::SPLIT {
+            self.propagate_split(&flips, true);
+        } else {
+            self.propagate(&flips);
+        }
 
         // 3. VMem. Observed on the vmem-timing board, tick by tick:
         //   tick T:   address pins flip. A content change in the same tick still goes to the old address.
@@ -701,6 +718,9 @@ impl Engine {
         self.flips = flips;
         self.work = dirty;
         self.work.clear();
+        if self.split.mode != split::NORMAL {
+            self.mode_tick();
+        }
     }
 
 }
@@ -790,6 +810,7 @@ impl Engine {
 
     /// Makes `state()` true for the current tick. Replay moves on without the circuit; this brings it along.
     pub fn sync(&mut self) {
+        self.leave_mode();
         self.settle();
         self.show();
     }
@@ -909,6 +930,8 @@ impl Engine {
 impl Simulation for Engine {
     /// One tick, whatever replay knows. Used by tests and tools; `advance` is the fast way.
     fn step(&mut self) {
+        self.leave_mode();
+        self.split.at_event = false;
         self.settle();
         self.node = NONE;
         self.step_real();
@@ -944,13 +967,17 @@ impl Simulation for Engine {
                             self.vmem[edge.write as usize] = arrival.written;
                         }
                         (self.node, self.node_tick, self.real) = (arrival.node, self.tick, false);
+                        self.split.at_event = self.split.enabled;
                         return;
                     }
                 }
             }
             self.settle();
+            if self.split.at_event {
+                self.begin_step();
+            }
             if self.dirty.is_empty() && self.forced.is_empty() && !self.load_pending && !self.locked {
-                let target = until.min(self.clock_due).min(self.timer_due).min(self.schedule_due);
+                let target = until.min(self.clock_due).min(self.timer_due).min(self.schedule_due).min(self.split.due);
                 if target > self.tick + 1 {
                     if cfg!(profiling) {
                         self.profile.ticks_idle += target - 1 - self.tick;
@@ -973,6 +1000,7 @@ impl Simulation for Engine {
                 (self.node, self.node_tick) = (reached, self.tick);
             }
             if event || self.tick >= until {
+                self.split.at_event = event && self.split.enabled;
                 return;
             }
         }
