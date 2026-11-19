@@ -5,7 +5,11 @@ use crate::board::Board;
 use crate::format::Result;
 use crate::ink::Ink;
 use crate::netlist::{Components, Kind};
+use crate::replay::{Arrival, Edge, Meta, Table, NONE};
 use crate::sim::{Options, Rng, Simulation};
+
+/// All of v2's tables and caches together stay under this many bytes (the spec's limit). `set_memory_limit` lowers it.
+const MEMORY_LIMIT: usize = 2 << 30;
 
 /// Many short lists in one array (attempt 3): the list of entity e is `items[start[e]..start[e + 1]]`.
 struct Lists {
@@ -96,6 +100,25 @@ pub struct Engine {
     locked: bool,
     /// The word at the new address is loaded into the content pins in that same locked tick.
     load_pending: bool,
+    /// The word the last load put on the content pins.
+    loaded_word: u32,
+    /// Replay (attempt 8). `None` on a board with Random ink: every evaluation of a Random uses up a draw.
+    replay: Option<Table>,
+    /// The simulated entities, in entity order: a node stores one bit for each.
+    live_list: Vec<u32>,
+    /// The node the engine was at when the tick counter was `node_tick` (NONE: not known).
+    node: u32,
+    node_tick: u64,
+    /// False while replay has moved on without the circuit: the signals are then those of an earlier node.
+    real: bool,
+    /// The node whose state the circuit's arrays hold exactly, if any: restoring another node then only
+    /// touches what differs between the two.
+    arrays_node: u32,
+    /// After a node was restored: the components that flip in the next tick. A node stores these and not the
+    /// queue and the just-risen marks they follow from, so that states which behave alike are one node.
+    forced: Vec<u32>,
+    pending: Vec<u32>,
+    scratch: Vec<u64>,
     /// What VMem did in the last tick: the address loaded from, the address written to, and whether a word changed.
     fetched: Option<usize>,
     written: Option<usize>,
@@ -151,7 +174,12 @@ impl Engine {
                 ops[e] = Op::Dead;
             }
         }
-        let mut engine = Engine { ops, reads, writes, readers, writers, count: vec![0; n], live, threshold: vec![0; n], on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
+        let live_list: Vec<u32> = (0..n as u32).filter(|e| live[*e as usize]).collect();
+        // Replay is off with Random ink (each evaluation uses up a draw) and with a simulated Timer (its position
+        // within its interval would be part of every state, so states would hardly ever repeat).
+        let timed = components.kinds.iter().zip(&live).any(|(kind, live)| *live && *kind == Kind::Component(Ink::Timer));
+        let replay = (!ops.contains(&Op::Random) && !timed).then(|| Table::new(live_list.len().div_ceil(64), MEMORY_LIMIT));
+        let mut engine = Engine { loaded_word: 0, replay, scratch: vec![0; live_list.len().div_ceil(64)], live_list, node: NONE, node_tick: 0, real: true, arrays_node: NONE, forced: Vec::new(), pending: Vec::new(), ops, reads, writes, readers, writers, count: vec![0; n], live, threshold: vec![0; n], on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
         for (role, pins) in [(1, &engine.components.address_pins), (2, &engine.components.content_pins)] {
             for pin in pins {
                 engine.pin_role[*pin as usize] = role;
@@ -278,9 +306,11 @@ impl Engine {
     }
 }
 
-impl Simulation for Engine {
-    fn step(&mut self) {
+impl Engine {
+    /// One tick of the circuit itself.
+    fn step_real(&mut self) {
         self.tick += 1;
+        self.arrays_node = NONE;
 
         // The components queued for this tick move to `work`; `dirty` (empty, with its capacity) collects the next tick's.
         std::mem::swap(&mut self.dirty, &mut self.work);
@@ -289,6 +319,8 @@ impl Simulation for Engine {
         // 1. Evaluate: decide every flip before anything changes.
         let mut flips = std::mem::take(&mut self.flips);
         flips.clear();
+        // After a restore the flips of this tick are already known (see `forced`); nothing is queued then.
+        flips.append(&mut self.forced);
         for &e in &dirty {
             self.queued[e as usize] = false;
             let op = self.ops[e as usize];
@@ -339,6 +371,7 @@ impl Simulation for Engine {
                 self.load_pending = false;
                 self.fetched = Some(self.address);
                 let word = self.vmem[self.address];
+                self.loaded_word = word;
                 let mut loaded = Vec::new();
                 for (k, &pin) in self.components.content_pins.iter().enumerate() {
                     if self.on[pin as usize] != (word >> k & 1 == 1) {
@@ -366,6 +399,169 @@ impl Simulation for Engine {
         self.flips = flips;
         self.work = dirty;
         self.work.clear();
+    }
+
+}
+
+impl Engine {
+    /// Lowers the memory replay may use (for tests). At the limit v2 keeps running correctly, only slower.
+    pub fn set_memory_limit(&mut self, bytes: usize) {
+        if let Some(table) = &mut self.replay {
+            table.memory_limit = bytes;
+        }
+    }
+
+    /// (nodes stored, bytes used, ticks crossed by replay)
+    pub fn replay_stats(&self) -> (usize, usize, u64) {
+        self.replay.as_ref().map_or((0, 0, 0), |t| (t.nodes(), t.memory(), t.replayed_ticks))
+    }
+
+    /// Makes `state()` true for the current tick. Replay moves on without the circuit; this brings it along.
+    pub fn sync(&mut self) {
+        if !self.real {
+            self.restore(self.node);
+        }
+    }
+
+    fn meta(&self) -> Meta {
+        Meta { address: self.address as u32, locked: self.locked, load_pending: self.load_pending, clock_phase: if self.clocks.is_empty() { 0 } else { (self.tick % self.clock_interval) as u32 }, timer_phase: 0 } // no node on a board with a simulated timer
+    }
+
+    /// The node of the current state.
+    fn intern(&mut self) -> u32 {
+        let mut scratch = std::mem::take(&mut self.scratch);
+        // One word at a time, built in a register: 64 independent loads, one store.
+        for (word, entities) in scratch.iter_mut().zip(self.live_list.chunks(64)) {
+            let mut bits = 0u64;
+            for (i, e) in entities.iter().enumerate() {
+                bits |= (self.on[*e as usize] as u64) << i;
+            }
+            *word = bits;
+        }
+        let meta = self.meta();
+        // What is pending is stored as its outcome: the components that will flip in the next tick. That is
+        // all the queue and the just-risen marks are for, and it is known now, since the next tick evaluates
+        // against the signals as they are. (Without Random ink the order of evaluation changes nothing.)
+        let mut pending = std::mem::take(&mut self.pending);
+        pending.clear();
+        for &e in if self.forced.is_empty() { &self.dirty } else { &self.forced } {
+            let op = self.ops[e as usize];
+            if !self.forced.is_empty() || (!(op == Op::Pin && self.locked) && self.evaluate(e as usize, op) != self.on[e as usize]) {
+                pending.push(e);
+            }
+        }
+        pending.sort_unstable();
+        let id = self.replay.as_mut().unwrap().intern(&scratch, &pending, &[], meta);
+        self.pending = pending;
+        self.scratch = scratch;
+        self.arrays_node = id;
+        id
+    }
+
+    /// Puts the circuit into the state of a node. The tick counter is already there.
+    fn restore(&mut self, id: u32) {
+        let table = self.replay.as_ref().unwrap();
+        let (bits, dirty, rose, meta) = table.node(id);
+        let (bits, pending, _, meta) = (bits, dirty, rose, meta);
+        for e in self.dirty.drain(..) {
+            self.queued[e as usize] = false;
+        }
+        for t in self.rose_list.drain(..) {
+            self.rose[t as usize] = false;
+        }
+        self.forced.clear();
+        self.forced.extend_from_slice(pending);
+        if self.arrays_node == NONE {
+            for (i, e) in self.live_list.iter().enumerate() {
+                self.on[*e as usize] = bits[i >> 6] >> (i & 63) & 1 == 1;
+            }
+            // The counts follow from the signals: a trace counts its writers that are on, a component the traces it reads.
+            for &e in &self.live_list {
+                let inputs = if self.ops[e as usize] == Op::Trace { self.writers.of(e as usize) } else { self.reads.of(e as usize) };
+                self.count[e as usize] = inputs.iter().filter(|i| self.on[**i as usize]).count() as u32;
+            }
+        } else {
+            // The arrays hold another node: flip only the signals that differ, and adjust the counts they feed.
+            let (old, ..) = table.node(self.arrays_node);
+            for (w, (a, b)) in old.iter().zip(bits).enumerate() {
+                let mut differ = a ^ b;
+                while differ != 0 {
+                    let e = self.live_list[w << 6 | differ.trailing_zeros() as usize] as usize;
+                    differ &= differ - 1;
+                    self.on[e] = !self.on[e];
+                    let step = if self.on[e] { 1 } else { u32::MAX };
+                    for &fed in if self.ops[e] == Op::Trace { self.readers.of(e) } else { self.writes.of(e) } {
+                        self.count[fed as usize] = self.count[fed as usize].wrapping_add(step);
+                    }
+                }
+            }
+        }
+        (self.address, self.locked, self.load_pending) = (meta.address as usize, meta.locked, meta.load_pending);
+        debug_assert!(self.clocks.is_empty() || meta.clock_phase as u64 == self.tick % self.clock_interval);
+        self.arrays_node = id;
+        self.real = true;
+    }
+}
+
+impl Simulation for Engine {
+    /// One tick, whatever replay knows. Used by tests and tools; `advance` is the fast way.
+    fn step(&mut self) {
+        self.sync();
+        self.node = NONE;
+        self.step_real();
+    }
+
+    /// Replay (attempt 8): at a node whose edge and arrival are known, the engine goes to the next event without
+    /// the circuit. Otherwise it simulates, and at every event it finds or stores the node it has reached.
+    /// Idle-tick jumps (attempt 7): while nothing is queued, no trace is still marked as risen and VMem is at
+    /// rest, a tick changes nothing but the counter, so the engine goes straight to the tick of the next
+    /// clock or timer flip (or to `until`) and steps there.
+    fn advance(&mut self, until: u64) {
+        loop {
+            if self.node != NONE && self.node_tick == self.tick {
+                let table = self.replay.as_mut().unwrap();
+                if let Some(edge) = table.edge(self.node).filter(|edge| self.tick + edge.ticks <= until) {
+                    let word = if edge.fetch == NONE { 0 } else { self.vmem[edge.fetch as usize] };
+                    if let Some(arrival) = table.arrival(self.node, edge, word) {
+                        table.replayed_ticks += edge.ticks;
+                        self.tick += edge.ticks;
+                        self.breakpoint_hit = edge.breakpoint;
+                        self.fetched = (edge.fetch != NONE).then_some(edge.fetch as usize);
+                        self.written = (edge.write != NONE).then_some(edge.write as usize);
+                        self.vmem_changed = false;
+                        if edge.write != NONE {
+                            self.vmem_changed = self.vmem[edge.write as usize] != arrival.written;
+                            self.vmem[edge.write as usize] = arrival.written;
+                        }
+                        (self.node, self.node_tick, self.real) = (arrival.node, self.tick, false);
+                        return;
+                    }
+                }
+            }
+            self.sync();
+            if self.dirty.is_empty() && self.forced.is_empty() && self.rose_list.is_empty() && !self.load_pending && !self.locked {
+                let next_flip = |ticks: &[u32], interval: u64| if ticks.is_empty() { u64::MAX } else { (self.tick / interval + 1) * interval };
+                let target = until.min(next_flip(&self.clocks, self.clock_interval)).min(next_flip(&self.timers, self.timer_ticks));
+                if target > self.tick + 1 {
+                    self.tick = target - 1;
+                }
+            }
+            self.step_real();
+            let event = self.breakpoint_hit || self.fetched.is_some() || self.written.is_some();
+            if event && self.replay.is_some() {
+                let reached = self.intern();
+                if self.node != NONE && reached != NONE {
+                    let address = |a: Option<usize>| a.map_or(NONE, |a| a as u32);
+                    let edge = Edge { ticks: self.tick - self.node_tick, fetch: address(self.fetched), write: address(self.written), breakpoint: self.breakpoint_hit };
+                    let written = self.written.map_or(0, |a| self.vmem[a]);
+                    self.replay.as_mut().unwrap().record(self.node, edge, self.loaded_word, Arrival { node: reached, written });
+                }
+                (self.node, self.node_tick) = (reached, self.tick);
+            }
+            if event || self.tick >= until {
+                return;
+            }
+        }
     }
 
     fn tick(&self) -> u64 {

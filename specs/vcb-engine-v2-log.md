@@ -13,6 +13,8 @@ Every optimisation that was tried on the v2 engine, what it gained, and whether 
 | 4 | Input counting | 1.072 (three runs) | accepted |
 | 5 | Gates that cannot change are not woken | 1.16 (quick run) | accepted |
 | 6 | Dropping what cannot cause an event | 1.35 (quick run) | accepted |
+| 7 | The event primitive and idle-tick jumps | 1.046 (three runs) | accepted |
+| 8 | Replay of repeated steps | 2.63 (full runs) | accepted |
 
 ## The profile and the ranked plan
 
@@ -131,7 +133,7 @@ Attempt 8 is judged on a full run of day 4 part 2 with start-up included, as the
 ### 0. Scaffolding (2026-11-19, commit `8bf45ee`)
 v2 is a copy of v1's core in `engine/src/sim2.rs`; `vcb run --engine v2` runs it and `--stats` names the engine. With `--probe` or `--render` the run is done by v1, with the notice line. Equality: `tests/v2.rs` steps both engines side by side and compares every signal after every tick, on every fixture board and (ignored by default) over the 44 million ticks of day 1 part 1.
 
-Not done yet from the spec's Scaffolding: the event primitive ("advance to the next event or to tick N") and `--verify`. The profile showed the per-tick run loop costs nothing measurable, so attempts 1 to 6 do not need the primitive; it is due before idle-tick jumps or replay. v2 against v1 was not measured as its own row: it is the same code, and the "old" column below (5.9 to 6.4) is v1's speed.
+Not done yet from the spec's Scaffolding: `--verify` (the event primitive came with attempt 7). The profile showed the per-tick run loop costs nothing measurable, so attempts 1 to 6 do not need the primitive; it is due before idle-tick jumps or replay. v2 against v1 was not measured as its own row: it is the same code, and the "old" column below (5.9 to 6.4) is v1's speed.
 
 ### 1. No allocation in a tick (2026-11-19): accepted
 **Idea.** `step` built a new `flips` list and a new `dirty` list every tick. v2 keeps both between ticks (`work`, `flips`) and swaps them, so a tick allocates nothing.
@@ -312,6 +314,80 @@ Start-up unchanged. Every program stopped at the same tick with the same output.
 **Equality.** `cargo test` (71 passed) and `cargo test --release --test v2 -- --include-ignored` (2 passed).
 
 **Verdict.** Accepted: 1.35, and 1.4 to 1.5 on the user's CPU, far above the estimate. The profile counted LEDs only; on the user's CPU a large part of the logic that works every tick ends in LEDs or nowhere and never reaches the memory pins or the Breakpoint. On the two sample boards what is dropped is logic that was idle anyway (the display and input side, with input removed from their program), so nothing is gained there. Not looked at: which parts of the user's CPU these are.
+
+### 7. The event primitive and idle-tick jumps (2026-11-19): accepted
+**Idea.** Two things that only work together. (a) The event primitive owed from Scaffolding: the engine advances to the next tick with a VMem load, a VMem write or a Breakpoint, or to a given tick, and the run loop only looks at those stops. (b) While nothing is queued, no trace is still marked as risen and VMem is at rest, a tick changes nothing but the counter, so v2 goes straight to the tick of the next clock or timer flip.
+
+**Expected.** Nothing on the user's CPU (its clock flips every tick), up to 2 on the compact sample (clock interval 36), about 1.05 on the score.
+
+**Changed.**
+- `sim.rs`: `advance(until)` on the trait, with a default that steps tick by tick (v1 uses it unchanged); `run_events`, the run loop built on it; the stop rules moved into one function that both run loops call. Ctrl-C is looked at every 2^20 ticks when no event comes.
+- `sim2.rs`: v2's own `advance` with the jump.
+- `main.rs`: v2 runs by events. v1 keeps the per-tick loop, which `--probe` and `--render` need.
+- `tests/v2.rs`: a test that moves v2 by events with limits falling inside idle stretches (also with the clock interval set to 36) against v1 stepped tick by tick: v2 may stop only at an event or its limit, may pass over no event of v1, and must be equal at every stop.
+
+**Measured.** The quick run gave 1.019 (the compact sample 1.23, the others between 0.96 and 1.05), under the bar, so it was repeated with three runs per program, 20 million ticks, best of three. Old = attempt 6, new = this attempt, both `--engine v2`.
+
+| Program | Old, M ticks/s | New | Ratio |
+|---|---|---|---|
+| day1/part1 | 18.74 | 19.32 | 1.031 |
+| day1/part2 | 19.19 | 19.70 | 1.027 |
+| day2/part1 | 19.55 | 20.68 | 1.058 |
+| day2/part2 | 20.06 | 17.48 | 0.872 |
+| day3/part1 | 21.12 | 22.20 | 1.051 |
+| day3/part2 | 20.94 | 21.62 | 1.032 |
+| day4/part1 | 20.49 | 21.30 | 1.039 |
+| day4/part2 | 19.01 | 21.23 | 1.117 |
+| sample-primes | 14.67 | 14.91 | 1.016 |
+| sample-compact-primes | 31.15 | 39.22 | 1.259 |
+| **Score** | | | **1.046** |
+
+Day 2 part 2's 0.872 is noise: its old build spread 8.3% in this run, and it was 1.001 in the quick run. Start-up unchanged. Every program stopped at the same tick with the same output; `--verbose` output of v1 and v2 is byte for byte the same on day 2 part 1 (to its Breakpoint) and on the compact sample (30 million ticks), and a `--quiescent` stop falls on the same tick.
+
+**Equality.** `cargo test` and `cargo test --release -- --ignored`.
+
+**Verdict.** Accepted: 1.046. The compact sample gains a quarter, less than the "up to 2" its idle ticks suggested: an idle tick was already cheap. The user's CPU gains 3% to 5% although it has no idle ticks, because the run loop no longer runs its checks after every tick. Kept in any case as groundwork: replay (attempt 8) needs the event primitive.
+
+### 8. Replay of repeated steps (2026-11-19): accepted
+**Idea.** A **node** is the circuit's full state at the end of a tick with an event. From a node the circuit is deterministic up to the next event, so the number of ticks to it and what it is (load address, write address, Breakpoint) are stored once. If that event is a load, the state after it also depends on the word loaded, so there is one successor per word seen. Standing at a known node whose step is known, v2 moves to the next event without the circuit: it adds the ticks, reports the event, applies the write. When it meets something new it puts the circuit into the node's state and simulates.
+
+**Expected.** 1.5 to 3 on top of stage 1. Measured before building, with `engine/examples/replay_estimate.rs`: the share of ticks inside steps seen before was 46% (day 1 part 1), 83% (day 2 part 2), 60% (day 4 part 2, first 100 million ticks), 89% and 92% (the two samples).
+
+**Changed.**
+- `engine/src/replay.rs` (new): the table. Nodes are found by a hash and reused only after their whole stored state has been compared.
+- `sim2.rs`: `advance` tries a replayed step first; in simulation it looks up or stores the node at every event and records the step. `sync()` brings the circuit to the current tick (tests use it; `state()` is otherwise that of an earlier node while replay runs). `set_memory_limit`, `replay_stats`.
+- A stop that falls inside a known step is never replayed: the step is simulated tick by tick, as the spec demands.
+- Memory: the table stays under 2 GiB (590 bytes per node on the user's CPU). At the limit no new node is stored and everything known keeps working.
+- Off on a board with Random ink (every evaluation uses up a draw) and on a board with a simulated Timer (its position would be part of every state). The compact sample has such timers, so it runs as before.
+
+**What a node holds,** and where this differs from the spec's list: one bit per simulated signal; the address the pins hold, the VMem lock and a pending load; the position within the clock interval; and, in place of the queue and the just-risen marks, **the components that flip in the next tick**. That is all the queue and the marks are for, and it is known at the moment the node is taken. Two states that behave alike are then one node. The words VMem delivers are not in the node: every load ends a step, and the word selects the successor.
+
+**What went wrong on the way,** each found by measuring:
+1. First version: 1.50 on the quick run, with day 1 slower than before. Packing the signals for each lookup wrote to memory once per signal; built a word at a time in a register it went from 40% of the time to a few percent.
+2. Restoring a node recomputed every count. It now flips only the signals that differ from the node the arrays hold and adjusts the counts they feed.
+3. The hit rate stayed far under the estimate (12% against 46% on day 1 part 2). Neither sorting the lists nor replacing them by the next tick's flips changed the node count at all. The cause was in the measuring tool: it gave the engine a timer interval of 1000, and the tick's position in it was part of every node. On a board without a simulated timer that position is now left out. The next-tick-flips form was kept: it is the smaller and more general key.
+
+**Measured.** As the rule allows for an attempt that needs warm-up: every program to its Breakpoint, one run, old = attempt 7, new = this attempt, both `--engine v2`. (The quick run of 20 million ticks gave 2.24.)
+
+| Program | Ticks | Old, M ticks/s | New | Ratio |
+|---|---|---|---|---|
+| day1/part1 | 43,146,512 | 20.74 | 32.61 | 1.57 |
+| day1/part2 | 70,339,472 | 21.07 | 32.27 | 1.53 |
+| day2/part1 | 43,495,312 | 22.09 | 76.04 | 3.44 |
+| day2/part2 | 75,753,616 | 22.07 | 98.90 | 4.48 |
+| day3/part1 | 170,904,144 | 24.06 | 68.91 | 2.86 |
+| day3/part2 | 419,669,712 | 21.36 | 59.17 | 2.77 |
+| day4/part1 | 481,327,888 | 21.54 | 44.22 | 2.05 |
+| day4/part2 | 1,339,421,264 | 21.07 | 47.86 | 2.27 |
+| sample-primes | 100,000,000 (limit) | 14.25 | 164.74 | 11.57 |
+| sample-compact-primes | 100,000,000 (limit) | 40.60 | 40.78 | 1.00 |
+| **Score** | | | | **2.63** |
+
+Start-up unchanged (0.06 to 0.08 s). Every program stopped at the same tick with the same output. Day 4 part 2 alone: 29.0 s, answer 9182, peak memory 670 MB.
+
+**Equality.** `cargo test` (72 passed) and `cargo test --release -- --ignored` (4 passed), among them a new one: day 1 part 1 to its Breakpoint with v2 moved by events and limits of many sizes, against v1 tick by tick, once with all the memory and once with 3 MiB for the table. `--verbose` output of v1 and v2 is byte for byte the same on day 2 part 2.
+
+**Verdict.** Accepted: 2.63 on full runs, inside the estimate. The share replayed, and so the gain, depends on how many different register contents a program passes through: day 2 and the sample repeat most, day 1 least.
 
 ## Ideas not tried
 
