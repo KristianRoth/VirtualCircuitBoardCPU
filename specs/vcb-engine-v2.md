@@ -87,6 +87,13 @@ For the families that replay or jump (the last two in the table below), "the sam
 
 A replay is used only after the full recorded state has been compared; a hash only finds candidates. As built (attempt 8 in the log): the pending work is stored as the components that flip in the next tick, which is what it amounts to; every VMem load ends a step, so delivered words select the successor and are not part of the state; replay is off on boards with Random ink or a simulated Timer. The profile counts repeats on this full key.
 
+### The engine optimises the simulator, not a board
+Decided by the user on 2026-11-19. The goal is a faster simulator for any board, not a faster run of the user's CPU.
+- **Nothing in the engine may come from knowing a particular board.** No coordinates, no block positions marked by hand, no constants tuned on one board, no rule that exists because of how the user's CPU is built. Whatever the engine uses, it finds by itself in the netlist of the board it is given, or learns while running it.
+- A threshold or constant in the engine needs a reason that holds for boards in general. If it was chosen by trying values on the benchmark boards, the log entry says so and shows it on boards of more than one design.
+- The benchmark set must keep boards of more than one design (today the user's CPU and the game's two sample computers). An attempt that gains only on one design is reported as such, and its entry says why it is still general.
+- Looking at a board to understand where time goes (the heat map, the parts pictures) is fine. Feeding what was seen back into the engine as board-specific knowledge is not.
+
 ### Limits
 - **Memory:** all of v2's tables and caches together stay under 2 GiB by default. The limit is one constant that the tests can lower. When it is reached v2 keeps running correctly, only slower.
 - **Random ink:** stays native. An optimisation that cannot keep v1's draw order switches itself off on boards with Random ink; such a board then runs on v2's tick-exact core.

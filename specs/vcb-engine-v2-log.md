@@ -461,6 +461,11 @@ Every program stopped at the same tick with the same output. Day 4 part 2 to its
 
 ## Ideas not tried
 
+**Rule for every idea below** (the user, 2026-11-19): the engine optimises the simulator, not a board. Parts, blocks or schedules are found by the engine in the netlist it is given; nothing is marked by hand or tuned to the user's CPU.
+
+- **Sparsely connected parts, skipped by themselves, recursively** (the user's idea). A first look with `engine/examples/parts.rs` (cutting the traces that most components share) isolates the clock divider exactly, but splits most register rows per bit and leaves one large part; outside the divider only about 14% of the activity lies in parts with fewer than ten inputs. The cutting method is crude, and the thresholds drawn were picked by looking at this one board, so the pictures are for understanding only. A partition for the engine has to come from a rule that works on any netlist, for example grouping bits that share their control lines. Asking the user to mark blocks was suggested and is withdrawn: it would break the rule above.
+- **The self-running part of a board** (clock-driven, never influenced by VMem) replaced by a schedule of its output flips: 60% of the simulated flips on the user's CPU, 8 flips per tick on the sample. Found by a general rule (`engine/examples/autonomous.rs`); next to build.
+
 See "Not planned" in the ranked plan. Nothing else yet.
 
 ## Stage results
