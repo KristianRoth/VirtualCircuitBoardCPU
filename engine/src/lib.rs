@@ -7,6 +7,7 @@ pub mod format;
 pub mod ink;
 pub mod netlist;
 pub mod render;
+pub mod replay;
 pub mod sim;
 pub mod sim2;
 pub mod textboard;
