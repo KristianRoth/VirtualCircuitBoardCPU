@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
@@ -98,6 +99,15 @@ struct RunArgs {
     /// Use it for the first answer of a new program.
     #[arg(long)]
     verify: bool,
+    /// Keep what replay learns in this file: read it before the run if it is there, write it after. A second
+    /// run of a program, or another program on the same board, then starts with the steps already known.
+    /// The file is only used by the same build of the engine on the same board.
+    #[arg(long)]
+    replay_cache: Option<PathBuf>,
+    /// How much memory replay may use, in MiB (default 2048). When it is full the table is emptied and learnt
+    /// again; a small table costs little speed, and the file of --replay-cache is at most this large.
+    #[arg(long)]
+    replay_memory: Option<usize>,
     /// Write all of VMem to a file at the end, one `0xADDRESS 0xVALUE` line per word.
     #[arg(long)]
     dump_vmem: Option<PathBuf>,
@@ -351,6 +361,8 @@ fn apply_config(args: &mut RunArgs, path: &Path) -> Result<()> {
             "stats" => args.stats |= flag()?,
             "verbose" => args.verbose |= flag()?,
             "verify" => args.verify |= flag()?,
+            "replay-cache" => args.replay_cache = args.replay_cache.take().or(Some(word()?.into())),
+            "replay-memory" => args.replay_memory = args.replay_memory.or(Some(word()?.parse().map_err(|_| "replay-memory: expected a number of MiB")?)),
             "force" => args.force |= flag()?,
             "break-addr" if args.break_addr.is_empty() => args.break_addr = list(key, value)?,
             "watch" if args.watch.is_empty() => args.watch = list(key, value)?,
@@ -485,6 +497,11 @@ fn run(mut args: RunArgs) -> Result<()> {
     let (vcbmem, vcbasm) = (args.board.with_extension("vcbmem"), args.board.with_extension("vcbasm"));
     let mut input_paths: Vec<&Path> = vec![&args.board, &vcbmem, &vcbasm];
     input_paths.extend(args.asm.as_deref());
+    if let Some(cache) = &args.replay_cache {
+        if input_paths.iter().any(|input| *input == cache.as_path()) || output_paths.iter().any(|output| *output == cache.as_path()) {
+            return Err(format!("--replay-cache {}: is one of the run's other files", cache.display()));
+        }
+    }
     check_outputs(&input_paths, &output_paths)?;
     for path in &output_paths {
         check_overwrite(path, args.force)?;
@@ -497,10 +514,25 @@ fn run(mut args: RunArgs) -> Result<()> {
     let wants_v1 = args.engine.as_deref() == Some("v1");
     let (report, elapsed, vmem) = if !wants_v1 && probes.is_empty() && renders.is_empty() {
         let again = args.verify.then(|| components.clone());
-        let (report, elapsed, vmem, events) = run.simulate(vcb::sim2::Engine::new(&board, components, &options)?, None, "v2", true, false)?;
+        let mut engine = vcb::sim2::Engine::new(&board, components, &options)?;
+        if let Some(mib) = args.replay_memory {
+            engine.set_memory_limit(mib.checked_mul(1 << 20).ok_or("--replay-memory: too large")?);
+        }
+        // A saved table is only as right as the engine that made it, so it is tied to this very executable.
+        let build: Vec<u8> = match &args.replay_cache {
+            Some(_) => std::env::current_exe().and_then(std::fs::read).map(|exe| Sha256::digest(&exe).to_vec()).map_err(|e| format!("--replay-cache: cannot read the engine's own file: {e}"))?,
+            None => Vec::new(),
+        };
+        if let Some(path) = &args.replay_cache {
+            eprintln!("replay cache {}", engine.load_replay(path, &build)?);
+        }
+        let (report, elapsed, vmem, events) = run.simulate(&mut engine, None, "v2", true, false)?;
+        if let Some(path) = &args.replay_cache {
+            eprintln!("replay cache {}", engine.save_replay(path, &build)?);
+        }
         if let Some(components) = again {
             // The same run on the reference engine, silent; everything observable must be equal.
-            let (reference, _, reference_vmem, reference_events) = run.simulate(Engine::new(&board, components, &options)?, None, "v1", false, true)?;
+            let (reference, _, reference_vmem, reference_events) = run.simulate(&mut Engine::new(&board, components, &options)?, None, "v1", false, true)?;
             let interrupted = report.reasons.contains(&"interrupted") || reference.reasons.contains(&"interrupted");
             if !interrupted {
                 let differs = if (report.tick, &report.reasons, report.watch_address) != (reference.tick, &reference.reasons, reference.watch_address) {
@@ -522,7 +554,7 @@ fn run(mut args: RunArgs) -> Result<()> {
             eprintln!("using engine v1: {} needs every tick", if probes.is_empty() { "--render" } else { "--probe" });
         }
         let for_render = (!renders.is_empty()).then(|| components.clone());
-        let (report, elapsed, vmem, _) = run.simulate(Engine::new(&board, components, &options)?, for_render.as_ref(), "v1", false, false)?;
+        let (report, elapsed, vmem, _) = run.simulate(&mut Engine::new(&board, components, &options)?, for_render.as_ref(), "v1", false, false)?;
         (report, elapsed, vmem)
     };
 
@@ -567,7 +599,7 @@ impl Run<'_> {
     /// `by_event`: the engine moves from event to event (v2); otherwise tick by tick, which --probe and --render need.
     /// `silent`: print nothing (the second run of --verify). The last value is the number of VMem events and
     /// Breakpoints seen and a digest of them (tick, address loaded, address written, value written).
-    fn simulate<E: Simulation>(&self, mut engine: E, components: Option<&Components>, name: &str, by_event: bool, silent: bool) -> Result<(vcb::sim::StopReport, f64, Vec<u32>, (u64, u64))> {
+    fn simulate<E: Simulation>(&self, engine: &mut E, components: Option<&Components>, name: &str, by_event: bool, silent: bool) -> Result<(vcb::sim::StopReport, f64, Vec<u32>, (u64, u64))> {
         let Run { args, board, stops, watch, probes, renders } = *self;
         let mut render_error = None;
         let started = Instant::now();

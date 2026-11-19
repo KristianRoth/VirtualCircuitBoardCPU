@@ -95,7 +95,7 @@ Decided by the user on 2026-11-19. The goal is a faster simulator for any board,
 - Looking at a board to understand where time goes (the heat map, the parts pictures) is fine. Feeding what was seen back into the engine as board-specific knowledge is not.
 
 ### Limits
-- **Memory:** all of v2's tables and caches together stay under 2 GiB by default. The limit is one constant that the tests can lower. When it is reached v2 keeps running correctly, only slower.
+- **Memory:** all of v2's tables and caches together stay under 2 GiB by default (`--replay-memory` sets it). When the limit is reached the replay table is emptied and learnt again (since v2.1 step 5; before that it stopped learning). v2 keeps running correctly either way.
 - **Random ink:** stays native. An optimisation that cannot keep v1's draw order switches itself off on boards with Random ink; such a board then runs on v2's tick-exact core.
 - **A later change to v1's model** (a new game fact) must reach v2 in the same commit. If v2 cannot follow, that commit makes v2 decline boards with the affected ink: `vcb run` uses v1 and prints the notice line with the reason. This is the only board-level fallback.
 - **Code:** speed comes first. Unsafe code, generated machine code and new dependencies are all allowed without asking. The equality tests carry the proof, and they are also run once per stage with debug checks switched on.
@@ -180,6 +180,7 @@ python3 engine/tools/bench.py --old <binary> --new <binary> [--old-engine v1|v2]
 ```
 - `bench.py` runs the benchmark set alternately on two builds (`--old` and `--new`, each with the engine named for it; the same binary twice compares v1 with v2) and prints per program: ticks, both speeds, the ratio, start-up, and whether events, stop and VMem were equal. Its last line is the score. Any unequal row makes it exit with an error. `--full` runs to the Breakpoints.
 - `--engine` with another value: `--engine v3: expected v1 or v2`.
+- `--replay-cache <file>` (v2.1 step 5): the replay table is read from the file before the run and written to it after. The file carries a fingerprint of the circuit as the engine holds it, of its settings, and of the engine's own executable: a table is only as right as the engine that made it, so any other build ignores and replaces it. Every number in the file is checked when it is read (entity numbers, node numbers, addresses, lengths), because the tick's loops index without bounds checks; a damaged file is an error. The file is machine-specific (native byte order) and can be as large as `--replay-memory`.
 
 ## Errors
 - A difference between v1 and v2 in any test or `--verify` run is a failure that names the board (or the random seed), the tick of the first differing event, and what differed.

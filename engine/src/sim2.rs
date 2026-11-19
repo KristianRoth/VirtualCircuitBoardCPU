@@ -272,6 +272,7 @@ pub struct Engine {
     /// queue and the just-risen marks they follow from, so that states which behave alike are one node.
     forced: Vec<u32>,
     pending: Vec<u32>,
+    flush_when_full: bool,
     /// What VMem did in the last tick: the address loaded from, the address written to, and whether a word changed.
     fetched: Option<usize>,
     written: Option<usize>,
@@ -365,7 +366,7 @@ impl Engine {
         // within its interval would be part of every state, so states would hardly ever repeat).
         let timed = (0..n).any(|e| live[e] && components.kinds[e] == Kind::Component(Ink::Timer));
         let replay = (!ops.contains(&Op::Random) && !timed).then(|| Table::new(live_list.len().div_ceil(64), MEMORY_LIMIT));
-        let mut engine = Engine { profile: Profile::default(), loaded_word: 0, replay, live_list, node: NONE, node_tick: 0, real: true, arrays_node: NONE, forced: Vec::new(), pending: Vec::new(), schedule, cell: ops.iter().map(|op| Cell { count: 0, threshold: 0, op: *op, on: false, queued: false, toggle: false }).collect(), view: vec![false; n], reads, writes, readers, writers, direct, live, packed: Vec::new(), slot: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(),  clocks: Vec::new(), clock_due: u64::MAX, timer_due: u64::MAX, schedule_due: u64::MAX, clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
+        let mut engine = Engine { profile: Profile::default(), loaded_word: 0, replay, live_list, node: NONE, node_tick: 0, real: true, arrays_node: NONE, forced: Vec::new(), pending: Vec::new(), flush_when_full: true, schedule, cell: ops.iter().map(|op| Cell { count: 0, threshold: 0, op: *op, on: false, queued: false, toggle: false }).collect(), view: vec![false; n], reads, writes, readers, writers, direct, live, packed: Vec::new(), slot: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(),  clocks: Vec::new(), clock_due: u64::MAX, timer_due: u64::MAX, schedule_due: u64::MAX, clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
         for (role, pins) in [(1, &engine.components.address_pins), (2, &engine.components.content_pins)] {
             for pin in pins {
                 engine.pin_role[*pin as usize] = role;
@@ -685,6 +686,76 @@ impl Engine {
         }
     }
 
+    /// What replay does when its table reaches the memory limit: empty it and learn again (true, the default
+    /// since v2.1 step 5), or keep it and learn nothing new (false).
+    pub fn set_flush_when_full(&mut self, flush: bool) {
+        self.flush_when_full = flush;
+    }
+
+    /// How often the table was emptied at its limit.
+    pub fn replay_flushes(&self) -> u64 {
+        self.replay.as_ref().map_or(0, |t| t.flushes)
+    }
+
+    /// What a saved replay table must agree on to be usable here: the circuit as this engine holds it, its
+    /// settings, and `build` (something that names this build of the engine, since a table is only as right as
+    /// the engine that made it).
+    fn fingerprint(&self, build: &[u8]) -> [u8; 32] {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(build);
+        let mut numbers = |list: &[u32]| {
+            h.update((list.len() as u64).to_le_bytes());
+            for x in list {
+                h.update(x.to_le_bytes());
+            }
+        };
+        numbers(&self.cell.iter().map(|c| c.op as u32).collect::<Vec<_>>());
+        for lists in [&self.reads, &self.writes, &self.readers, &self.writers, &self.direct] {
+            numbers(&lists.start);
+            numbers(&lists.items);
+        }
+        numbers(&self.live_list);
+        numbers(&self.clocks);
+        numbers(&self.timers);
+        numbers(&self.components.address_pins);
+        numbers(&self.components.content_pins);
+        for at in &self.schedule.at {
+            numbers(at);
+        }
+        numbers(&[self.clock_interval as u32, self.timer_ticks as u32, self.schedule.lead as u32, self.schedule.period as u32, self.vmem.len() as u32]);
+        h.finalize().into()
+    }
+
+    /// Starts replay from a table an earlier run saved with `save_replay` (v2.1 step 5). Call it before the
+    /// first tick. Returns a line for the user: what was loaded, or why the file was not used.
+    pub fn load_replay(&mut self, path: &std::path::Path, build: &[u8]) -> Result<String> {
+        let Some(old) = &self.replay else { return Ok("replay is off on this board (Random ink or a simulated Timer): no table to load".into()) };
+        if !path.exists() {
+            return Ok(format!("{}: not there yet; it will be written at the end", path.display()));
+        }
+        let fingerprint = self.fingerprint(build);
+        let words = self.packed.len() - 1;
+        match Table::load(path, &fingerprint, words, old.memory_limit, self.cell.len() as u32, self.vmem.len() as u32)? {
+            Ok(table) => {
+                let line = format!("{}: {} states loaded ({} MiB)", path.display(), table.nodes(), table.memory() >> 20);
+                self.replay = Some(table);
+                Ok(line)
+            }
+            Err(why) => Ok(format!("{}: not used, {why}; it will be replaced at the end", path.display())),
+        }
+    }
+
+    /// Writes the replay table for a later run. Returns a line for the user.
+    pub fn save_replay(&self, path: &std::path::Path, build: &[u8]) -> Result<String> {
+        let Some(table) = &self.replay else { return Ok("replay is off on this board: nothing to save".into()) };
+        if !table.changed && path.exists() {
+            return Ok(format!("{}: nothing new learned, left as it is", path.display()));
+        }
+        table.save(path, &self.fingerprint(build)).map_err(|e| format!("{}: {e}", path.display()))?;
+        Ok(format!("{}: {} states saved ({} MiB)", path.display(), table.nodes(), table.memory() >> 20))
+    }
+
     /// (nodes stored, bytes used, ticks crossed by replay)
     pub fn replay_stats(&self) -> (usize, usize, u64) {
         self.replay.as_ref().map_or((0, 0, 0), |t| (t.nodes(), t.memory(), t.replayed_ticks))
@@ -743,7 +814,14 @@ impl Engine {
         }
         pending.sort_unstable();
         let words = self.packed.len() - 1;
-        let id = self.replay.as_mut().unwrap().intern(&self.packed[..words], &pending, &[], meta);
+        let table = self.replay.as_mut().unwrap();
+        let mut id = table.intern(&self.packed[..words], &pending, &[], meta);
+        if id == NONE && self.flush_when_full && table.nodes() > 0 {
+            // The table is full and this state is new: forget everything and start learning again from here.
+            table.clear();
+            self.node = NONE;
+            id = table.intern(&self.packed[..words], &pending, &[], meta);
+        }
         self.pending = pending;
         self.arrays_node = id;
         id

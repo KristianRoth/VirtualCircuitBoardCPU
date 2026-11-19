@@ -205,7 +205,7 @@ Proposed 2026-11-19; the user decides. Ordered by what an idea could give, how s
 | 2 (done) | **The cheap tick items, one attempt each**: cold paths (B2), the loaded word masked (7), the latch's scan (4), the event loop's overhead (5), profile-guided optimisation (3) | Hours each, no risk to correctness beyond the equality tests, and attempt 14 showed the tick's code still had slack | hours each | Each is accepted or rejected by the quick benchmark |
 | 3 (done) | **Cheaper misses in replay**: fewer lookups during a run of misses (9), a hash kept up to date flip by flip (B6) | Packing and lookup were 15% of simulated stretches when last measured; step 0 says what they are now | a day | Skipped if step 0 shows the share is small |
 | 4 (done) | **Layout**: one record per entity (1), then renumbering with 16-bit indices (2), with Arcilator's layout and grouping passes (B1) looked at on the way | Certain but moderate, and every index in v2 changes, so it comes after the small things that would otherwise have to be redone | days | Benchmark |
-| 5 | **The table across runs and under a limit**: saved between runs (6), entries thrown away at the memory limit (A2, 11) | Worth as much as the same board is run again; needed in any case before a program outgrows 2 GiB | a day or two | How the user works: repeated runs or new programs |
+| 5 (done) | **The table across runs and under a limit**: saved between runs (6), entries thrown away at the memory limit (A2, 11) | Worth as much as the same board is run again; needed in any case before a program outgrows 2 GiB | a day or two | How the user works: repeated runs or new programs |
 | 6 | **Control-keyed replay built**, if step 1 says so | The largest possible gain left | a week | Full runs |
 | 7 | **Replay on a board with a simulated Timer** (8) | Only the compact sample gains (3.9 times today, the lowest row). Keeps the benchmark honest across designs; nothing for the user's CPU | unknown | An estimator first |
 | 8 | **Unrolling one schedule period** (C1), as an estimator | A different model of the circuit; only worth the look if step 1 fails | a day to measure | Whether the unrolled form stays small |
@@ -299,6 +299,14 @@ On full runs the two accepted attempts give 1.17 together: day 4 part 2 in 11.5 
 16-bit indices were not tried; they aim at what attempt 21 showed is not there. Day 4 part 2 runs in 11.1 s.
 
 **What it says:** the simulated tick's cost is not memory. Everything a tick touches already sits in the first cache, in any layout. So ideas B1 (Arcilator's layout passes) and B3 (write and read fused) lose their reason. What is left in the tick is instructions and branches per flip, and the only large lever left is still to simulate fewer ticks.
+
+### Step 5 done (2026-11-19): attempt 22
+
+- **At its memory limit the replay table is emptied and learnt again** (it used to stop learning). With only 32 MiB, day 4 part 2 runs in 12.5 s against 17.0 s before and 11.8 s with all the memory it wants. `--replay-memory <MiB>` sets the limit.
+- **`--replay-cache <file>`** keeps the table between runs. A second run of day 4 part 2 takes 1.3 s against 12.5 s; of day 2 part 1, 0.11 s against 0.69 s. Tied to the engine's build and the board; every number checked on reading.
+- A different program gains almost nothing from another program's table.
+
+**What it says:** states are reused soon after they are learnt, and are local to where a program is. A small table is nearly as good as a large one, and a table does not carry over from program to program. That speaks against idea A4 (warming the table on other cores with guessed words would have to guess the near future, not reuse the past) and for keeping tables small.
 
 ### What the research leaves open
 

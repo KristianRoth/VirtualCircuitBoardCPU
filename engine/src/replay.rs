@@ -84,11 +84,27 @@ pub struct Table {
     pub memory_limit: usize,
     /// Ticks crossed by replay, for the statistics.
     pub replayed_ticks: u64,
+    /// How often the table was emptied because it had reached its limit.
+    pub flushes: u64,
+    /// Whether anything was learned or forgotten since the table was made or loaded.
+    pub changed: bool,
 }
 
 impl Table {
     pub fn new(words: usize, memory_limit: usize) -> Table {
-        Table { words, bits: Vec::new(), lists: Vec::new(), nodes: Vec::new(), edges: Vec::new(), by_hash: Default::default(), by_word: Default::default(), memory_limit, replayed_ticks: 0 }
+        Table { words, bits: Vec::new(), lists: Vec::new(), nodes: Vec::new(), edges: Vec::new(), by_hash: Default::default(), by_word: Default::default(), memory_limit, replayed_ticks: 0, flushes: 0, changed: false }
+    }
+
+    /// Forgets everything (the memory limit and the statistics stay).
+    pub fn clear(&mut self) {
+        self.bits.clear();
+        self.lists.clear();
+        self.nodes.clear();
+        self.edges.clear();
+        self.by_hash.clear();
+        self.by_word.clear();
+        self.flushes += 1;
+        self.changed = true;
     }
 
     pub fn nodes(&self) -> usize {
@@ -138,6 +154,7 @@ impl Table {
             return NONE;
         }
         let id = self.nodes.len() as u32;
+        self.changed = true;
         self.nodes.push(Node { hash, next: first, lists_at: self.lists.len() as u32, dirty_len: dirty.len() as u32, rose_len: rose.len() as u32, meta, edge: NONE });
         self.bits.extend_from_slice(bits);
         self.lists.extend_from_slice(dirty);
@@ -160,6 +177,7 @@ impl Table {
     pub fn record(&mut self, from: u32, edge: Edge, word: u32, to: Arrival) {
         let at = self.nodes[from as usize].edge;
         if at == NONE {
+            self.changed = true;
             self.nodes[from as usize].edge = self.edges.len() as u32;
             self.edges.push((edge, to));
         } else {
@@ -167,7 +185,7 @@ impl Table {
             assert!(self.edges[at as usize].0 == edge, "replay: one state led to two different events");
         }
         if edge.fetch != NONE {
-            self.by_word.insert((from as u64) << 32 | word as u64, to);
+            self.changed |= self.by_word.insert((from as u64) << 32 | word as u64, to).is_none();
         }
     }
 
@@ -185,5 +203,117 @@ impl Table {
         } else {
             self.by_word.get(&((from as u64) << 32 | word as u64)).copied()
         }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// The table on disk (v2.1 step 5): so that a run can start with what an earlier run learned.
+//
+// The file is only read back by the same build of the engine for the same circuit (the fingerprint says so),
+// and everything in it is checked before it is used: a number in it may index the engine's arrays without a
+// bounds check later. The words are written as this machine holds them; a file from a machine of the other
+// byte order has a different magic number and is not accepted.
+// ---------------------------------------------------------------------------------------------------------
+
+const MAGIC: u32 = 0x5643_4252; // "VCBR"
+const VERSION: u32 = 1;
+const NODE_WORDS: usize = 11;
+const EDGE_WORDS: usize = 7;
+const WORD_WORDS: usize = 4;
+
+fn bytes_of<T: Copy>(v: &[T]) -> &[u8] {
+    // Safety: u32 and u64 have no padding and any byte pattern; the length is exact.
+    unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, std::mem::size_of_val(v)) }
+}
+
+fn read_vec<T: Copy + Default>(file: &mut impl std::io::Read, len: usize) -> std::io::Result<Vec<T>> {
+    let mut v = vec![T::default(); len];
+    // Safety: as above; the vector owns `len` initialised elements.
+    file.read_exact(unsafe { std::slice::from_raw_parts_mut(v.as_mut_ptr() as *mut u8, len * std::mem::size_of::<T>()) })?;
+    Ok(v)
+}
+
+impl Table {
+    /// Writes the table to `path` (through a temporary file beside it, so a half-written file is never left).
+    pub fn save(&self, path: &std::path::Path, fingerprint: &[u8; 32]) -> std::io::Result<()> {
+        use std::io::Write;
+        let nodes: Vec<u32> = self.nodes.iter().flat_map(|n| [n.hash as u32, (n.hash >> 32) as u32, n.next, n.lists_at, n.dirty_len, n.rose_len, n.meta.address, n.meta.locked as u32 | (n.meta.load_pending as u32) << 1, n.meta.clock_phase, n.meta.timer_phase, n.edge]).collect();
+        let edges: Vec<u32> = self.edges.iter().flat_map(|(e, a)| [e.ticks as u32, (e.ticks >> 32) as u32, e.fetch, e.write, e.breakpoint as u32, a.node, a.written]).collect();
+        let by_word: Vec<u32> = self.by_word.iter().flat_map(|(k, a)| [*k as u32, (*k >> 32) as u32, a.node, a.written]).collect();
+        let header = [self.words as u64, self.bits.len() as u64, self.lists.len() as u64, self.nodes.len() as u64, self.edges.len() as u64, self.by_word.len() as u64];
+        let temporary = path.with_extension("tmp");
+        let mut file = std::io::BufWriter::new(std::fs::File::create(&temporary)?);
+        file.write_all(bytes_of(&[MAGIC, VERSION]))?;
+        file.write_all(fingerprint)?;
+        file.write_all(bytes_of(&header))?;
+        file.write_all(bytes_of(&self.bits))?;
+        for block in [&self.lists, &nodes, &edges, &by_word] {
+            file.write_all(bytes_of(block))?;
+        }
+        file.into_inner()?.sync_all()?;
+        std::fs::rename(&temporary, path)
+    }
+
+    /// Reads a table written by `save`. `Ok(None)` with a reason when the file is for another circuit or another
+    /// build; an error when it cannot be read or is damaged. `entities` and `vmem_words` bound what it may name.
+    pub fn load(path: &std::path::Path, fingerprint: &[u8; 32], words: usize, memory_limit: usize, entities: u32, vmem_words: u32) -> Result<std::result::Result<Table, String>, String> {
+        use std::io::Read;
+        let damaged = |what: &str| format!("{}: damaged ({what})", path.display());
+        let mut file = std::io::BufReader::new(std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?);
+        let io = |e: std::io::Error| format!("{}: {e}", path.display());
+        let head: Vec<u32> = read_vec(&mut file, 2).map_err(io)?;
+        let mut theirs = [0u8; 32];
+        file.read_exact(&mut theirs).map_err(io)?;
+        if head != [MAGIC, VERSION] {
+            return Ok(Err("it is not a replay table of this version".into()));
+        }
+        if theirs != *fingerprint {
+            return Ok(Err("it was made for another board or by another build of the engine".into()));
+        }
+        let h: Vec<u64> = read_vec(&mut file, 6).map_err(io)?;
+        let (n_bits, n_lists, n_nodes, n_edges, n_words) = (h[1] as usize, h[2] as usize, h[3] as usize, h[4] as usize, h[5] as usize);
+        if h[0] as usize != words || n_bits != n_nodes.saturating_mul(words) || n_nodes >= NONE as usize || n_lists >= NONE as usize || n_edges > n_nodes {
+            return Err(damaged("sizes"));
+        }
+        let size = n_bits * 8 + (n_lists + n_nodes * NODE_WORDS + n_edges * EDGE_WORDS + n_words * WORD_WORDS) * 4;
+        if size > memory_limit {
+            return Ok(Err(format!("it holds {} MiB, more than the memory replay may use", size >> 20)));
+        }
+        let bits: Vec<u64> = read_vec(&mut file, n_bits).map_err(io)?;
+        let lists: Vec<u32> = read_vec(&mut file, n_lists).map_err(io)?;
+        let raw_nodes: Vec<u32> = read_vec(&mut file, n_nodes * NODE_WORDS).map_err(io)?;
+        let raw_edges: Vec<u32> = read_vec(&mut file, n_edges * EDGE_WORDS).map_err(io)?;
+        let raw_words: Vec<u32> = read_vec(&mut file, n_words * WORD_WORDS).map_err(io)?;
+        if lists.iter().any(|e| *e >= entities) {
+            return Err(damaged("an entity number"));
+        }
+        let address_ok = |a: u32| a == NONE || a < vmem_words;
+        let mut table = Table::new(words, memory_limit);
+        table.by_hash.reserve(n_nodes);
+        for (id, n) in raw_nodes.chunks_exact(NODE_WORDS).enumerate() {
+            let node = Node { hash: n[0] as u64 | (n[1] as u64) << 32, next: n[2], lists_at: n[3], dirty_len: n[4], rose_len: n[5], meta: Meta { address: n[6], locked: n[7] & 1 == 1, load_pending: n[7] & 2 == 2, clock_phase: n[8], timer_phase: n[9] }, edge: n[10] };
+            let end = node.lists_at as u64 + node.dirty_len as u64 + node.rose_len as u64;
+            if end > n_lists as u64 || (node.next != NONE && node.next as usize >= id) || (node.edge != NONE && node.edge as usize >= n_edges) || node.meta.address >= vmem_words {
+                return Err(damaged("a node"));
+            }
+            table.by_hash.insert(node.hash, id as u32);
+            table.nodes.push(node);
+        }
+        for e in raw_edges.chunks_exact(EDGE_WORDS) {
+            if e[5] as usize >= n_nodes || !address_ok(e[2]) || !address_ok(e[3]) {
+                return Err(damaged("a step"));
+            }
+            table.edges.push((Edge { ticks: e[0] as u64 | (e[1] as u64) << 32, fetch: e[2], write: e[3], breakpoint: e[4] != 0 }, Arrival { node: e[5], written: e[6] }));
+        }
+        table.by_word.reserve(n_words);
+        for w in raw_words.chunks_exact(WORD_WORDS) {
+            if w[1] as usize >= n_nodes || w[2] as usize >= n_nodes {
+                return Err(damaged("an arrival"));
+            }
+            table.by_word.insert(w[0] as u64 | (w[1] as u64) << 32, Arrival { node: w[2], written: w[3] });
+        }
+        table.bits = bits;
+        table.lists = lists;
+        Ok(Ok(table))
     }
 }
