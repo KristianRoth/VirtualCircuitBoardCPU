@@ -513,6 +513,17 @@ Start-up unchanged (the pre-run is a few hundred ticks). Every program stopped a
 
   So a crude partition is enough for the bursts to repeat. The open side is the cost: every burst needs a lookup, and fine parts have many small bursts. On the user's CPU the coarsest level (5 parts) has 0.04 input events per tick and its known bursts hold 18% of all flips, about 32 flips per lookup; the next level (66 parts) has 0.62 events per tick for 9.6 points more, about 1 flip per lookup, which a lookup cannot beat. The first pictures (`engine/examples/parts.rs`) used thresholds picked by looking at one board and are for understanding only. Asking the user to mark blocks was suggested and is withdrawn: it would break the rule above. The self-running part (attempt 11) was the first step; the next is the coarse level, with a measurement of what a lookup costs against what its burst saves.
 
+  **The level is a setting of the estimator** (its fourth argument), and it was swept on all three boards after attempt 11, counting only what whole-board replay does not already skip (3 million ticks from a cold start). "Per lookup" is flips saved per burst looked up; simulating a flip costs roughly a tenth of a hashed lookup, so a level pays only well above 10.
+
+  | Board, program | Coarsest level: share of the missed flips, per lookup | T=16: share, per lookup | T=4: share, per lookup |
+  |---|---|---|---|
+  | the user's CPU, day 4 part 2 | 22.9%, 226 | 46.1%, 2.2 | 71.1%, 1.1 |
+  | the user's CPU, day 1 part 2 | 4.5%, 89 | 50.8%, 2.8 | 71.4%, 1.3 |
+  | sample | 6.1%, 7.7 | 74.5%, 0.4 | 83.8%, 0.2 |
+  | sample compact | 33.2%, 753 (42.2%, 74 one level finer) | 57.8%, 1.4 | 84.1%, 1.0 |
+
+  The same picture on every board: fine parts recognise their situation almost always (over 95% of their bursts), but a burst there is one or two flips, cheaper to simulate than to look up. Only the coarsest setting (two to seven parts) pays, and it adds 5% to 25% on the user's CPU and a third on the compact sample. As measured, recursion below the first level would cost more than it saves; it would need a lookup about as cheap as one flip (a small part's state and inputs used directly as an index into a table, not hashed).
+
 See "Not planned" in the ranked plan. Nothing else yet.
 
 ## Stage results

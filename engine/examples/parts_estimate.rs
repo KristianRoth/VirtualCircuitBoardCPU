@@ -42,6 +42,13 @@ struct Level {
     events_unsettled: u64,
     flips_in_parts: u64,
     flips_seen: u64,
+    /// The same counted only inside steps that whole-board replay does not know: what parts add on top of it.
+    /// `step_*` collect the current step; they count (and the situations are kept) only if the step was a miss.
+    step_keys: Vec<u64>,
+    step_events: u64,
+    step_flips_seen: u64,
+    miss_events: u64,
+    miss_flips_seen: u64,
 }
 
 fn mix(a: u64, b: u64) -> u64 {
@@ -89,7 +96,7 @@ fn level(name: String, part: Vec<u32>, parts: usize, c: &Components, simulated: 
             }
         }
     }
-    Level { name, part, parts, feeds, inputs, state: vec![0; parts], input_state: vec![0; parts], changed: vec![0; parts], input_changed: vec![0; parts], event: vec![false; parts], seen_burst: vec![false; parts], known: HashSet::new(), events: 0, events_seen: 0, events_unsettled: 0, flips_in_parts: 0, flips_seen: 0 }
+    Level { name, part, parts, feeds, inputs, state: vec![0; parts], input_state: vec![0; parts], changed: vec![0; parts], input_changed: vec![0; parts], event: vec![false; parts], seen_burst: vec![false; parts], known: HashSet::new(), events: 0, events_seen: 0, events_unsettled: 0, flips_in_parts: 0, flips_seen: 0, step_keys: Vec::new(), step_events: 0, step_flips_seen: 0, miss_events: 0, miss_flips_seen: 0 }
 }
 
 fn main() -> Result<(), String> {
@@ -178,6 +185,8 @@ fn main() -> Result<(), String> {
     let (mut flips, mut flips_cut, mut flips_self) = (0u64, 0u64, 0u64);
     let mut covered_by = vec![0u64; levels.len()];
     let mut changed: Vec<usize> = Vec::new();
+    let mut steps: HashSet<(u64, u32)> = HashSet::new();
+    let (mut node, mut step_flips, mut flips_replayed) = (0u64, 0u64, 0u64);
     let mut run = 0u64;
     while run < ticks && !engine.breakpoint_hit() {
         engine.step();
@@ -205,6 +214,7 @@ fn main() -> Result<(), String> {
                 l.flips_in_parts += 1;
                 if l.seen_burst[p as usize] {
                     l.flips_seen += 1;
+                    l.step_flips_seen += 1;
                     if std::mem::take(&mut first) {
                         covered_by[i] += 1;
                     }
@@ -232,7 +242,10 @@ fn main() -> Result<(), String> {
                         continue;
                     }
                     let key = mix(mix(mix(mix(q as u64, l.state[q]), l.input_state[q]), l.changed[q]), l.input_changed[q]);
-                    let seen = !l.known.insert(key);
+                    // A situation counts as known if a step that was really simulated has shown it.
+                    let seen = l.known.contains(&key) || l.step_keys.contains(&key);
+                    l.step_keys.push(key);
+                    l.step_events += 1;
                     l.events += 1;
                     l.events_seen += seen as u64;
                     l.events_unsettled += (l.changed[q] != 0) as u64;
@@ -245,6 +258,34 @@ fn main() -> Result<(), String> {
                     l.changed[l.part[e] as usize] = 0;
                 }
             }
+        }
+        step_flips += changed.len() as u64;
+        let (fetched, written) = engine.vmem_access();
+        if engine.breakpoint_hit() || fetched.is_some() || written.is_some() {
+            // Whole-board replay as v2 has it: a step is known if this state led here with this loaded word before.
+            let word = fetched.map_or(0, |a| engine.vmem()[a]);
+            let replayed = !steps.insert((node, word));
+            if replayed {
+                flips_replayed += step_flips;
+            }
+            for l in &mut levels {
+                if replayed {
+                    // The parts saw nothing of this step: they do not know their situation until their next event.
+                    l.seen_burst.fill(false);
+                } else {
+                    l.known.extend(l.step_keys.iter());
+                    l.miss_events += l.step_events;
+                    l.miss_flips_seen += l.step_flips_seen;
+                }
+                l.step_keys.clear();
+                (l.step_events, l.step_flips_seen) = (0, 0);
+            }
+            step_flips = 0;
+            let mut h = 0xcbf2_9ce4_8422_2325u64;
+            for e in (0..n).filter(|e| simulated[*e] && state[*e]) {
+                h ^= z[e].0;
+            }
+            node = mix(h, engine.tick() % 64); // 64: the period of nothing in particular; a stand-in for the schedule position
         }
         previous.copy_from_slice(state);
     }
@@ -266,5 +307,13 @@ fn main() -> Result<(), String> {
     let by: Vec<String> = levels.iter().zip(&covered_by).map(|(l, k)| format!("{} {:.1}%", l.name, pct(*k, flips))).collect();
     println!("the levels together, the largest part that knows its situation first: {:.1}% of all flips skipped ({})", pct(total, flips), by.join(", "));
     println!("left to simulate: {:.1}% of all flips (self-running parts not counted as left)", pct(flips - total - flips_self, flips));
+    let missed = flips - flips_replayed;
+    println!();
+    println!("on top of whole-board replay: it already skips {:.1}% of the flips; {:.2} flips per tick are left in its misses", pct(flips_replayed, flips), missed as f64 / run as f64);
+    println!("{:<9}{:>22}{:>14}{:>12}{:>10}", "level", "of the missed flips", "lookups/tick", "per lookup", "net");
+    for l in &levels {
+        let (per_tick, lookups) = (l.miss_flips_seen as f64 / run as f64, l.miss_events as f64 / run as f64);
+        println!("{:<9}{:>21.1}%{:>14.3}{:>12.1}{:>10.2}", l.name, pct(l.miss_flips_seen, missed), lookups, l.miss_flips_seen as f64 / l.miss_events.max(1) as f64, per_tick - 8.0 * lookups);
+    }
     Ok(())
 }
