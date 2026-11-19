@@ -18,6 +18,7 @@ Every optimisation that was tried on the v2 engine, what it gained, and whether 
 | 9 | Chaining replays | 0.98 (quick run) | rejected |
 | 10 | Netlist: traces with one writer merged into it | 1.05 (three runs) | accepted |
 | 11 | The self-running part played from a schedule | 1.65 (quick run) | accepted |
+| 12 | Part-level skipping: units with their own tables | 0.76 to 0.98 against the plain simulation | rejected |
 
 ## The profile and the ranked plan
 
@@ -498,6 +499,38 @@ Start-up unchanged (the pre-run is a few hundred ticks). Every program stopped a
 
 **Verdict.** Accepted: 1.65; 1.5 to 1.8 on the user's CPU and 2.2 on the sample. The compact sample has almost no self-running part and loses 5% in this one run (not repeated; one extra check per tick is the likely cost).
 
+### 12. Part-level skipping: units with their own tables (2026-11-19): rejected
+**Idea.** The user's, in the form the estimates supported (see "Ideas not tried"): sparsely connected parts of the circuit, found from the netlist alone, each skipped by itself when it recognises its situation. Built as step 1 of two: the mechanism alone, with whole-board replay switched off, so that its real cost could be measured against the plain simulation before the two were joined and before any switching of units on and off.
+
+**How it worked.** A **unit** is a part's gates, latches and inner traces. It has a table of nodes: its signals, its inputs' values, and its components that flip in the next tick. From a node the next one follows from which inputs flip in the tick between: none (one array lookup) or a set of them (one hash lookup). While a unit is **frozen** its inside is not simulated: each tick its node says which of its outputs flip, and the next node is looked up. When a lookup fails the unit is **thawed**: its signals are rebuilt from the node, it catches up with the tick it missed, and it is simulated like everything else, which also teaches the table. Units were chosen at start-up: cut the traces more than 32, 16, 8, 4, 2 components share, split a part while it has more than `largest` entities, take it if it has at least 32.
+
+**Equality.** A test stepped v2 with units against v1 on both day 1 programs, tick by tick and by events with limits of many sizes, for 60,000 ticks at two unit sizes: every simulated signal, every VMem event and the Breakpoint equal. A self-check (a unit at rest must show exactly its node's signals) ran clean. One real fault was found on the way by the engine's own refusal to store two outcomes for one situation: the set of flipped inputs was hashed as a sum of multiples of the entity numbers, and inputs 246 and 252 flipping gave the same sum as 248 and 250. The whole-program test was not run.
+
+**Measured.** 20 million ticks, whole-board replay off in every row, so the first row of each block is the plain simulation the others are compared with.
+
+| Program | `largest` | Units | Flips skipped per tick | Lookups failed per tick | M ticks/s | Against plain |
+|---|---|---|---|---|---|---|
+| day 1 part 2 | none | 0 | | | 21.6 | |
+| | 128 | 2 | 0.15 | 0.0013 | 20.3 | 0.94 |
+| | 256 | 6 | 0.55 | 0.0037 | 16.5 | 0.76 |
+| | 512 | 7 | 0.97 | 0.0049 | 17.2 | 0.80 |
+| | 4096 | 1 | 0.65 | 0.0003 | 2.9 | 0.13 |
+| day 4 part 2 | none | 0 | | | 21.2 | |
+| | 128 | 2 | 0.15 | 0.0011 | 20.9 | 0.98 |
+| | 256 | 6 | 0.45 | 0.0032 | 19.9 | 0.94 |
+| | 512 | 7 | 0.68 | 0.0043 | 19.6 | 0.92 |
+| | 4096 | 1 | 0.58 | 0.0004 | 3.0 | 0.14 |
+
+**Verdict.** Rejected: slower at every setting, although the units do skip up to a third of the flips that are left. Three reasons, all measured:
+- **There is little left to skip.** After attempts 5, 6, 10 and 11 the simulated circuit makes about 3 flips per tick, and a tick of the plain simulation costs about 47 ns, most of it not in the flips. Skipping one flip per tick saves roughly 10 ns.
+- **A failed lookup is dear.** Thawing rebuilds the unit's counts and evaluates every member once: about 1 to 2 microseconds for a unit of a few hundred entities. At 0.004 to 0.005 failures per tick that is 5 to 10 ns per tick, as much as the skipping saves.
+- **Learning is dear.** While a unit is simulated in a burst, its node is looked up or stored every tick (0.01 to 0.03 per tick), each time packing its signals.
+- The one large unit loses outright: it fills its table (a million nodes) and pays for a lookup of 3,000 signals in most ticks.
+
+The estimates in "Ideas not tried" counted flips saved against lookups; they did not count that a flip is only a small part of what a tick costs now. With the best possible choice of units they promised 0.45 to 0.82 flips per tick, which is 5 to 8 ns of 47: the gain was never going to be large, and the machinery costs more than that. Step 2 (joining with whole-board replay, switching units on and off while running) was not built: it could only choose among units that each lose. The code is on the local tag `v2-attempt-12-rejected`; the estimator and the tree tools stay in `engine/examples/`.
+
+What this points to: the time left in a missed step is in the tick itself (about 16 ns per flip against about 47 ns per tick), so the next gains are in the cost of a tick, not in skipping more flips.
+
 ## Ideas not tried
 
 **Rule for every idea below** (the user, 2026-11-19): the engine optimises the simulator, not a board. Parts, blocks or schedules are found by the engine in the netlist it is given; nothing is marked by hand or tuned to the user's CPU.
@@ -512,6 +545,43 @@ Start-up unchanged (the pre-run is a few hundred ticks). Every program stopped a
   | sample compact | 0.8% | 96.3% | 3.0% |
 
   So a crude partition is enough for the bursts to repeat. The open side is the cost: every burst needs a lookup, and fine parts have many small bursts. On the user's CPU the coarsest level (5 parts) has 0.04 input events per tick and its known bursts hold 18% of all flips, about 32 flips per lookup; the next level (66 parts) has 0.62 events per tick for 9.6 points more, about 1 flip per lookup, which a lookup cannot beat. The first pictures (`engine/examples/parts.rs`) used thresholds picked by looking at one board and are for understanding only. Asking the user to mark blocks was suggested and is withdrawn: it would break the rule above. The self-running part (attempt 11) was the first step; the next is the coarse level, with a measurement of what a lookup costs against what its burst saves.
+
+  **The level is a setting of the estimator** (its fourth argument), and it was swept on all three boards after attempt 11, counting only what whole-board replay does not already skip (3 million ticks from a cold start). "Per lookup" is flips saved per burst looked up; simulating a flip costs roughly a tenth of a hashed lookup, so a level pays only well above 10.
+
+  | Board, program | Coarsest level: share of the missed flips, per lookup | T=16: share, per lookup | T=4: share, per lookup |
+  |---|---|---|---|
+  | the user's CPU, day 4 part 2 | 22.9%, 226 | 46.1%, 2.2 | 71.1%, 1.1 |
+  | the user's CPU, day 1 part 2 | 4.5%, 89 | 50.8%, 2.8 | 71.4%, 1.3 |
+  | sample | 6.1%, 7.7 | 74.5%, 0.4 | 83.8%, 0.2 |
+  | sample compact | 33.2%, 753 (42.2%, 74 one level finer) | 57.8%, 1.4 | 84.1%, 1.0 |
+
+  The same picture on every board: fine parts recognise their situation almost always (over 95% of their bursts), but a burst there is one or two flips, cheaper to simulate than to look up. Only the coarsest setting (two to seven parts) pays, and it adds 5% to 25% on the user's CPU and a third on the compact sample. As measured, recursion below the first level would cost more than it saves; it would need a lookup about as cheap as one flip (a small part's state and inputs used directly as an index into a table, not hashed).
+
+  **Small parts read from a table: measured, not worth building.** The estimator counts the parts small enough to index a table directly (their simulated signals and inputs, each with "changed in the last tick", in at most 16 or 24 bits). Nearly all fine parts are that small, and together they hold 30% to 80% of the flips left in the misses. But they flip less often than their inputs change: 0.4 to 0.9 flips per lookup on the user's CPU and the compact sample, about 0.2 on the sample. A table lookup, however cheap, is then more work than the simulation it replaces, which already leaves a gate asleep when an input change cannot alter its output (attempt 5). Fine parts are closed as an idea unless a way is found to not look at a part when its input changes without effect, which is what attempt 5 does per gate.
+
+  **A tree whose depth follows the parts** (the user's idea, 2026-11-19): do not split a part that is small enough, split one that is still large, and use a part as a unit only where that pays. The estimator now keeps the numbers per part and picks, from the root down, for every part the best of three: use it as a unit, split it, or leave it to the plain simulation. With a lookup counted as 8 flips, over 3 million ticks, on top of whole-board replay:
+
+  | Board, program | Units chosen | Share of the missed flips skipped | Flips per lookup | Coarsest level alone, for comparison |
+  |---|---|---|---|---|
+  | the user's CPU, day 4 part 2 | 1 (the large part) | 22.9% | 226 | 22.9% |
+  | the user's CPU, day 1 part 2 | 5, at four different depths (45 to 272 entities) | 50.9% | 18.7 | 4.5% |
+  | sample | 2 | 15.2% | 16.3 | 6.1% |
+  | sample compact | 1 | 41.5% | 149 | 33.2% |
+
+  With a lookup at 4 flips the user's CPU on day 4 part 2 gets 7 units and 41.6%. So variable depth helps where the coarsest part rarely recognises its situation: a few mid-sized parts with few inputs (1 to 20) that know their situation 83% to 100% of the time carry the gain, and the hundreds of tiny parts are never chosen. Two cautions: the choice was made here with the whole run known, where an engine would have to learn while running which parts pay; and the units are chosen by their own numbers, without the cost of the machinery around them. This is the form of part-level skipping worth building, if any.
+
+  **Can the tree be fixed at start-up by part size alone?** (the user's question.) Tested: split a part while it has more than `largest` entities, use what comes out if it has at least `smallest`. Net flips saved per tick, a lookup counted as 8 flips:
+
+  | Rule (largest, smallest) | the user's CPU, day 4 part 2 | day 1 part 2 | sample | sample compact |
+  |---|---|---|---|---|
+  | never split (4096, any) | 0.45 | 0.11 | -0.19 | 0.77 |
+  | (1024, 32) | -0.16 | 0.22 | -0.45 | -0.84 |
+  | (512, 32) | -0.12 | 0.32 | -0.36 | -0.96 |
+  | (256, 32) | 0.16 | 0.44 | -0.16 | -0.68 |
+  | (64, 32) | 0.15 | 0.18 | -0.25 | -0.05 |
+  | chosen per part with the run known | 0.45 | 0.82 | 0.07 | 0.93 |
+
+  No size setting is good on all four, and the best one differs per board and even per program on one board. Size is useful as a floor only: no part under about 32 entities ever paid. So the tree's shape can be built at start-up from the netlist, but which of its parts are used has to follow what each part does while running (count its lookups and the flips they save, switch it off when it loses).
 
 See "Not planned" in the ranked plan. Nothing else yet.
 
