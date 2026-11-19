@@ -490,13 +490,13 @@ fn run(mut args: RunArgs) -> Result<()> {
     let run = Run { args: &args, board: &board, stops: &stops, watch: &watch, probes: &probes, renders: &renders };
     // --probe and --render need every signal at every tick, which only v1 promises.
     let (report, elapsed, vmem) = if args.engine.as_deref() == Some("v2") && probes.is_empty() && renders.is_empty() {
-        run.simulate(vcb::sim2::Engine::new(&board, components, &options)?, None, "v2")?
+        run.simulate(vcb::sim2::Engine::new(&board, components, &options)?, None, "v2", true)?
     } else {
         if args.engine.as_deref() == Some("v2") {
             eprintln!("using engine v1: {} needs every tick", if probes.is_empty() { "--render" } else { "--probe" });
         }
         let for_render = (!renders.is_empty()).then(|| components.clone());
-        run.simulate(Engine::new(&board, components, &options)?, for_render.as_ref(), "v1")?
+        run.simulate(Engine::new(&board, components, &options)?, for_render.as_ref(), "v1", false)?
     };
 
     let reasons: Vec<String> = report.reasons.iter().map(|reason| match (*reason, report.watch_address) {
@@ -537,14 +537,17 @@ struct Run<'a> {
 
 impl Run<'_> {
     /// Runs to the first stop. Returns the report, the seconds it took and the final VMem.
-    fn simulate<E: Simulation>(&self, mut engine: E, components: Option<&Components>, name: &str) -> Result<(vcb::sim::StopReport, f64, Vec<u32>)> {
+    /// `by_event`: the engine moves from event to event (v2); otherwise tick by tick, which --probe and --render need.
+    fn simulate<E: Simulation>(&self, mut engine: E, components: Option<&Components>, name: &str, by_event: bool) -> Result<(vcb::sim::StopReport, f64, Vec<u32>)> {
         let Run { args, board, stops, watch, probes, renders } = *self;
         let mut render_error = None;
         let started = Instant::now();
         let mut last_progress = (Instant::now(), 0u64);
-        let report = engine.run_until(stops, |engine| {
-            // With --stats: a progress line every 5 seconds. The clock is read only every 65,536 ticks.
-            if args.stats && engine.tick() & 0xffff == 0 && last_progress.0.elapsed().as_secs() >= 5 {
+        let mut calls = 0u64;
+        let mut each = |engine: &E| {
+            // With --stats: a progress line every 5 seconds. The clock is read only every 65,536 calls.
+            calls += 1;
+            if args.stats && calls & 0xffff == 0 && last_progress.0.elapsed().as_secs() >= 5 {
                 let speed = (engine.tick() - last_progress.1) as f64 / last_progress.0.elapsed().as_secs_f64();
                 eprintln!("tick {}  TPS: {speed:.0}", engine.tick());
                 last_progress = (Instant::now(), engine.tick());
@@ -565,7 +568,8 @@ impl Run<'_> {
                 let written = vcb::render::render(board, components.map(|c| (c, engine.state())), &[]).and_then(|image| write_file(path, &image.to_png()));
                 render_error = render_error.take().or(written.err());
             }
-        });
+        };
+        let report = if by_event { engine.run_events(stops, &mut each) } else { engine.run_until(stops, &mut each) };
         let elapsed = started.elapsed().as_secs_f64();
         if let Some(e) = render_error {
             return Err(e);
