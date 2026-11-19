@@ -11,6 +11,23 @@ use crate::sim::{Options, Rng, Simulation};
 /// All of v2's tables and caches together stay under this many bytes (the spec's limit). `set_memory_limit` lowers it.
 const MEMORY_LIMIT: usize = 2 << 30;
 
+/// Indexing without the bounds check, for the tick's inner loops (attempt 14). Every index there is an entity
+/// number or a position taken from the netlist's own lists, all made in `Engine::new` for arrays of that size;
+/// a debug build still checks them.
+#[inline(always)]
+fn g<T: Copy>(v: &[T], i: usize) -> T {
+    debug_assert!(i < v.len());
+    // Safety: see above.
+    unsafe { *v.get_unchecked(i) }
+}
+
+#[inline(always)]
+fn gm<T>(v: &mut [T], i: usize) -> &mut T {
+    debug_assert!(i < v.len());
+    // Safety: see above.
+    unsafe { v.get_unchecked_mut(i) }
+}
+
 /// Many short lists in one array (attempt 3): the list of entity e is `items[start[e]..start[e + 1]]`.
 struct Lists {
     start: Vec<u32>,
@@ -30,7 +47,9 @@ impl Lists {
 
     #[inline(always)]
     fn of(&self, e: usize) -> &[u32] {
-        &self.items[self.start[e] as usize..self.start[e + 1] as usize]
+        debug_assert!(e + 1 < self.start.len() && self.start[e + 1] as usize <= self.items.len());
+        // Safety: `start` has one entry more than there are entities and rises up to `items.len()`.
+        unsafe { self.items.get_unchecked(*self.start.get_unchecked(e) as usize..*self.start.get_unchecked(e + 1) as usize) }
     }
 }
 
@@ -112,7 +131,7 @@ impl Schedule {
                 let last = at.len() - 1;
                 let mut wait = vec![0u64; at.len()];
                 wait[last] = (lead as usize + 1..=last).find(|k| !at[*k].is_empty()).map_or(0, |k| k as u64 - lead);
-                for k in (1..last).rev() {
+                for k in (0..last).rev() {
                     wait[k] = if !at[k + 1].is_empty() { 1 } else if wait[k + 1] > 0 { wait[k + 1] + 1 } else { 0 };
                 }
                 return Ok(Schedule { at, wait, lead, period });
@@ -184,6 +203,12 @@ pub struct Engine {
     flips: Vec<u32>,
     queued: Vec<bool>,
     clocks: Vec<u32>,
+    /// The next tick at which the clocks, the timers and the schedule flip something (u64::MAX: never). Kept
+    /// so that a tick does not divide to find out (attempt 13). `set_due` renews them when the tick counter
+    /// moves by more than a step.
+    clock_due: u64,
+    timer_due: u64,
+    schedule_due: u64,
     clock_interval: u64,
     timers: Vec<u32>,
     timer_ticks: u64,
@@ -309,7 +334,7 @@ impl Engine {
         // within its interval would be part of every state, so states would hardly ever repeat).
         let timed = (0..n).any(|e| live[e] && components.kinds[e] == Kind::Component(Ink::Timer));
         let replay = (!ops.contains(&Op::Random) && !timed).then(|| Table::new(live_list.len().div_ceil(64), MEMORY_LIMIT));
-        let mut engine = Engine { loaded_word: 0, replay, scratch: vec![0; live_list.len().div_ceil(64)], live_list, node: NONE, node_tick: 0, real: true, arrays_node: NONE, forced: Vec::new(), pending: Vec::new(), schedule, ops, reads, writes, readers, writers, direct, count: vec![0; n], live, threshold: vec![0; n], on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
+        let mut engine = Engine { loaded_word: 0, replay, scratch: vec![0; live_list.len().div_ceil(64)], live_list, node: NONE, node_tick: 0, real: true, arrays_node: NONE, forced: Vec::new(), pending: Vec::new(), schedule, ops, reads, writes, readers, writers, direct, count: vec![0; n], live, threshold: vec![0; n], on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_due: u64::MAX, timer_due: u64::MAX, schedule_due: u64::MAX, clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
         for (role, pins) in [(1, &engine.components.address_pins), (2, &engine.components.content_pins)] {
             for pin in pins {
                 engine.pin_role[*pin as usize] = role;
@@ -362,6 +387,7 @@ impl Engine {
                 engine.rose_list.push(e);
             }
         }
+        engine.set_due();
         for e in 0..n {
             let inputs = if engine.ops[e] == Op::Trace { engine.writers.of(e) } else { engine.reads.of(e) };
             engine.count[e] = inputs.iter().filter(|i| engine.on[**i as usize]).count() as u32;
@@ -373,7 +399,7 @@ impl Engine {
     /// The output a component would have after this tick, from the trace states of the previous tick.
     #[inline(always)]
     fn evaluate(&self, e: usize, op: Op) -> bool {
-        let (active, inputs) = (self.count[e], self.reads.start[e + 1] - self.reads.start[e]);
+        let (active, inputs) = (g(&self.count, e), g(&self.reads.start, e + 1) - g(&self.reads.start, e));
         match op {
             Op::Or | Op::Breakpoint => active > 0,
             Op::Nor => active == 0,
@@ -383,9 +409,9 @@ impl Engine {
             Op::Xor => active % 2 == 1,
             Op::Xnor => active % 2 == 0,
             // Observed: toggles once per input that rose, so two inputs rising together cancel out.
-            Op::Latch | Op::Pin => self.on[e] != (self.reads.of(e).iter().filter(|t| self.rose[**t as usize]).count() % 2 == 1),
+            Op::Latch | Op::Pin => g(&self.on, e) != (self.reads.of(e).iter().filter(|t| g(&self.rose, **t as usize)).count() % 2 == 1),
             // Clocks and timers flip from the schedule in `step`, never from their inputs (observed).
-            Op::Scheduled => self.on[e],
+            Op::Scheduled => g(&self.on, e),
             Op::Random | Op::Trace | Op::Dead => unreachable!("not evaluated here"),
         }
     }
@@ -410,38 +436,39 @@ impl Engine {
         // First every writer count, then the traces: a trace that loses one writer and gains another in the
         // same tick does not change, exactly as when all its writers are looked at afterwards.
         for &e in flipped {
-            let step = if self.on[e as usize] { 1 } else { u32::MAX }; // +1 or -1
+            let step = if g(&self.on, e as usize) { 1 } else { u32::MAX }; // +1 or -1
             for &t in self.writes.of(e as usize) {
-                self.count[t as usize] = self.count[t as usize].wrapping_add(step);
+                let c = gm(&mut self.count, t as usize);
+                *c = c.wrapping_add(step);
             }
         }
         for &e in flipped {
             // The traces only this component writes: their readers see the component itself.
-            let (from, to) = (self.direct.start[e as usize] as usize, self.direct.start[e as usize + 1] as usize);
+            let (from, to) = (g(&self.direct.start, e as usize) as usize, g(&self.direct.start, e as usize + 1) as usize);
             if from != to {
-                let now = self.on[e as usize];
+                let now = g(&self.on, e as usize);
                 if now {
-                    self.rose[e as usize] = true;
+                    *gm(&mut self.rose, e as usize) = true;
                     self.rose_list.push(e);
                 }
                 for i in from..to {
-                    self.feed(self.direct.items[i], now);
+                    self.feed(g(&self.direct.items, i), now);
                 }
             }
-            let (from, to) = (self.writes.start[e as usize] as usize, self.writes.start[e as usize + 1] as usize);
+            let (from, to) = (g(&self.writes.start, e as usize) as usize, g(&self.writes.start, e as usize + 1) as usize);
             for i in from..to {
-                let t = self.writes.items[i];
-                let now = self.count[t as usize] > 0;
-                if now == self.on[t as usize] {
+                let t = g(&self.writes.items, i);
+                let now = g(&self.count, t as usize) > 0;
+                if now == g(&self.on, t as usize) {
                     continue;
                 }
-                self.on[t as usize] = now;
+                *gm(&mut self.on, t as usize) = now;
                 if now {
-                    self.rose[t as usize] = true;
+                    *gm(&mut self.rose, t as usize) = true;
                     self.rose_list.push(t);
                 }
-                for k in self.readers.start[t as usize] as usize..self.readers.start[t as usize + 1] as usize {
-                    self.feed(self.readers.items[k], now);
+                for k in g(&self.readers.start, t as usize) as usize..g(&self.readers.start, t as usize + 1) as usize {
+                    self.feed(g(&self.readers.items, k), now);
                 }
             }
         }
@@ -450,19 +477,19 @@ impl Engine {
     /// One input of `reader` turned on (`now`) or off: adjusts its count and queues it if its output can change.
     #[inline(always)]
     fn feed(&mut self, reader: u32, now: bool) {
-        let old = self.count[reader as usize];
+        let old = g(&self.count, reader as usize);
         let new = old.wrapping_add(if now { 1 } else { u32::MAX });
-        self.count[reader as usize] = new;
+        *gm(&mut self.count, reader as usize) = new;
         // A gate that is not queued has the output its count gives. It can only change when the count
         // passes its threshold: the higher of the two counts is then the threshold.
-        let wake = match self.ops[reader as usize] {
-            Op::Or | Op::Breakpoint | Op::Nor | Op::And | Op::Nand => old.max(new) == self.threshold[reader as usize],
+        let wake = match g(&self.ops, reader as usize) {
+            Op::Or | Op::Breakpoint | Op::Nor | Op::And | Op::Nand => old.max(new) == g(&self.threshold, reader as usize),
             Op::Xor | Op::Xnor | Op::Random => true, // a Random draws at every change of an input
             Op::Latch | Op::Pin => now,              // only a rising input toggles a latch
             Op::Scheduled | Op::Trace | Op::Dead => false,
         };
-        if wake && !self.queued[reader as usize] {
-            self.queued[reader as usize] = true;
+        if wake && !g(&self.queued, reader as usize) {
+            *gm(&mut self.queued, reader as usize) = true;
             self.dirty.push(reader);
         }
     }
@@ -484,8 +511,8 @@ impl Engine {
         // After a restore the flips of this tick are already known (see `forced`); nothing is queued then.
         flips.append(&mut self.forced);
         for &e in &dirty {
-            self.queued[e as usize] = false;
-            let op = self.ops[e as usize];
+            *gm(&mut self.queued, e as usize) = false;
+            let op = g(&self.ops, e as usize);
             // A pin is a latch, except that VMem rejects its input while locked (the input is lost).
             if op == Op::Pin && self.locked {
                 continue;
@@ -495,32 +522,40 @@ impl Engine {
                 // one of its inputs changed. When an input rose the output is that draw. The draw made when the
                 // input falls is used up without effect. The output stays on while an input stays on (observed).
                 let draw = self.rng.next_bit();
-                draw && self.count[e as usize] > 0
+                draw && g(&self.count, e as usize) > 0
             } else {
                 self.evaluate(e as usize, op)
             };
-            if next != self.on[e as usize] {
+            if next != g(&self.on, e as usize) {
                 flips.push(e);
             }
         }
-        if self.tick % self.clock_interval == 0 {
+        if self.tick == self.clock_due {
             flips.extend(&self.clocks);
+            self.clock_due += self.clock_interval;
         }
-        if self.tick % self.timer_ticks == 0 {
+        if self.tick == self.timer_due {
             flips.extend(&self.timers);
+            self.timer_due += self.timer_ticks;
         }
-        if !self.schedule.at.is_empty() {
+        if self.tick == self.schedule_due {
             flips.extend(&self.schedule.at[self.schedule.key(self.tick)]);
+            self.schedule_due = self.schedule.next(self.tick);
         }
 
         // 2. Apply.
         for t in self.rose_list.drain(..) {
-            self.rose[t as usize] = false;
+            *gm(&mut self.rose, t as usize) = false;
         }
         self.breakpoint_hit = false;
+        // Which kinds of VMem pin flipped: bit 0 an address pin, bit 1 a content pin.
+        let mut pins_flipped = 0u8;
         for &e in &flips {
-            self.on[e as usize] = !self.on[e as usize];
-            if self.ops[e as usize] == Op::Breakpoint && self.on[e as usize] {
+            let on = gm(&mut self.on, e as usize);
+            *on = !*on;
+            let on = *on;
+            pins_flipped |= g(&self.pin_role, e as usize);
+            if g(&self.ops, e as usize) == Op::Breakpoint && on {
                 self.breakpoint_hit = true;
             }
         }
@@ -531,7 +566,7 @@ impl Engine {
         //   tick T+1: VMem is locked: input to any pin is rejected and lost. The word at the new address
         //             appears on the content pins in this tick, so readers see it at T+2.
         (self.fetched, self.written, self.vmem_changed) = (None, None, false);
-        if !self.components.address_pins.is_empty() || !self.components.content_pins.is_empty() {
+        if self.load_pending || pins_flipped != 0 || self.locked {
             if self.load_pending {
                 self.load_pending = false;
                 self.fetched = Some(self.address);
@@ -546,8 +581,7 @@ impl Engine {
                 }
                 self.propagate(&loaded);
             }
-            let flipped = |role| flips.iter().any(|e| self.pin_role[*e as usize] == role);
-            let (address_flipped, content_flipped) = (flipped(1), flipped(2));
+            let (address_flipped, content_flipped) = (pins_flipped & 1 != 0, pins_flipped & 2 != 0);
             if content_flipped {
                 // Bits above the content width are written as 0 (observed).
                 let value = self.pins_value(&self.components.content_pins);
@@ -586,6 +620,14 @@ impl Engine {
         if !self.real {
             self.restore(self.node);
         }
+    }
+
+    /// Works out when the clocks, the timers and the schedule flip next, from the tick counter.
+    fn set_due(&mut self) {
+        let next = |any: bool, interval: u64| if any { (self.tick / interval + 1) * interval } else { u64::MAX };
+        self.clock_due = next(!self.clocks.is_empty(), self.clock_interval);
+        self.timer_due = next(!self.timers.is_empty(), self.timer_ticks);
+        self.schedule_due = self.schedule.next(self.tick);
     }
 
     fn meta(&self) -> Meta {
@@ -667,6 +709,7 @@ impl Engine {
         debug_assert!(self.clocks.is_empty() || meta.clock_phase as u64 == self.tick % self.clock_interval);
         self.arrays_node = id;
         self.real = true;
+        self.set_due(); // replay moved the tick counter
     }
 }
 
@@ -707,8 +750,7 @@ impl Simulation for Engine {
             }
             self.sync();
             if self.dirty.is_empty() && self.forced.is_empty() && self.rose_list.is_empty() && !self.load_pending && !self.locked {
-                let next_flip = |ticks: &[u32], interval: u64| if ticks.is_empty() { u64::MAX } else { (self.tick / interval + 1) * interval };
-                let target = until.min(next_flip(&self.clocks, self.clock_interval)).min(next_flip(&self.timers, self.timer_ticks)).min(self.schedule.next(self.tick));
+                let target = until.min(self.clock_due).min(self.timer_due).min(self.schedule_due);
                 if target > self.tick + 1 {
                     self.tick = target - 1;
                 }

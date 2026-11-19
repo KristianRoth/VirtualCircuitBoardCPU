@@ -19,6 +19,9 @@ Every optimisation that was tried on the v2 engine, what it gained, and whether 
 | 10 | Netlist: traces with one writer merged into it | 1.05 (three runs) | accepted |
 | 11 | The self-running part played from a schedule | 1.65 (quick run) | accepted |
 | 12 | Part-level skipping: units with their own tables | 0.76 to 0.98 against the plain simulation | rejected |
+| 13 | No fixed work in a tick: kept counters for clock, timer and schedule; one flag for the VMem pins | 1.055 (three runs) | accepted |
+| 14 | Indexing without bounds checks in the tick | 1.14 (quick run) | accepted |
+| 15 | Compiler settings, tried again | 1.038 (three runs) | accepted |
 
 ## The profile and the ranked plan
 
@@ -530,6 +533,95 @@ Start-up unchanged (the pre-run is a few hundred ticks). Every program stopped a
 The estimates in "Ideas not tried" counted flips saved against lookups; they did not count that a flip is only a small part of what a tick costs now. With the best possible choice of units they promised 0.45 to 0.82 flips per tick, which is 5 to 8 ns of 47: the gain was never going to be large, and the machinery costs more than that. Step 2 (joining with whole-board replay, switching units on and off while running) was not built: it could only choose among units that each lose. The code is on the local tag `v2-attempt-12-rejected`; the estimator and the tree tools stay in `engine/examples/`.
 
 What this points to: the time left in a missed step is in the tick itself (about 16 ns per flip against about 47 ns per tick), so the next gains are in the cost of a tick, not in skipping more flips.
+
+### 13. No fixed work in a tick (2026-11-19): accepted
+**Idea.** Attempt 12 showed that a simulated tick costs about 47 ns of which the flips are a small part. Reading the tick against that number: every tick divided three times (is it a clock tick, a timer tick, where in the schedule), scanned its list of flips twice for VMem pins, and went through the VMem section whether or not a pin had moved.
+
+**Expected.** Unknown; a few percent to ten.
+
+**Changed.** In `sim2.rs`: the next tick at which the clocks, the timers and the schedule flip something is kept (`clock_due`, `timer_due`, `schedule_due`) and compared, not computed; `set_due` renews the three when replay has moved the tick counter. The apply loop notes which kinds of VMem pin flipped, and the VMem section is entered only when one did, a load is pending or VMem is locked. The idle-tick jump uses the three kept ticks. One slip from attempt 11 was found by the equality tests and fixed: the schedule's table of "ticks until the next flip" had no entry for tick 0 (it had not mattered, because nothing asked at tick 0).
+
+**Measured.** The quick run gave 1.051, close to the bar; repeated with three runs per program, 20 million ticks, best of three. Old = attempt 11, new = this attempt, both `--engine v2`.
+
+| Program | Old, M ticks/s | New | Ratio |
+|---|---|---|---|
+| day1/part1 | 48.78 | 50.51 | 1.035 |
+| day1/part2 | 44.84 | 48.31 | 1.077 |
+| day2/part1 | 129.03 | 132.45 | 1.026 |
+| day2/part2 | 181.82 | 200.00 | 1.100 |
+| day3/part1 | 112.36 | 124.22 | 1.106 |
+| day3/part2 | 90.91 | 99.50 | 1.095 |
+| day4/part1 | 74.63 | 78.74 | 1.055 |
+| day4/part2 | 56.34 | 62.11 | 1.102 |
+| sample-primes | 206.19 | 192.31 | 0.933 |
+| sample-compact-primes | 40.73 | 42.19 | 1.036 |
+| **Score** | | | **1.055** |
+
+The sample's 0.933 is within its spread in this run (4.9% and 4.6%) and was 1.000 in the quick run. Every program stopped at the same tick with the same output.
+
+**Equality.** `cargo test` and `cargo test --release -- --ignored`.
+
+**Verdict.** Accepted: 1.055 on the first 20 million ticks. On a whole run it is less: day 4 part 2 to its Breakpoint took 18.1 s against 18.4 s before, 2%.
+
+### 14. Indexing without bounds checks in the tick (2026-11-19): accepted
+**Idea.** Every array access in the tick's inner loops checked its index. All those indices are entity numbers or positions from the netlist's own lists, made in `Engine::new` for arrays of exactly that size.
+
+**Expected.** A few percent.
+
+**Changed.** In `sim2.rs`: two helpers, `g` and `gm`, that index without the check in a release build and with it in a debug build; used in `evaluate`, `propagate`, `feed`, the evaluation and apply loops of `step_real`, and `Lists::of`. Nothing else is unsafe. The spec allows unsafe code; what guards it is that `cargo test` (a debug build, with every check on) runs the equality tests over the same code.
+
+**Measured.** Quick run (one run per program, 20 million ticks). Old = attempt 13, new = this attempt, both `--engine v2`.
+
+| Program | Old, M ticks/s | New | Ratio |
+|---|---|---|---|
+| day1/part1 | 54.64 | 63.69 | 1.166 |
+| day1/part2 | 51.28 | 58.48 | 1.140 |
+| day2/part1 | 142.86 | 160.00 | 1.120 |
+| day2/part2 | 210.53 | 232.56 | 1.105 |
+| day3/part1 | 129.87 | 144.93 | 1.116 |
+| day3/part2 | 109.29 | 120.48 | 1.102 |
+| day4/part1 | 85.84 | 95.69 | 1.115 |
+| day4/part2 | 67.34 | 74.91 | 1.112 |
+| sample-primes | 229.89 | 277.78 | 1.208 |
+| sample-compact-primes | 44.25 | 54.95 | 1.242 |
+| **Score** | | | **1.14** |
+
+Every program stopped at the same tick with the same output.
+
+**Equality.** `cargo test` (debug, indices checked) and `cargo test --release -- --ignored`.
+
+**Verdict.** Accepted: 1.14, every program faster (1.10 to 1.24). On a whole run it is more: day 4 part 2 to its Breakpoint took 13.9 s against 18.1 s before, 1.30. More than expected: the checks also kept the compiler from holding values in registers across the loops.
+
+### 15. Compiler settings, tried again (2026-11-19): accepted
+**Idea.** Attempt 2 with the engine as it is now: `lto = "fat"`, `codegen-units = 1`, `panic = "abort"` in the release profile and `-C target-cpu=native`. Rejected then at 1.004, with the note that it was worth trying again once the loop was plain arithmetic.
+
+**Expected.** A few percent.
+
+**Changed.** Six lines in `engine/Cargo.toml` and `engine/.cargo/config.toml`, the same as on the tag `v2-attempt-02-rejected`. `cargo build --release` with the documented environment produces the accepted build, as the spec requires. What it costs: a release build takes 9 seconds where it took 4; the binary is built for this machine's CPU and may not run on an older one; a panic ends the program at once, without unwinding.
+
+**Measured.** The quick run gave 1.039, at the bar; repeated with three runs per program, 20 million ticks, best of three. Old = attempt 14, new = this attempt.
+
+| Program | v2 old, M ticks/s | v2 new | Ratio | v1 ratio (one run) |
+|---|---|---|---|---|
+| day1/part1 | 62.31 | 64.94 | 1.042 | 1.004 |
+| day1/part2 | 56.98 | 59.35 | 1.042 | 0.980 |
+| day2/part1 | 158.73 | 163.93 | 1.033 | 0.974 |
+| day2/part2 | 227.27 | 240.96 | 1.060 | 1.001 |
+| day3/part1 | 140.85 | 149.25 | 1.060 | 0.999 |
+| day3/part2 | 116.28 | 122.70 | 1.055 | 0.992 |
+| day4/part1 | 97.56 | 98.04 | 1.005 | 0.997 |
+| day4/part2 | 74.07 | 75.47 | 1.019 | 1.001 |
+| sample-primes | 277.78 | 285.71 | 1.029 | 0.981 |
+| sample-compact-primes | 55.10 | 56.98 | 1.034 | 1.014 |
+| **Score** | | | **1.038** | **0.994** |
+
+Every program stopped at the same tick with the same output. Day 4 part 2 to its Breakpoint: 13.8 s against 14.2 s for the old build in the same session.
+
+The settings apply to both engines. v1 does not change (0.994, inside the noise), so its baseline stands: about 6.2 to 6.7 million ticks per second on the user's CPU.
+
+**Equality.** `cargo test` and `cargo test --release -- --ignored`, built with the new settings.
+
+**Verdict.** Accepted: 1.038 with every program at or above 1, over the bar of 1.03 and of twice the noise (1%). A small gain for a build that is slower to make and tied to this machine's CPU; if the binary ever has to run elsewhere, `.cargo/config.toml` is the file to remove.
 
 ## Ideas not tried
 
