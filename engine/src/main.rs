@@ -79,7 +79,7 @@ struct RunArgs {
     /// Stop once VMem has not changed for this many ticks.
     #[arg(long)]
     quiescent: Option<u64>,
-    /// Which engine to run: v1 (the reference, the default) or v2 (the fast one, which shows the same events).
+    /// Which engine to run: v2 (the fast one, the default) or v1 (the reference; it shows the same events, tick by tick).
     #[arg(long)]
     engine: Option<String>,
     /// Print the on/off state of the entity at this pixel every tick: x,y or x,y=label. Repeatable.
@@ -94,6 +94,10 @@ struct RunArgs {
     /// Print every change to a watched VMem word as it happens, with its tick. Without --watch, every VMem change.
     #[arg(long)]
     verbose: bool,
+    /// Run on v2, then again on v1, and fail at any difference in the VMem events, the stop or the final VMem.
+    /// Use it for the first answer of a new program.
+    #[arg(long)]
+    verify: bool,
     /// Write all of VMem to a file at the end, one `0xADDRESS 0xVALUE` line per word.
     #[arg(long)]
     dump_vmem: Option<PathBuf>,
@@ -346,6 +350,7 @@ fn apply_config(args: &mut RunArgs, path: &Path) -> Result<()> {
             "allow-unverified" => args.allow_unverified |= flag()?,
             "stats" => args.stats |= flag()?,
             "verbose" => args.verbose |= flag()?,
+            "verify" => args.verify |= flag()?,
             "force" => args.force |= flag()?,
             "break-addr" if args.break_addr.is_empty() => args.break_addr = list(key, value)?,
             "watch" if args.watch.is_empty() => args.watch = list(key, value)?,
@@ -489,14 +494,36 @@ fn run(mut args: RunArgs) -> Result<()> {
     let stops = StopSet { max_ticks, breakpoint: !args.no_breakpoint, watch: break_addresses, quiescent: args.quiescent, interrupt: Some(interrupt) };
     let run = Run { args: &args, board: &board, stops: &stops, watch: &watch, probes: &probes, renders: &renders };
     // --probe and --render need every signal at every tick, which only v1 promises.
-    let (report, elapsed, vmem) = if args.engine.as_deref() == Some("v2") && probes.is_empty() && renders.is_empty() {
-        run.simulate(vcb::sim2::Engine::new(&board, components, &options)?, None, "v2", true)?
+    let wants_v1 = args.engine.as_deref() == Some("v1");
+    let (report, elapsed, vmem) = if !wants_v1 && probes.is_empty() && renders.is_empty() {
+        let again = args.verify.then(|| components.clone());
+        let (report, elapsed, vmem, events) = run.simulate(vcb::sim2::Engine::new(&board, components, &options)?, None, "v2", true, false)?;
+        if let Some(components) = again {
+            // The same run on the reference engine, silent; everything observable must be equal.
+            let (reference, _, reference_vmem, reference_events) = run.simulate(Engine::new(&board, components, &options)?, None, "v1", false, true)?;
+            let interrupted = report.reasons.contains(&"interrupted") || reference.reasons.contains(&"interrupted");
+            if !interrupted {
+                let differs = if (report.tick, &report.reasons, report.watch_address) != (reference.tick, &reference.reasons, reference.watch_address) {
+                    Some(format!("v2 stopped at tick {} ({}), v1 at tick {} ({})", report.tick, report.reasons.join(", "), reference.tick, reference.reasons.join(", ")))
+                } else if events != reference_events {
+                    Some(format!("the VMem events differ (v2 saw {}, v1 {}); run both with --verbose and a lower --ticks to find the first", events.0, reference_events.0))
+                } else {
+                    (0..vmem.len()).find(|a| vmem[*a] != reference_vmem[*a]).map(|a| format!("the final VMem differs, first at {a:#010X}"))
+                };
+                if let Some(what) = differs {
+                    return Err(format!("--verify: v2 and v1 disagree on {}: {what}", args.board.display()));
+                }
+                eprintln!("verified: v1 gives the same {} VMem events, the same stop and the same final VMem", events.0);
+            }
+        }
+        (report, elapsed, vmem)
     } else {
-        if args.engine.as_deref() == Some("v2") {
+        if !wants_v1 {
             eprintln!("using engine v1: {} needs every tick", if probes.is_empty() { "--render" } else { "--probe" });
         }
         let for_render = (!renders.is_empty()).then(|| components.clone());
-        run.simulate(Engine::new(&board, components, &options)?, for_render.as_ref(), "v1", false)?
+        let (report, elapsed, vmem, _) = run.simulate(Engine::new(&board, components, &options)?, for_render.as_ref(), "v1", false, false)?;
+        (report, elapsed, vmem)
     };
 
     let reasons: Vec<String> = report.reasons.iter().map(|reason| match (*reason, report.watch_address) {
@@ -538,13 +565,30 @@ struct Run<'a> {
 impl Run<'_> {
     /// Runs to the first stop. Returns the report, the seconds it took and the final VMem.
     /// `by_event`: the engine moves from event to event (v2); otherwise tick by tick, which --probe and --render need.
-    fn simulate<E: Simulation>(&self, mut engine: E, components: Option<&Components>, name: &str, by_event: bool) -> Result<(vcb::sim::StopReport, f64, Vec<u32>)> {
+    /// `silent`: print nothing (the second run of --verify). The last value is the number of VMem events and
+    /// Breakpoints seen and a digest of them (tick, address loaded, address written, value written).
+    fn simulate<E: Simulation>(&self, mut engine: E, components: Option<&Components>, name: &str, by_event: bool, silent: bool) -> Result<(vcb::sim::StopReport, f64, Vec<u32>, (u64, u64))> {
         let Run { args, board, stops, watch, probes, renders } = *self;
         let mut render_error = None;
         let started = Instant::now();
         let mut last_progress = (Instant::now(), 0u64);
         let mut calls = 0u64;
+        let mut events = (0u64, 0u64);
         let mut each = |engine: &E| {
+            if args.verify {
+                let (fetched, written) = engine.vmem_access();
+                if fetched.is_some() || written.is_some() || engine.breakpoint_hit() {
+                    let value = written.map_or(0, |a| engine.vmem()[a]) as u64;
+                    let what = [engine.tick(), fetched.map_or(u64::MAX, |a| a as u64), written.map_or(u64::MAX, |a| a as u64), value, engine.breakpoint_hit() as u64];
+                    events.0 += 1;
+                    for x in what {
+                        events.1 = (events.1 ^ x).wrapping_mul(0x9e37_79b9_7f4a_7c15).rotate_left(29);
+                    }
+                }
+            }
+            if silent {
+                return;
+            }
             // With --stats: a progress line every 5 seconds. The clock is read only every 65,536 calls.
             calls += 1;
             if args.stats && calls & 0xffff == 0 && last_progress.0.elapsed().as_secs() >= 5 {
@@ -574,9 +618,9 @@ impl Run<'_> {
         if let Some(e) = render_error {
             return Err(e);
         }
-        if args.stats {
+        if args.stats && !silent {
             eprintln!("engine: {name}");
         }
-        Ok((report, elapsed, engine.vmem().to_vec()))
+        Ok((report, elapsed, engine.vmem().to_vec(), events))
     }
 }

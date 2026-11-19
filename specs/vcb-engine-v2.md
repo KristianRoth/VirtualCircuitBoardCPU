@@ -102,7 +102,7 @@ Decided by the user on 2026-11-19. The goal is a faster simulator for any board,
 
 ## Behavior
 ### Choosing the engine
-- Until Stage 1 is finished, v1 is the default and v2 runs with `--engine v2`.
+- Until Stage 1 is finished, v1 is the default and v2 runs with `--engine v2`. (Stage 1 was closed on 2026-11-19: v2 is the default now.)
 - From the last commit of Stage 1 on, v2 is the default and `--engine v1` forces the reference.
 - Every fallback is decided before tick 0 and announced with the notice line. The `--stats` line names the engine that ran (`engine: v2`).
 - `--verify` runs the command on v2, then on v1, and fails loudly at the first difference in events, stop tick, reasons or final VMem. **The first answer of a new puzzle program is confirmed with `--verify` before it is submitted;** the program then joins the benchmark set.

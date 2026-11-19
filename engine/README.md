@@ -55,7 +55,8 @@ vcb run <board.vcb> --ticks <n>    simulate
 | `--allow-unverified` | Run even if the board uses something with no observed fixture. (For the assembler it changes nothing today: every feature has been observed.) |
 | `--asm <file.vcbasm>` | Assemble this program before tick 0 instead of the board's own. |
 | `--no-asm` | Assemble nothing; run the memory as the file holds it. |
-| `--engine v1` | Only v1 exists. |
+| `--engine v1` | Run the reference engine. The default is v2, the fast engine, which shows the same VMem events, stop and final memory. With `--probe` or `--render` a run is done by v1 (it says so). |
+| `--verify` | Run on v2, then again on v1, and fail at any difference. Use it for the first answer of a new program. |
 
 The run ends on the first tick where a stop condition holds and prints every one that held, for example `stopped at tick 7: breakpoint, max-ticks`. Ctrl-C stops after the current tick with reason `interrupted` and still writes the requested outputs.
 
@@ -109,3 +110,24 @@ Assemble onto a clean board: words of an earlier program that the new one does n
 ## How correctness is established
 
 Ground truth is the game. For each rule there is a board that was stepped in the game by hand, or run in the game and saved with Persistent Memory. The fixture tests compare the engine with those observations tick by tick and word by word. A unit (an ink, or VMem) is only accepted by `vcb run` once such a fixture exists; `vcb info` lists anything that isn't. Timer is the one unit that is "modelled": the game's timers follow the wall clock, so it cannot be tick-exact.
+
+## Speed (stage 1 of v2, 2026-11-19)
+
+Every benchmark program run to its end on both engines in one session (one run each; `AoC2025` at commit `9e8bd62`; the engine at attempt 15). Both engines stop at the same tick with the same output on every row.
+
+| Program | Ticks | v1, M ticks/s | v2, M ticks/s | v2 against v1 | v1 time | v2 time |
+|---|---|---|---|---|---|---|
+| day1/part1 | 43,146,512 | 6.20 | 69.0 | 11.1 | 7.0 s | 0.6 s |
+| day1/part2 | 70,339,472 | 6.00 | 64.0 | 10.7 | 11.7 s | 1.1 s |
+| day2/part1 | 43,495,312 | 5.99 | 147.9 | 24.7 | 7.3 s | 0.3 s |
+| day2/part2 | 75,753,616 | 5.85 | 196.8 | 33.6 | 12.9 s | 0.4 s |
+| day3/part1 | 170,904,144 | 6.15 | 152.7 | 24.8 | 27.8 s | 1.1 s |
+| day3/part2 | 419,669,712 | 6.37 | 128.7 | 20.2 | 65.9 s | 3.3 s |
+| day4/part1 | 481,327,888 | 5.80 | 97.7 | 16.8 | 83.0 s | 4.9 s |
+| day4/part2 | 1,339,421,264 | 5.81 | 94.4 | 16.2 | 230.5 s | 14.2 s |
+| sample-primes | 100,000,000 (limit) | 5.78 | 495.1 | 85.7 | 17.3 s | 0.2 s |
+| sample-compact-primes | 100,000,000 (limit) | 13.45 | 52.6 | 3.9 | 7.4 s | 1.9 s |
+
+Geometric mean: v2 is **18.4 times** v1. Peak memory of the longest run (day 4 part 2 on v2): 699 MB. Times are ticks divided by speed; start-up (about 0.07 s) is not in them.
+
+How v2 got there, attempt by attempt, is in `../specs/vcb-engine-v2-log.md`; what it does and what is still open, in `../specs/vcb-engine-v2-stage2.md`.

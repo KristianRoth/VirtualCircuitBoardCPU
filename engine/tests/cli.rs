@@ -69,7 +69,8 @@ fn unverified_inks_are_refused_unless_allowed() {
     let out = vcb(&["run", &board, "--ticks", "2", "--probe", "20,16=on", "--probe", "20,18=off"]);
     assert!(out.status.success(), "{}", text(&out.stderr));
     assert_eq!(text(&out.stdout), "tick 0: on=0 off=0\ntick 1: on=1 off=0\ntick 2: on=1 off=0\nstopped at tick 2: max-ticks\n");
-    assert!(out.stderr.is_empty());
+    // v2 is the default, and a run with --probe is done by v1, which is said once on standard error.
+    assert_eq!(text(&out.stderr), "using engine v1: --probe needs every tick\n");
 
     let gen = |name: &str, art: &str| {
         let source = d.join(format!("{name}.txt"));
@@ -200,6 +201,10 @@ fn stop_and_engine_arguments_are_checked() {
     let out = |args: &[&str]| String::from_utf8(vcb(&[&["run", &timing, "--ticks", "40"], args].concat()).stdout).unwrap();
     assert_eq!(out(&["--engine", "v2", "--verbose"]), out(&["--engine", "v1", "--verbose"]));
     assert!(last_line(&vcb(&["run", &timing, "--ticks", "5", "--engine", "v2", "--probe", "0,0"]), true).len() > 0);
+    // v2 is the default; --verify runs v1 as well and says so.
+    assert_eq!(out(&[]), out(&["--engine", "v1"]));
+    let verified = vcb(&["run", &timing, "--ticks", "40", "--verify"]);
+    assert!(verified.status.success() && String::from_utf8_lossy(&verified.stderr).contains("verified: v1 gives the same"));
     assert!(error(&["--ticks", "5", "--engine", "v3"]).contains("expected v1 or v2"));
     assert!(vcb(&["run", &timing, "--ticks", "5", "--engine", "v1"]).status.success());
     // No VMem, nothing to stop on.
