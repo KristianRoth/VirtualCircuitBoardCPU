@@ -13,6 +13,7 @@ Every optimisation that was tried on the v2 engine, what it gained, and whether 
 | 4 | Input counting | 1.072 (three runs) | accepted |
 | 5 | Gates that cannot change are not woken | 1.16 (quick run) | accepted |
 | 6 | Dropping what cannot cause an event | 1.35 (quick run) | accepted |
+| 7 | The event primitive and idle-tick jumps | 1.046 (three runs) | accepted |
 
 ## The profile and the ranked plan
 
@@ -131,7 +132,7 @@ Attempt 8 is judged on a full run of day 4 part 2 with start-up included, as the
 ### 0. Scaffolding (2026-11-19, commit `8bf45ee`)
 v2 is a copy of v1's core in `engine/src/sim2.rs`; `vcb run --engine v2` runs it and `--stats` names the engine. With `--probe` or `--render` the run is done by v1, with the notice line. Equality: `tests/v2.rs` steps both engines side by side and compares every signal after every tick, on every fixture board and (ignored by default) over the 44 million ticks of day 1 part 1.
 
-Not done yet from the spec's Scaffolding: the event primitive ("advance to the next event or to tick N") and `--verify`. The profile showed the per-tick run loop costs nothing measurable, so attempts 1 to 6 do not need the primitive; it is due before idle-tick jumps or replay. v2 against v1 was not measured as its own row: it is the same code, and the "old" column below (5.9 to 6.4) is v1's speed.
+Not done yet from the spec's Scaffolding: `--verify` (the event primitive came with attempt 7). The profile showed the per-tick run loop costs nothing measurable, so attempts 1 to 6 do not need the primitive; it is due before idle-tick jumps or replay. v2 against v1 was not measured as its own row: it is the same code, and the "old" column below (5.9 to 6.4) is v1's speed.
 
 ### 1. No allocation in a tick (2026-11-19): accepted
 **Idea.** `step` built a new `flips` list and a new `dirty` list every tick. v2 keeps both between ticks (`work`, `flips`) and swaps them, so a tick allocates nothing.
@@ -312,6 +313,39 @@ Start-up unchanged. Every program stopped at the same tick with the same output.
 **Equality.** `cargo test` (71 passed) and `cargo test --release --test v2 -- --include-ignored` (2 passed).
 
 **Verdict.** Accepted: 1.35, and 1.4 to 1.5 on the user's CPU, far above the estimate. The profile counted LEDs only; on the user's CPU a large part of the logic that works every tick ends in LEDs or nowhere and never reaches the memory pins or the Breakpoint. On the two sample boards what is dropped is logic that was idle anyway (the display and input side, with input removed from their program), so nothing is gained there. Not looked at: which parts of the user's CPU these are.
+
+### 7. The event primitive and idle-tick jumps (2026-11-19): accepted
+**Idea.** Two things that only work together. (a) The event primitive owed from Scaffolding: the engine advances to the next tick with a VMem load, a VMem write or a Breakpoint, or to a given tick, and the run loop only looks at those stops. (b) While nothing is queued, no trace is still marked as risen and VMem is at rest, a tick changes nothing but the counter, so v2 goes straight to the tick of the next clock or timer flip.
+
+**Expected.** Nothing on the user's CPU (its clock flips every tick), up to 2 on the compact sample (clock interval 36), about 1.05 on the score.
+
+**Changed.**
+- `sim.rs`: `advance(until)` on the trait, with a default that steps tick by tick (v1 uses it unchanged); `run_events`, the run loop built on it; the stop rules moved into one function that both run loops call. Ctrl-C is looked at every 2^20 ticks when no event comes.
+- `sim2.rs`: v2's own `advance` with the jump.
+- `main.rs`: v2 runs by events. v1 keeps the per-tick loop, which `--probe` and `--render` need.
+- `tests/v2.rs`: a test that moves v2 by events with limits falling inside idle stretches (also with the clock interval set to 36) against v1 stepped tick by tick: v2 may stop only at an event or its limit, may pass over no event of v1, and must be equal at every stop.
+
+**Measured.** The quick run gave 1.019 (the compact sample 1.23, the others between 0.96 and 1.05), under the bar, so it was repeated with three runs per program, 20 million ticks, best of three. Old = attempt 6, new = this attempt, both `--engine v2`.
+
+| Program | Old, M ticks/s | New | Ratio |
+|---|---|---|---|
+| day1/part1 | 18.74 | 19.32 | 1.031 |
+| day1/part2 | 19.19 | 19.70 | 1.027 |
+| day2/part1 | 19.55 | 20.68 | 1.058 |
+| day2/part2 | 20.06 | 17.48 | 0.872 |
+| day3/part1 | 21.12 | 22.20 | 1.051 |
+| day3/part2 | 20.94 | 21.62 | 1.032 |
+| day4/part1 | 20.49 | 21.30 | 1.039 |
+| day4/part2 | 19.01 | 21.23 | 1.117 |
+| sample-primes | 14.67 | 14.91 | 1.016 |
+| sample-compact-primes | 31.15 | 39.22 | 1.259 |
+| **Score** | | | **1.046** |
+
+Day 2 part 2's 0.872 is noise: its old build spread 8.3% in this run, and it was 1.001 in the quick run. Start-up unchanged. Every program stopped at the same tick with the same output; `--verbose` output of v1 and v2 is byte for byte the same on day 2 part 1 (to its Breakpoint) and on the compact sample (30 million ticks), and a `--quiescent` stop falls on the same tick.
+
+**Equality.** `cargo test` and `cargo test --release -- --ignored`.
+
+**Verdict.** Accepted: 1.046. The compact sample gains a quarter, less than the "up to 2" its idle ticks suggested: an idle tick was already cheap. The user's CPU gains 3% to 5% although it has no idle ticks, because the run loop no longer runs its checks after every tick. Kept in any case as groundwork: replay (attempt 8) needs the event primitive.
 
 ## Ideas not tried
 

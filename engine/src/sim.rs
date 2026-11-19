@@ -28,6 +28,35 @@ pub struct StopSet {
     pub interrupt: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
+impl StopSet {
+    /// The stop conditions that hold at the engine's tick, if any. `last_change` is the tick of the last VMem change.
+    fn check(&self, engine: &impl Simulation, last_change: u64) -> Option<StopReport> {
+        let stops = self;
+        let mut reasons = Vec::new();
+        if stops.breakpoint && engine.breakpoint_hit() {
+            reasons.push("breakpoint");
+        }
+        let (fetched, written) = engine.vmem_access();
+        let watch_address = stops.watch.iter().find_map(|(address, access)| {
+            let hit = (*access != Access::Write && fetched == Some(*address)) || (*access != Access::Fetch && written == Some(*address));
+            hit.then_some(*address)
+        });
+        if watch_address.is_some() {
+            reasons.push("address-watch");
+        }
+        if stops.quiescent.is_some_and(|n| engine.tick() - last_change >= n) {
+            reasons.push("quiescent");
+        }
+        if engine.tick() >= stops.max_ticks {
+            reasons.push("max-ticks");
+        }
+        if stops.interrupt.as_ref().is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed)) {
+            reasons.push("interrupted");
+        }
+        (!reasons.is_empty()).then(|| StopReport { tick: engine.tick(), reasons, watch_address })
+    }
+}
+
 pub struct StopReport {
     pub tick: u64,
     /// Every condition that held on the final tick, in this order:
@@ -52,6 +81,41 @@ pub trait Simulation {
     /// True if a VMem word changed during the last tick.
     fn vmem_changed(&self) -> bool;
 
+    /// The event primitive (specs/vcb-engine-v2.md): advances at least one tick, to the next tick in which
+    /// something observable happens (a VMem load or write, a Breakpoint turning on) or to tick `until`,
+    /// whichever comes first. An engine may cross the ticks in between any way it likes. Here: one by one.
+    fn advance(&mut self, until: u64) {
+        loop {
+            self.step();
+            if self.tick() >= until || self.breakpoint_hit() || self.vmem_access() != (None, None) {
+                return;
+            }
+        }
+    }
+
+    /// Runs until a stop condition holds, like `run_until`, but moves with `advance`: `each_event` is called
+    /// for the starting state and after every advance, not after every tick. Between two events no stop rule
+    /// can fire except the ones that are tick numbers, and those are given to `advance` as its limit.
+    fn run_events(&mut self, stops: &StopSet, mut each_event: impl FnMut(&Self)) -> StopReport
+    where
+        Self: Sized,
+    {
+        /// Ctrl-C is looked at this often (in ticks) when no event comes: well under a second of work.
+        const INTERRUPT_CHECK: u64 = 1 << 20;
+        let mut last_change = self.tick();
+        loop {
+            each_event(self);
+            if self.vmem_changed() {
+                last_change = self.tick();
+            }
+            if let Some(report) = stops.check(self, last_change) {
+                return report;
+            }
+            let quiescent = stops.quiescent.map_or(u64::MAX, |n| last_change.saturating_add(n));
+            self.advance(stops.max_ticks.min(quiescent).min(self.tick() + INTERRUPT_CHECK).max(self.tick() + 1));
+        }
+    }
+
     /// Runs until a stop condition holds. `each_tick` is called for the starting state and after every tick.
     fn run_until(&mut self, stops: &StopSet, mut each_tick: impl FnMut(&Self)) -> StopReport
     where
@@ -60,32 +124,11 @@ pub trait Simulation {
         let mut last_change = self.tick();
         loop {
             each_tick(self);
-            let mut reasons = Vec::new();
-            if stops.breakpoint && self.breakpoint_hit() {
-                reasons.push("breakpoint");
-            }
-            let (fetched, written) = self.vmem_access();
-            let watch_address = stops.watch.iter().find_map(|(address, access)| {
-                let hit = (*access != Access::Write && fetched == Some(*address)) || (*access != Access::Fetch && written == Some(*address));
-                hit.then_some(*address)
-            });
-            if watch_address.is_some() {
-                reasons.push("address-watch");
-            }
             if self.vmem_changed() {
                 last_change = self.tick();
             }
-            if stops.quiescent.is_some_and(|n| self.tick() - last_change >= n) {
-                reasons.push("quiescent");
-            }
-            if self.tick() >= stops.max_ticks {
-                reasons.push("max-ticks");
-            }
-            if stops.interrupt.as_ref().is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed)) {
-                reasons.push("interrupted");
-            }
-            if !reasons.is_empty() {
-                return StopReport { tick: self.tick(), reasons, watch_address };
+            if let Some(report) = stops.check(self, last_change) {
+                return report;
             }
             self.step();
         }

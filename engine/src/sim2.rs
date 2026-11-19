@@ -368,6 +368,25 @@ impl Simulation for Engine {
         self.work.clear();
     }
 
+    /// Idle-tick jumps (attempt 7): while nothing is queued, no trace is still marked as risen and VMem is at
+    /// rest, a tick changes nothing but the counter, so the engine goes straight to the tick of the next
+    /// clock or timer flip (or to `until`) and steps there.
+    fn advance(&mut self, until: u64) {
+        loop {
+            if self.dirty.is_empty() && self.rose_list.is_empty() && !self.load_pending && !self.locked {
+                let next_flip = |ticks: &[u32], interval: u64| if ticks.is_empty() { u64::MAX } else { (self.tick / interval + 1) * interval };
+                let target = until.min(next_flip(&self.clocks, self.clock_interval)).min(next_flip(&self.timers, self.timer_ticks));
+                if target > self.tick + 1 {
+                    self.tick = target - 1;
+                }
+            }
+            self.step();
+            if self.tick >= until || self.breakpoint_hit || self.fetched.is_some() || self.written.is_some() {
+                return;
+            }
+        }
+    }
+
     fn tick(&self) -> u64 {
         self.tick
     }
