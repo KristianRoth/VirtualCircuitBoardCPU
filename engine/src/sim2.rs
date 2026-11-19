@@ -66,11 +66,14 @@ pub struct Engine {
     writes: Lists,
     readers: Lists,
     writers: Lists,
+    /// Per component or pin: the readers of the traces that only it writes. Such a trace always equals its
+    /// writer, so it is not simulated: its readers read the writer itself (attempt 10).
+    direct: Lists,
     /// Per component: how many of the traces it reads are on. Per trace: how many of its writers are on.
     /// Kept up to date when a trace or a writer changes, so nothing is counted when a component is evaluated (attempt 4).
     count: Vec<u32>,
-    /// Per entity: whether it can reach a VMem pin, a Breakpoint or a Random. The others are not simulated,
-    /// so their entries in `state()` are not meaningful.
+    /// Per entity: whether it is simulated: it can reach a VMem pin, a Breakpoint or a Random, and it is not a
+    /// trace with one writer (which always equals that writer). For the others `state()` is not meaningful.
     live: Vec<bool>,
     /// Per gate whose output depends only on a count passing one value: that value (1 for OR and NOR, the
     /// number of inputs for AND and NAND). Such a gate is woken only when its count passes it (attempt 5).
@@ -174,12 +177,32 @@ impl Engine {
                 ops[e] = Op::Dead;
             }
         }
+        // Netlist optimisation (attempt 10). A trace with one writer always equals that writer, in the same
+        // tick, so it is taken out: whoever read the trace reads the writer. Lists also lose what is not
+        // simulated. Not on a board with Random ink, where the order in which readers are woken must be v1's.
+        let merge = !ops.contains(&Op::Random);
+        let merged: Vec<bool> = (0..n).map(|e| merge && live[e] && ops[e] == Op::Trace && writers.of(e).len() == 1).collect();
+        let simulated = |e: &u32| ops[*e as usize] != Op::Dead;
+        let per_entity = |list: &dyn Fn(usize) -> Vec<u32>| Lists::new(&(0..n).map(list).collect::<Vec<_>>());
+        let direct = per_entity(&|e| writes.of(e).iter().filter(|t| merged[**t as usize]).flat_map(|t| readers.of(*t as usize).iter().filter(|r| simulated(r)).copied()).collect());
+        let (reads, writes, readers) = if merge {
+            (
+                per_entity(&|e| reads.of(e).iter().map(|t| if merged[*t as usize] { writers.of(*t as usize)[0] } else { *t }).collect()),
+                per_entity(&|e| writes.of(e).iter().filter(|t| live[**t as usize] && !merged[**t as usize]).copied().collect()),
+                per_entity(&|e| readers.of(e).iter().filter(|r| simulated(r)).copied().collect()),
+            )
+        } else {
+            (reads, writes, readers)
+        };
+        for e in 0..n {
+            live[e] &= !merged[e];
+        }
         let live_list: Vec<u32> = (0..n as u32).filter(|e| live[*e as usize]).collect();
         // Replay is off with Random ink (each evaluation uses up a draw) and with a simulated Timer (its position
         // within its interval would be part of every state, so states would hardly ever repeat).
-        let timed = components.kinds.iter().zip(&live).any(|(kind, live)| *live && *kind == Kind::Component(Ink::Timer));
+        let timed = (0..n).any(|e| live[e] && components.kinds[e] == Kind::Component(Ink::Timer));
         let replay = (!ops.contains(&Op::Random) && !timed).then(|| Table::new(live_list.len().div_ceil(64), MEMORY_LIMIT));
-        let mut engine = Engine { loaded_word: 0, replay, scratch: vec![0; live_list.len().div_ceil(64)], live_list, node: NONE, node_tick: 0, real: true, arrays_node: NONE, forced: Vec::new(), pending: Vec::new(), ops, reads, writes, readers, writers, count: vec![0; n], live, threshold: vec![0; n], on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
+        let mut engine = Engine { loaded_word: 0, replay, scratch: vec![0; live_list.len().div_ceil(64)], live_list, node: NONE, node_tick: 0, real: true, arrays_node: NONE, forced: Vec::new(), pending: Vec::new(), ops, reads, writes, readers, writers, direct, count: vec![0; n], live, threshold: vec![0; n], on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
         for (role, pins) in [(1, &engine.components.address_pins), (2, &engine.components.content_pins)] {
             for pin in pins {
                 engine.pin_role[*pin as usize] = role;
@@ -217,6 +240,15 @@ impl Engine {
                         engine.dirty.push(reader);
                     }
                 }
+            }
+        }
+        // A merged trace that is on at tick 0 has risen: its readers look for that at its writer.
+        let risen = std::mem::take(&mut engine.rose_list);
+        for t in risen {
+            let e = if merged[t as usize] { engine.writers.of(t as usize)[0] } else { t };
+            engine.rose[t as usize] = false;
+            if !std::mem::replace(&mut engine.rose[e as usize], true) {
+                engine.rose_list.push(e);
             }
         }
         for e in 0..n {
@@ -273,7 +305,21 @@ impl Engine {
             }
         }
         for &e in flipped {
-            for &t in self.writes.of(e as usize) {
+            // The traces only this component writes: their readers see the component itself.
+            let (from, to) = (self.direct.start[e as usize] as usize, self.direct.start[e as usize + 1] as usize);
+            if from != to {
+                let now = self.on[e as usize];
+                if now {
+                    self.rose[e as usize] = true;
+                    self.rose_list.push(e);
+                }
+                for i in from..to {
+                    self.feed(self.direct.items[i], now);
+                }
+            }
+            let (from, to) = (self.writes.start[e as usize] as usize, self.writes.start[e as usize + 1] as usize);
+            for i in from..to {
+                let t = self.writes.items[i];
                 let now = self.count[t as usize] > 0;
                 if now == self.on[t as usize] {
                     continue;
@@ -283,25 +329,30 @@ impl Engine {
                     self.rose[t as usize] = true;
                     self.rose_list.push(t);
                 }
-                let step = if now { 1 } else { u32::MAX };
-                for &reader in self.readers.of(t as usize) {
-                    let old = self.count[reader as usize];
-                    let new = old.wrapping_add(step);
-                    self.count[reader as usize] = new;
-                    // A gate that is not queued has the output its count gives. It can only change when the count
-                    // passes its threshold: the higher of the two counts is then the threshold.
-                    let wake = match self.ops[reader as usize] {
-                        Op::Or | Op::Breakpoint | Op::Nor | Op::And | Op::Nand => old.max(new) == self.threshold[reader as usize],
-                        Op::Xor | Op::Xnor | Op::Random => true, // a Random draws at every change of an input
-                        Op::Latch | Op::Pin => now,              // only a rising input toggles a latch
-                        Op::Scheduled | Op::Trace | Op::Dead => false,
-                    };
-                    if wake && !self.queued[reader as usize] {
-                        self.queued[reader as usize] = true;
-                        self.dirty.push(reader);
-                    }
+                for k in self.readers.start[t as usize] as usize..self.readers.start[t as usize + 1] as usize {
+                    self.feed(self.readers.items[k], now);
                 }
             }
+        }
+    }
+
+    /// One input of `reader` turned on (`now`) or off: adjusts its count and queues it if its output can change.
+    #[inline(always)]
+    fn feed(&mut self, reader: u32, now: bool) {
+        let old = self.count[reader as usize];
+        let new = old.wrapping_add(if now { 1 } else { u32::MAX });
+        self.count[reader as usize] = new;
+        // A gate that is not queued has the output its count gives. It can only change when the count
+        // passes its threshold: the higher of the two counts is then the threshold.
+        let wake = match self.ops[reader as usize] {
+            Op::Or | Op::Breakpoint | Op::Nor | Op::And | Op::Nand => old.max(new) == self.threshold[reader as usize],
+            Op::Xor | Op::Xnor | Op::Random => true, // a Random draws at every change of an input
+            Op::Latch | Op::Pin => now,              // only a rising input toggles a latch
+            Op::Scheduled | Op::Trace | Op::Dead => false,
+        };
+        if wake && !self.queued[reader as usize] {
+            self.queued[reader as usize] = true;
+            self.dirty.push(reader);
         }
     }
 }
@@ -490,7 +541,9 @@ impl Engine {
                     differ &= differ - 1;
                     self.on[e] = !self.on[e];
                     let step = if self.on[e] { 1 } else { u32::MAX };
-                    for &fed in if self.ops[e] == Op::Trace { self.readers.of(e) } else { self.writes.of(e) } {
+                    // A trace feeds its readers; a component feeds the traces it shares and the readers of the traces it owns.
+                    let fed = if self.ops[e] == Op::Trace { [self.readers.of(e), &[]] } else { [self.writes.of(e), self.direct.of(e)] };
+                    for &fed in fed.into_iter().flatten() {
                         self.count[fed as usize] = self.count[fed as usize].wrapping_add(step);
                     }
                 }

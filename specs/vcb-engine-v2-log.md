@@ -15,6 +15,8 @@ Every optimisation that was tried on the v2 engine, what it gained, and whether 
 | 6 | Dropping what cannot cause an event | 1.35 (quick run) | accepted |
 | 7 | The event primitive and idle-tick jumps | 1.046 (three runs) | accepted |
 | 8 | Replay of repeated steps | 2.63 (full runs) | accepted |
+| 9 | Chaining replays | 0.98 (quick run) | rejected |
+| 10 | Netlist: traces with one writer merged into it | 1.05 (three runs) | accepted |
 
 ## The profile and the ranked plan
 
@@ -388,6 +390,74 @@ Start-up unchanged (0.06 to 0.08 s). Every program stopped at the same tick with
 **Equality.** `cargo test` (72 passed) and `cargo test --release -- --ignored` (4 passed), among them a new one: day 1 part 1 to its Breakpoint with v2 moved by events and limits of many sizes, against v1 tick by tick, once with all the memory and once with 3 MiB for the table. `--verbose` output of v1 and v2 is byte for byte the same on day 2 part 2.
 
 **Verdict.** Accepted: 2.63 on full runs, inside the estimate. The share replayed, and so the gain, depends on how many different register contents a program passes through: day 2 and the sample repeat most, day 1 least.
+
+### 9. Chaining replays (2026-11-19): rejected
+**Idea.** Every replayed step ends in an event, and `advance` returns to the run loop for each. When nobody needs to see the VMem events one by one (no `--verbose`, no address watch, no `--quiescent`), v2 could run on through them and return only at a Breakpoint or its limit.
+
+**Expected.** Little. A replayed step is a few table lookups; on the best case (day 2 part 2, 83% replayed) the simulated 17% of the ticks already take about four fifths of the time.
+
+**Changed.** A `chain` switch on v2's engine, set by `main.rs` from the options; two conditions in `advance`.
+
+**Measured.** Quick run (one run per program, 20 million ticks). Old = attempt 8, new = this attempt, both `--engine v2`.
+
+| Program | Old, M ticks/s | New | Ratio |
+|---|---|---|---|
+| day1/part1 | 29.11 | 29.20 | 1.003 |
+| day1/part2 | 26.74 | 26.46 | 0.989 |
+| day2/part1 | 75.19 | 62.31 | 0.829 |
+| day2/part2 | 104.17 | 110.50 | 1.061 |
+| day3/part1 | 63.29 | 62.70 | 0.991 |
+| day3/part2 | 51.68 | 51.68 | 1.000 |
+| day4/part1 | 42.92 | 42.55 | 0.991 |
+| day4/part2 | 34.13 | 33.50 | 0.982 |
+| sample-primes | 88.89 | 88.50 | 0.996 |
+| sample-compact-primes | 39.22 | 38.46 | 0.981 |
+| **Score** | | | **0.98** |
+
+Every program stopped at the same tick with the same output.
+
+**Verdict.** Rejected: no gain; eight of ten programs within 2% of 1. The return to the run loop is not where the time is. With replay in place, the time is in the steps that are simulated: the misses. The code is on the local tag `v2-attempt-09-rejected`.
+
+### 10. Netlist: traces with one writer merged into it (2026-11-19): accepted
+**Idea.** The user's: make the simulated circuit smaller. Measured first with `engine/examples/netlist_stats.rs` what the simulated part of each board offers:
+
+| | the user's CPU | sample | sample compact |
+|---|---|---|---|
+| Simulated entities | 3,279 (1,380 traces, 1,867 components, 32 pins) | 5,124 | 3,141 |
+| Traces with exactly one writer | 1,168 (85% of the traces) | 1,938 (91%) | 1,024 (79%) |
+| Components that duplicate another (same ink, same inputs) | 12 | 331 | 0 |
+| Entities that can never change | 37 | 112 | 49 |
+| Gates with one input | 90 | 854 | 78 |
+
+A trace with one writer equals that writer in every tick, so it need not exist: whoever read the trace reads the writer. That is the one large item on the user's CPU: 36% of the simulated entities. Duplicates and constants are 1.5% there and were left alone.
+
+**Expected.** 1.2 to 1.4 on the simulated part.
+
+**Changed.** In `Engine::new` of `sim2.rs`: the reads of every component are rewired from such a trace to its writer; each component gets a `direct` list, the readers of the traces only it writes; all lists lose what is not simulated. `propagate` feeds the direct readers straight from the component. A component with direct readers is marked as risen when it turns on, which is what a latch reading it looks for. Not on a board with Random ink, where readers must be woken in v1's order. The merged traces are no longer simulated, so `live()` excludes them and the equality tests compare the components.
+
+Simulated entities after this: 2,111 on the user's CPU (80.1% of the board dropped), and a stored replay state shrinks with them.
+
+**Measured.** The quick run gave 1.07 with single programs between 1.00 and 1.23, so it was repeated with three runs per program, 20 million ticks, best of three. Old = attempt 8, new = this attempt, both `--engine v2`.
+
+| Program | Old, M ticks/s | New | Ratio |
+|---|---|---|---|
+| day1/part1 | 29.59 | 31.50 | 1.065 |
+| day1/part2 | 27.47 | 28.13 | 1.024 |
+| day2/part1 | 74.91 | 79.05 | 1.055 |
+| day2/part2 | 109.89 | 117.65 | 1.071 |
+| day3/part1 | 63.09 | 65.57 | 1.039 |
+| day3/part2 | 51.55 | 54.95 | 1.066 |
+| day4/part1 | 42.83 | 45.25 | 1.057 |
+| day4/part2 | 34.13 | 36.23 | 1.062 |
+| sample-primes | 88.89 | 95.24 | 1.071 |
+| sample-compact-primes | 39.60 | 39.29 | 0.992 |
+| **Score** | | | **1.05** |
+
+Every program stopped at the same tick with the same output. Day 4 part 2 to its Breakpoint: 28.2 s (29.0 s before).
+
+**Equality.** `cargo test` (72 passed) and `cargo test --release -- --ignored` (4 passed).
+
+**Verdict.** Accepted: 1.05. A third fewer entities gave a twentieth more speed. The size of the circuit is not what costs time: an entity that does not change costs nothing in an event-driven engine. What costs is each change, and a merged trace saved only part of the work of one change (one count, one comparison, one store). To gain more from the netlist it would have to make fewer things change per tick, not fewer things exist.
 
 ## Ideas not tried
 
