@@ -170,8 +170,26 @@ enum Op {
     Dead,
 }
 
+/// What the engine did, counted only in a profiling build (`RUSTFLAGS="--cfg profiling"`): for the profile of
+/// v2.1 (specs/vcb-engine-v2.1.md). In an ordinary build the counters stay 0 and cost nothing.
+#[derive(Default, Clone, Copy, Debug)]
+pub struct Profile {
+    /// Ticks simulated one by one, and the flips in them.
+    pub ticks_simulated: u64,
+    pub flips: u64,
+    /// Components evaluated.
+    pub evaluations: u64,
+    /// Ticks jumped over because nothing was queued.
+    pub ticks_idle: u64,
+    /// Steps taken from the replay table, states looked up or stored, states restored into the circuit.
+    pub replay_steps: u64,
+    pub interns: u64,
+    pub restores: u64,
+}
+
 pub struct Engine {
     pub components: Components,
+    pub profile: Profile,
     ops: Vec<Op>,
     reads: Lists,
     writes: Lists,
@@ -334,7 +352,7 @@ impl Engine {
         // within its interval would be part of every state, so states would hardly ever repeat).
         let timed = (0..n).any(|e| live[e] && components.kinds[e] == Kind::Component(Ink::Timer));
         let replay = (!ops.contains(&Op::Random) && !timed).then(|| Table::new(live_list.len().div_ceil(64), MEMORY_LIMIT));
-        let mut engine = Engine { loaded_word: 0, replay, scratch: vec![0; live_list.len().div_ceil(64)], live_list, node: NONE, node_tick: 0, real: true, arrays_node: NONE, forced: Vec::new(), pending: Vec::new(), schedule, ops, reads, writes, readers, writers, direct, count: vec![0; n], live, threshold: vec![0; n], on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_due: u64::MAX, timer_due: u64::MAX, schedule_due: u64::MAX, clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
+        let mut engine = Engine { profile: Profile::default(), loaded_word: 0, replay, scratch: vec![0; live_list.len().div_ceil(64)], live_list, node: NONE, node_tick: 0, real: true, arrays_node: NONE, forced: Vec::new(), pending: Vec::new(), schedule, ops, reads, writes, readers, writers, direct, count: vec![0; n], live, threshold: vec![0; n], on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_due: u64::MAX, timer_due: u64::MAX, schedule_due: u64::MAX, clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
         for (role, pins) in [(1, &engine.components.address_pins), (2, &engine.components.content_pins)] {
             for pin in pins {
                 engine.pin_role[*pin as usize] = role;
@@ -432,6 +450,7 @@ impl Engine {
 
     /// After components or pins flipped: recompute the traces they write, mark the ones that rose,
     /// and queue the readers of every trace that changed for the next tick.
+    #[cfg_attr(profiling, inline(never))]
     fn propagate(&mut self, flipped: &[u32]) {
         // First every writer count, then the traces: a trace that loses one writer and gains another in the
         // same tick does not change, exactly as when all its writers are looked at afterwards.
@@ -497,8 +516,13 @@ impl Engine {
 
 impl Engine {
     /// One tick of the circuit itself.
+    #[cfg_attr(profiling, inline(never))]
     fn step_real(&mut self) {
         self.tick += 1;
+        if cfg!(profiling) {
+            self.profile.ticks_simulated += 1;
+            self.profile.evaluations += self.dirty.len() as u64;
+        }
         self.arrays_node = NONE;
 
         // The components queued for this tick move to `work`; `dirty` (empty, with its capacity) collects the next tick's.
@@ -548,6 +572,9 @@ impl Engine {
             *gm(&mut self.rose, t as usize) = false;
         }
         self.breakpoint_hit = false;
+        if cfg!(profiling) {
+            self.profile.flips += flips.len() as u64;
+        }
         // Which kinds of VMem pin flipped: bit 0 an address pin, bit 1 a content pin.
         let mut pins_flipped = 0u8;
         for &e in &flips {
@@ -635,7 +662,11 @@ impl Engine {
     }
 
     /// The node of the current state.
+    #[cfg_attr(profiling, inline(never))]
     fn intern(&mut self) -> u32 {
+        if cfg!(profiling) {
+            self.profile.interns += 1;
+        }
         let mut scratch = std::mem::take(&mut self.scratch);
         // One word at a time, built in a register: 64 independent loads, one store.
         for (word, entities) in scratch.iter_mut().zip(self.live_list.chunks(64)) {
@@ -666,7 +697,11 @@ impl Engine {
     }
 
     /// Puts the circuit into the state of a node. The tick counter is already there.
+    #[cfg_attr(profiling, inline(never))]
     fn restore(&mut self, id: u32) {
+        if cfg!(profiling) {
+            self.profile.restores += 1;
+        }
         let table = self.replay.as_ref().unwrap();
         let (bits, dirty, rose, meta) = table.node(id);
         let (bits, pending, _, meta) = (bits, dirty, rose, meta);
@@ -734,6 +769,9 @@ impl Simulation for Engine {
                     let word = if edge.fetch == NONE { 0 } else { self.vmem[edge.fetch as usize] };
                     if let Some(arrival) = table.arrival(self.node, edge, word) {
                         table.replayed_ticks += edge.ticks;
+                        if cfg!(profiling) {
+                            self.profile.replay_steps += 1;
+                        }
                         self.tick += edge.ticks;
                         self.breakpoint_hit = edge.breakpoint;
                         self.fetched = (edge.fetch != NONE).then_some(edge.fetch as usize);
@@ -752,6 +790,9 @@ impl Simulation for Engine {
             if self.dirty.is_empty() && self.forced.is_empty() && self.rose_list.is_empty() && !self.load_pending && !self.locked {
                 let target = until.min(self.clock_due).min(self.timer_due).min(self.schedule_due);
                 if target > self.tick + 1 {
+                    if cfg!(profiling) {
+                        self.profile.ticks_idle += target - 1 - self.tick;
+                    }
                     self.tick = target - 1;
                 }
             }
