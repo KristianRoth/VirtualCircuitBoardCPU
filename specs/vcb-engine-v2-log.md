@@ -17,6 +17,7 @@ Every optimisation that was tried on the v2 engine, what it gained, and whether 
 | 8 | Replay of repeated steps | 2.63 (full runs) | accepted |
 | 9 | Chaining replays | 0.98 (quick run) | rejected |
 | 10 | Netlist: traces with one writer merged into it | 1.05 (three runs) | accepted |
+| 11 | The self-running part played from a schedule | 1.65 (quick run) | accepted |
 
 ## The profile and the ranked plan
 
@@ -459,12 +460,58 @@ Every program stopped at the same tick with the same output. Day 4 part 2 to its
 
 **Verdict.** Accepted: 1.05. A third fewer entities gave a twentieth more speed. The size of the circuit is not what costs time: an entity that does not change costs nothing in an event-driven engine. What costs is each change, and a merged trace saved only part of the work of one change (one count, one comparison, one store). To gain more from the netlist it would have to make fewer things change per tick, not fewer things exist.
 
+### 11. The self-running part played from a schedule (2026-11-19): accepted
+**Idea.** Part of a board runs by itself: everything a clock drives that no VMem pin, Random or Timer can ever influence. Its behaviour is fixed from tick 0, whatever the program does, and it soon repeats. v2 finds that part in the netlist, runs it once before the simulation until it is in a situation it was in before, and from then on only plays the flips it hands to the rest of the circuit. This is the first step of the user's part-level skipping: the part without inputs.
+
+It was found by looking at where the activity is (`engine/examples/heatmap.rs`), but the rule uses nothing of what was seen there: it is a reachability rule on the netlist (`engine/examples/autonomous.rs` shows what it finds).
+
+| | the user's CPU | sample | sample compact |
+|---|---|---|---|
+| Entities in the self-running part | 23 | 156 | few |
+| Period | 64 ticks | 128 ticks | |
+| Share of all simulated flips inside it | 58% | 60% | 0.8% |
+| Traces the rest of the circuit reads from it | 2 | 3 | |
+
+**Expected.** About 2 on the simulated steps: 60% of the flips go, and with the clock no longer flipping every tick the idle-tick jump (attempt 7) starts to work on boards with a clock interval of 1.
+
+**Changed.** In `sim2.rs`: `Schedule::find` (two walks through the netlist, then the reference engine run until the part's situation repeats: its signals now and one tick ago and the position in the clock interval, at most 65,536 ticks); the part's entities that the rest reads are kept and flipped from the schedule, the others are not simulated; `step_real` adds the tick's scheduled flips; the idle jump goes to the next scheduled flip; a replay node holds the position in the schedule where it held the clock's position. Off on a board with Random ink. A part that does not repeat within the limit is simulated as before.
+
+**Measured.** Quick run (one run per program, 20 million ticks). Old = attempt 10, new = this attempt, both `--engine v2`.
+
+| Program | Old, M ticks/s | New | Ratio |
+|---|---|---|---|
+| day1/part1 | 29.59 | 49.75 | 1.68 |
+| day1/part2 | 27.47 | 45.98 | 1.67 |
+| day2/part1 | 77.22 | 119.05 | 1.54 |
+| day2/part2 | 106.95 | 180.18 | 1.69 |
+| day3/part1 | 61.73 | 112.36 | 1.82 |
+| day3/part2 | 51.41 | 93.46 | 1.82 |
+| day4/part1 | 43.57 | 76.34 | 1.75 |
+| day4/part2 | 34.01 | 58.65 | 1.72 |
+| sample-primes | 87.72 | 192.31 | 2.19 |
+| sample-compact-primes | 40.73 | 38.68 | 0.95 |
+| **Score** | | | **1.65** |
+
+Start-up unchanged (the pre-run is a few hundred ticks). Every program stopped at the same tick with the same output. Day 4 part 2 to its Breakpoint: 18.2 s, answer 9182 (28.2 s before; about 3.6 minutes on v1).
+
+**Equality.** `cargo test` (72 passed) and `cargo test --release -- --ignored` (4 passed). `--verbose` output of v1 and v2 is byte for byte the same on 30 million ticks of the sample computer.
+
+**Verdict.** Accepted: 1.65; 1.5 to 1.8 on the user's CPU and 2.2 on the sample. The compact sample has almost no self-running part and loses 5% in this one run (not repeated; one extra check per tick is the likely cost).
+
 ## Ideas not tried
 
 **Rule for every idea below** (the user, 2026-11-19): the engine optimises the simulator, not a board. Parts, blocks or schedules are found by the engine in the netlist it is given; nothing is marked by hand or tuned to the user's CPU.
 
-- **Sparsely connected parts, skipped by themselves, recursively** (the user's idea). A first look with `engine/examples/parts.rs` (cutting the traces that most components share) isolates the clock divider exactly, but splits most register rows per bit and leaves one large part; outside the divider only about 14% of the activity lies in parts with fewer than ten inputs. The cutting method is crude, and the thresholds drawn were picked by looking at this one board, so the pictures are for understanding only. A partition for the engine has to come from a rule that works on any netlist, for example grouping bits that share their control lines. Asking the user to mark blocks was suggested and is withdrawn: it would break the rule above.
-- **The self-running part of a board** (clock-driven, never influenced by VMem) replaced by a schedule of its output flips: 60% of the simulated flips on the user's CPU, 8 flips per tick on the sample. Found by a general rule (`engine/examples/autonomous.rs`); next to build.
+- **Sparsely connected parts, skipped by themselves, recursively** (the user's idea; wanted). A part is steered from outside only through its inputs; when an input changes it starts a burst, and what it then does follows from its own signals, its inputs and what just changed. A burst seen before could be replayed. Measured with `engine/examples/parts_estimate.rs`, with parts found from the netlist alone (cut every trace that more than T components share, T a power of two; 3 million ticks):
+
+  | | Flips in the self-running part | Flips in bursts seen before (all levels together) | Left to simulate |
+  |---|---|---|---|
+  | the user's CPU, day 4 part 2 | 57.7% | 37.0% | 5.3% |
+  | the user's CPU, day 1 part 2 | 52.8% | 40.5% | 6.7% |
+  | sample | 60.1% | 38.9% | 1.0% |
+  | sample compact | 0.8% | 96.3% | 3.0% |
+
+  So a crude partition is enough for the bursts to repeat. The open side is the cost: every burst needs a lookup, and fine parts have many small bursts. On the user's CPU the coarsest level (5 parts) has 0.04 input events per tick and its known bursts hold 18% of all flips, about 32 flips per lookup; the next level (66 parts) has 0.62 events per tick for 9.6 points more, about 1 flip per lookup, which a lookup cannot beat. The first pictures (`engine/examples/parts.rs`) used thresholds picked by looking at one board and are for understanding only. Asking the user to mark blocks was suggested and is withdrawn: it would break the rule above. The self-running part (attempt 11) was the first step; the next is the coarse level, with a measurement of what a lookup costs against what its burst saves.
 
 See "Not planned" in the ranked plan. Nothing else yet.
 
