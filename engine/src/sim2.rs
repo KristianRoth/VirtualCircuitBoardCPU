@@ -212,8 +212,15 @@ pub struct Engine {
     /// Per entity: a trace is on when any writer is on; a component's value is its output.
     on: Vec<bool>,
     /// Per trace: it went from off to on in the most recent Apply step.
-    rose: Vec<bool>,
-    rose_list: Vec<u32>,
+    /// The simulated signals as one bit each, in `live_list` order, kept up to date at every change, so that a
+    /// state is ready to be looked up without being packed (attempt 19). `slot` is an entity's bit; an entity
+    /// that is not simulated points at a spare word after the real ones.
+    packed: Vec<u64>,
+    slot: Vec<u32>,
+    /// Per latch or pin: whether the inputs that rose since it was last evaluated would toggle it (an odd
+    /// number of them). Set when a rising input feeds it, which also queues it; cleared when it is evaluated.
+    /// It stands in for marking every signal that just rose (attempt 18).
+    toggle: Vec<bool>,
     /// Components to evaluate on the next tick.
     dirty: Vec<u32>,
     /// The two lists a tick works on, kept between ticks so that a tick allocates nothing (attempt 1).
@@ -258,7 +265,6 @@ pub struct Engine {
     /// queue and the just-risen marks they follow from, so that states which behave alike are one node.
     forced: Vec<u32>,
     pending: Vec<u32>,
-    scratch: Vec<u64>,
     /// What VMem did in the last tick: the address loaded from, the address written to, and whether a word changed.
     fetched: Option<usize>,
     written: Option<usize>,
@@ -352,10 +358,15 @@ impl Engine {
         // within its interval would be part of every state, so states would hardly ever repeat).
         let timed = (0..n).any(|e| live[e] && components.kinds[e] == Kind::Component(Ink::Timer));
         let replay = (!ops.contains(&Op::Random) && !timed).then(|| Table::new(live_list.len().div_ceil(64), MEMORY_LIMIT));
-        let mut engine = Engine { profile: Profile::default(), loaded_word: 0, replay, scratch: vec![0; live_list.len().div_ceil(64)], live_list, node: NONE, node_tick: 0, real: true, arrays_node: NONE, forced: Vec::new(), pending: Vec::new(), schedule, ops, reads, writes, readers, writers, direct, count: vec![0; n], live, threshold: vec![0; n], on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_due: u64::MAX, timer_due: u64::MAX, schedule_due: u64::MAX, clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
+        let mut engine = Engine { profile: Profile::default(), loaded_word: 0, replay, live_list, node: NONE, node_tick: 0, real: true, arrays_node: NONE, forced: Vec::new(), pending: Vec::new(), schedule, ops, reads, writes, readers, writers, direct, count: vec![0; n], live, threshold: vec![0; n], on: vec![false; n], toggle: vec![false; n], packed: Vec::new(), slot: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_due: u64::MAX, timer_due: u64::MAX, schedule_due: u64::MAX, clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
         for (role, pins) in [(1, &engine.components.address_pins), (2, &engine.components.content_pins)] {
             for pin in pins {
                 engine.pin_role[*pin as usize] = role;
+            }
+        }
+        for e in 0..n {
+            if engine.ops[e] == Op::Breakpoint {
+                engine.pin_role[e] |= 4;
             }
         }
         let c = &engine.components;
@@ -386,9 +397,10 @@ impl Engine {
         for e in 0..n {
             if c.kinds[e] == Kind::Trace && c.writers[e].iter().any(|w| engine.on[*w as usize]) {
                 engine.on[e] = true;
-                engine.rose[e] = true;
-                engine.rose_list.push(e as u32);
                 for &reader in &c.readers[e] {
+                    if matches!(engine.ops[reader as usize], Op::Latch | Op::Pin) {
+                        engine.toggle[reader as usize] ^= true;
+                    }
                     if !engine.queued[reader as usize] && engine.ops[reader as usize] != Op::Dead {
                         engine.queued[reader as usize] = true;
                         engine.dirty.push(reader);
@@ -396,16 +408,14 @@ impl Engine {
                 }
             }
         }
-        // A merged trace that is on at tick 0 has risen: its readers look for that at its writer.
-        let risen = std::mem::take(&mut engine.rose_list);
-        for t in risen {
-            let e = if merged[t as usize] { engine.writers.of(t as usize)[0] } else { t };
-            engine.rose[t as usize] = false;
-            if !std::mem::replace(&mut engine.rose[e as usize], true) {
-                engine.rose_list.push(e);
-            }
-        }
         engine.set_due();
+        let words = engine.live_list.len().div_ceil(64);
+        engine.slot = vec![(words * 64) as u32; n];
+        engine.packed = vec![0; words + 1];
+        for (i, &e) in engine.live_list.iter().enumerate() {
+            engine.slot[e as usize] = i as u32;
+            engine.packed[i >> 6] |= (engine.on[e as usize] as u64) << (i & 63);
+        }
         for e in 0..n {
             let inputs = if engine.ops[e] == Op::Trace { engine.writers.of(e) } else { engine.reads.of(e) };
             engine.count[e] = inputs.iter().filter(|i| engine.on[**i as usize]).count() as u32;
@@ -427,7 +437,7 @@ impl Engine {
             Op::Xor => active % 2 == 1,
             Op::Xnor => active % 2 == 0,
             // Observed: toggles once per input that rose, so two inputs rising together cancel out.
-            Op::Latch | Op::Pin => g(&self.on, e) != (self.reads.of(e).iter().filter(|t| g(&self.rose, **t as usize)).count() % 2 == 1),
+            Op::Latch | Op::Pin => g(&self.on, e) != g(&self.toggle, e),
             // Clocks and timers flip from the schedule in `step`, never from their inputs (observed).
             Op::Scheduled => g(&self.on, e),
             Op::Random | Op::Trace | Op::Dead => unreachable!("not evaluated here"),
@@ -466,10 +476,6 @@ impl Engine {
             let (from, to) = (g(&self.direct.start, e as usize) as usize, g(&self.direct.start, e as usize + 1) as usize);
             if from != to {
                 let now = g(&self.on, e as usize);
-                if now {
-                    *gm(&mut self.rose, e as usize) = true;
-                    self.rose_list.push(e);
-                }
                 for i in from..to {
                     self.feed(g(&self.direct.items, i), now);
                 }
@@ -482,14 +488,20 @@ impl Engine {
                     continue;
                 }
                 *gm(&mut self.on, t as usize) = now;
-                if now {
-                    *gm(&mut self.rose, t as usize) = true;
-                    self.rose_list.push(t);
-                }
+                self.flip_bit(t);
                 for k in g(&self.readers.start, t as usize) as usize..g(&self.readers.start, t as usize + 1) as usize {
                     self.feed(g(&self.readers.items, k), now);
                 }
             }
+        }
+    }
+
+    /// Keeps `packed` in step with a signal that just changed.
+    #[inline(always)]
+    fn flip_bit(&mut self, e: u32) {
+        if self.replay.is_some() {
+            let slot = g(&self.slot, e as usize) as usize;
+            *gm(&mut self.packed, slot >> 6) ^= 1 << (slot & 63);
         }
     }
 
@@ -504,7 +516,14 @@ impl Engine {
         let wake = match g(&self.ops, reader as usize) {
             Op::Or | Op::Breakpoint | Op::Nor | Op::And | Op::Nand => old.max(new) == g(&self.threshold, reader as usize),
             Op::Xor | Op::Xnor | Op::Random => true, // a Random draws at every change of an input
-            Op::Latch | Op::Pin => now,              // only a rising input toggles a latch
+            // Only a rising input toggles a latch; two rising together cancel out (observed).
+            Op::Latch | Op::Pin => {
+                if now {
+                    let toggle = gm(&mut self.toggle, reader as usize);
+                    *toggle = !*toggle;
+                }
+                now
+            }
             Op::Scheduled | Op::Trace | Op::Dead => false,
         };
         if wake && !g(&self.queued, reader as usize) {
@@ -515,7 +534,52 @@ impl Engine {
 }
 
 impl Engine {
-    /// One tick of the circuit itself.
+    /// What VMem does in a tick in which a pin flipped, a load is pending or VMem is locked. Rare (about one
+    /// tick in a hundred and fifty on a CPU), so it is kept out of the tick's own code (attempt 16).
+    #[cold]
+    #[inline(never)]
+    fn vmem_tick(&mut self, pins_flipped: u8) {
+        if self.load_pending {
+            self.load_pending = false;
+            self.fetched = Some(self.address);
+            let word = self.vmem[self.address];
+            self.loaded_word = word;
+            let mut loaded = Vec::new();
+            for (k, &pin) in self.components.content_pins.iter().enumerate() {
+                if self.on[pin as usize] != (word >> k & 1 == 1) {
+                    self.on[pin as usize] = !self.on[pin as usize];
+                    let slot = self.slot[pin as usize] as usize;
+                    self.packed[slot >> 6] ^= 1 << (slot & 63);
+                    loaded.push(pin);
+                }
+            }
+            self.propagate(&loaded);
+        }
+        let (address_flipped, content_flipped) = (pins_flipped & 1 != 0, pins_flipped & 2 != 0);
+        if content_flipped {
+            // Bits above the content width are written as 0 (observed).
+            let value = self.pins_value(&self.components.content_pins);
+            self.written = Some(self.address);
+            self.vmem_changed = self.vmem[self.address] != value;
+            self.vmem[self.address] = value;
+        }
+        if address_flipped {
+            self.address = self.pins_value(&self.components.address_pins) as usize;
+            self.load_pending = true;
+        }
+        self.locked = address_flipped;
+    }
+
+    /// A Random's evaluation. Observed (random recorder boards): a Random draws every time it is evaluated, that
+    /// is, whenever one of its inputs changed. When an input rose the output is that draw. The draw made when
+    /// the input falls is used up without effect. The output stays on while an input stays on (observed).
+    #[cold]
+    #[inline(never)]
+    fn draw(&mut self, e: u32) -> bool {
+        let draw = self.rng.next_bit();
+        draw && self.count[e as usize] > 0
+    }
+
     #[cfg_attr(profiling, inline(never))]
     fn step_real(&mut self) {
         self.tick += 1;
@@ -539,17 +603,11 @@ impl Engine {
             let op = g(&self.ops, e as usize);
             // A pin is a latch, except that VMem rejects its input while locked (the input is lost).
             if op == Op::Pin && self.locked {
+                *gm(&mut self.toggle, e as usize) = false;
                 continue;
             }
-            let next = if op == Op::Random {
-                // Observed (random recorder boards): a Random draws every time it is evaluated, that is, whenever
-                // one of its inputs changed. When an input rose the output is that draw. The draw made when the
-                // input falls is used up without effect. The output stays on while an input stays on (observed).
-                let draw = self.rng.next_bit();
-                draw && g(&self.count, e as usize) > 0
-            } else {
-                self.evaluate(e as usize, op)
-            };
+            let next = if op == Op::Random { self.draw(e) } else { self.evaluate(e as usize, op) };
+            *gm(&mut self.toggle, e as usize) = false;
             if next != g(&self.on, e as usize) {
                 flips.push(e);
             }
@@ -568,23 +626,26 @@ impl Engine {
         }
 
         // 2. Apply.
-        for t in self.rose_list.drain(..) {
-            *gm(&mut self.rose, t as usize) = false;
-        }
         self.breakpoint_hit = false;
         if cfg!(profiling) {
             self.profile.flips += flips.len() as u64;
         }
         // Which kinds of VMem pin flipped: bit 0 an address pin, bit 1 a content pin.
+        // (Bit 2: a Breakpoint, so that the loop does not have to look at what each flipped entity is.)
         let mut pins_flipped = 0u8;
+        // Only replay looks at the packed state; a board without replay does not keep it.
+        let packing = self.replay.is_some();
         for &e in &flips {
             let on = gm(&mut self.on, e as usize);
             *on = !*on;
-            let on = *on;
-            pins_flipped |= g(&self.pin_role, e as usize);
-            if g(&self.ops, e as usize) == Op::Breakpoint && on {
-                self.breakpoint_hit = true;
+            if packing {
+                let slot = g(&self.slot, e as usize) as usize;
+                *gm(&mut self.packed, slot >> 6) ^= 1 << (slot & 63);
             }
+            pins_flipped |= g(&self.pin_role, e as usize);
+        }
+        if pins_flipped & 4 != 0 {
+            self.breakpoint_hit = flips.iter().any(|e| self.ops[*e as usize] == Op::Breakpoint && self.on[*e as usize]);
         }
         self.propagate(&flips);
 
@@ -593,34 +654,8 @@ impl Engine {
         //   tick T+1: VMem is locked: input to any pin is rejected and lost. The word at the new address
         //             appears on the content pins in this tick, so readers see it at T+2.
         (self.fetched, self.written, self.vmem_changed) = (None, None, false);
-        if self.load_pending || pins_flipped != 0 || self.locked {
-            if self.load_pending {
-                self.load_pending = false;
-                self.fetched = Some(self.address);
-                let word = self.vmem[self.address];
-                self.loaded_word = word;
-                let mut loaded = Vec::new();
-                for (k, &pin) in self.components.content_pins.iter().enumerate() {
-                    if self.on[pin as usize] != (word >> k & 1 == 1) {
-                        self.on[pin as usize] = !self.on[pin as usize];
-                        loaded.push(pin);
-                    }
-                }
-                self.propagate(&loaded);
-            }
-            let (address_flipped, content_flipped) = (pins_flipped & 1 != 0, pins_flipped & 2 != 0);
-            if content_flipped {
-                // Bits above the content width are written as 0 (observed).
-                let value = self.pins_value(&self.components.content_pins);
-                self.written = Some(self.address);
-                self.vmem_changed = self.vmem[self.address] != value;
-                self.vmem[self.address] = value;
-            }
-            if address_flipped {
-                self.address = self.pins_value(&self.components.address_pins) as usize;
-                self.load_pending = true;
-            }
-            self.locked = address_flipped;
+        if self.load_pending || pins_flipped & 3 != 0 || self.locked {
+            self.vmem_tick(pins_flipped);
         }
         self.flips = flips;
         self.work = dirty;
@@ -667,15 +702,6 @@ impl Engine {
         if cfg!(profiling) {
             self.profile.interns += 1;
         }
-        let mut scratch = std::mem::take(&mut self.scratch);
-        // One word at a time, built in a register: 64 independent loads, one store.
-        for (word, entities) in scratch.iter_mut().zip(self.live_list.chunks(64)) {
-            let mut bits = 0u64;
-            for (i, e) in entities.iter().enumerate() {
-                bits |= (self.on[*e as usize] as u64) << i;
-            }
-            *word = bits;
-        }
         let meta = self.meta();
         // What is pending is stored as its outcome: the components that will flip in the next tick. That is
         // all the queue and the just-risen marks are for, and it is known now, since the next tick evaluates
@@ -689,9 +715,9 @@ impl Engine {
             }
         }
         pending.sort_unstable();
-        let id = self.replay.as_mut().unwrap().intern(&scratch, &pending, &[], meta);
+        let words = self.packed.len() - 1;
+        let id = self.replay.as_mut().unwrap().intern(&self.packed[..words], &pending, &[], meta);
         self.pending = pending;
-        self.scratch = scratch;
         self.arrays_node = id;
         id
     }
@@ -707,9 +733,7 @@ impl Engine {
         let (bits, pending, _, meta) = (bits, dirty, rose, meta);
         for e in self.dirty.drain(..) {
             self.queued[e as usize] = false;
-        }
-        for t in self.rose_list.drain(..) {
-            self.rose[t as usize] = false;
+            self.toggle[e as usize] = false;
         }
         self.forced.clear();
         self.forced.extend_from_slice(pending);
@@ -742,6 +766,8 @@ impl Engine {
         }
         (self.address, self.locked, self.load_pending) = (meta.address as usize, meta.locked, meta.load_pending);
         debug_assert!(self.clocks.is_empty() || meta.clock_phase as u64 == self.tick % self.clock_interval);
+        let words = self.packed.len() - 1;
+        self.packed[..words].copy_from_slice(self.replay.as_ref().unwrap().node(id).0);
         self.arrays_node = id;
         self.real = true;
         self.set_due(); // replay moved the tick counter
@@ -787,7 +813,7 @@ impl Simulation for Engine {
                 }
             }
             self.sync();
-            if self.dirty.is_empty() && self.forced.is_empty() && self.rose_list.is_empty() && !self.load_pending && !self.locked {
+            if self.dirty.is_empty() && self.forced.is_empty() && !self.load_pending && !self.locked {
                 let target = until.min(self.clock_due).min(self.timer_due).min(self.schedule_due);
                 if target > self.tick + 1 {
                     if cfg!(profiling) {

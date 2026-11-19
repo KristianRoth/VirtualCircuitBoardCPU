@@ -22,6 +22,10 @@ Every optimisation that was tried on the v2 engine, what it gained, and whether 
 | 13 | No fixed work in a tick: kept counters for clock, timer and schedule; one flag for the VMem pins | 1.055 (three runs) | accepted |
 | 14 | Indexing without bounds checks in the tick | 1.14 (quick run) | accepted |
 | 15 | Compiler settings, tried again | 1.038 (three runs) | accepted |
+| 16 | v2.1: the rare parts of a tick as cold functions | 1.015, then 1.033 on the engine after attempt 19 (three runs each) | accepted after the bar was lowered to 1.015 |
+| 17 | v2.1: replay keyed on the loaded word's content bits only | 1.000 (quick run) | rejected |
+| 18 | v2.1: a latch keeps a toggle flag; no just-risen marks | 1.045 (three runs) | accepted |
+| 19 | v2.1: the packed state kept up to date at every change | 1.11 (three runs) | accepted |
 
 ## The profile and the ranked plan
 
@@ -622,6 +626,72 @@ The settings apply to both engines. v1 does not change (0.994, inside the noise)
 **Equality.** `cargo test` and `cargo test --release -- --ignored`, built with the new settings.
 
 **Verdict.** Accepted: 1.038 with every program at or above 1, over the bar of 1.03 and of twice the noise (1%). A small gain for a build that is slower to make and tied to this machine's CPU; if the binary ever has to run elsewhere, `.cargo/config.toml` is the file to remove.
+
+### v2.1, steps 2 and 3 (2026-11-19): attempts 16 to 19
+From here on the yardstick is v2 itself; v1 is only the reference for equality. The plan and the profile these attempts follow are in `vcb-engine-v2.1.md`. Old = the engine at attempt 15 with v2 as the default; each attempt is measured against the last accepted build. 20 million ticks per program.
+
+**16. The rare parts of a tick as cold functions: rejected at first, then accepted (see below).** The VMem section and a Random's draw moved into functions marked cold, and the Breakpoint test taken out of the loop that applies the flips (a flag per entity). Quick run 1.030; three runs 1.015, with two programs slower. Under the bar. (ESSENT's gain from hints came from a hot code footprint larger than the cache; this loop already fits.) Tag `v2-attempt-16-rejected`.
+
+**17. Replay keyed on the loaded word's content bits only: rejected.** The word that selects a step's successor masked to the number of content pins. Quick run 1.000: on these boards the programs do not hold words wider than the pins. Tag `v2-attempt-17-rejected`. (The first measurement of this attempt compared two builds of attempt 16 by mistake, after a failed build left the old binary in place, and showed 1.036: a reminder of what one quick run can be off by. The script now stops when a build fails.)
+
+**18. A latch keeps a toggle flag; no just-risen marks: accepted, 1.045.** v1's rule is that a latch toggles once per input that rose, so v2 marked every signal that rose in a tick, cleared the marks in the next, and a latch looked through its inputs for marks. Now a rising input flips a flag on each latch it feeds (it queues the latch at the same moment), and the latch's evaluation is its state against the flag. The marks, their list and their clearing are gone from every flip. Equal to v1 on every test.
+
+| Program | Old, M ticks/s | New | Ratio |
+|---|---|---|---|
+| day1/part1 | 65.36 | 68.49 | 1.048 |
+| day1/part2 | 60.42 | 61.16 | 1.012 |
+| day2/part1 | 165.29 | 173.91 | 1.052 |
+| day2/part2 | 243.90 | 256.41 | 1.051 |
+| day3/part1 | 149.25 | 152.67 | 1.023 |
+| day3/part2 | 116.28 | 125.00 | 1.075 |
+| day4/part1 | 99.50 | 103.09 | 1.036 |
+| day4/part2 | 76.34 | 79.68 | 1.044 |
+| sample-primes | 277.78 | 285.71 | 1.029 |
+| sample-compact-primes | 55.87 | 60.24 | 1.078 |
+| **Score** | | | **1.045** |
+
+**19. The packed state kept up to date at every change: accepted, 1.11.** The profile of step 0 showed 13% of the time in packing 2,100 signals into bits at every event of a simulated step, to look the state up. Now every change of a simulated signal flips its bit in a packed copy, and the lookup uses the copy as it is. A board without replay does not keep the copy (the first version made the compact sample 5% slower for nothing). Old = attempt 18.
+
+| Program | Old, M ticks/s | New | Ratio |
+|---|---|---|---|
+| day1/part1 | 62.89 | 71.17 | 1.132 |
+| day1/part2 | 58.48 | 66.67 | 1.140 |
+| day2/part1 | 165.29 | 183.49 | 1.110 |
+| day2/part2 | 240.96 | 270.27 | 1.122 |
+| day3/part1 | 145.99 | 168.07 | 1.151 |
+| day3/part2 | 123.46 | 141.84 | 1.149 |
+| day4/part1 | 98.52 | 111.11 | 1.128 |
+| day4/part2 | 73.53 | 86.21 | 1.172 |
+| sample-primes | 273.97 | 281.69 | 1.028 |
+| sample-compact-primes | 57.64 | 56.82 | 0.986 |
+| **Score** | | | **1.11** |
+
+**16 again, accepted.** The user lowered the bar to 1.015 so that attempt 16 counts. Put back on top of attempts 18 and 19 and measured again, three runs, old = attempt 19:
+
+| Program | Old, M ticks/s | New | Ratio |
+|---|---|---|---|
+| day1/part1 | 74.63 | 77.22 | 1.035 |
+| day1/part2 | 70.18 | 72.99 | 1.040 |
+| day2/part1 | 188.68 | 192.31 | 1.019 |
+| day2/part2 | 281.69 | 285.71 | 1.014 |
+| day3/part1 | 173.91 | 176.99 | 1.018 |
+| day3/part2 | 144.93 | 148.15 | 1.022 |
+| day4/part1 | 115.61 | 121.21 | 1.048 |
+| day4/part2 | 89.69 | 94.34 | 1.052 |
+| sample-primes | 317.46 | 327.87 | 1.033 |
+| sample-compact-primes | 57.97 | 60.79 | 1.049 |
+| **Score** | | | **1.033** |
+
+Every program faster, and over the old bar too: with the just-risen marks and the packing gone, the rare code is a larger share of what is left in the tick. Equal to v1 on every test. The tag `v2-attempt-16-rejected` keeps the first version.
+
+**Not tried, with the reason:**
+- *The event loop's own overhead:* 2.5% of the time in the profile taken after attempt 19; nothing to win.
+- *Fewer lookups during a run of misses:* after attempt 19 looking a state up and storing it is about 2% of the time.
+- *Profile-guided optimisation:* needs the toolchain's `llvm-tools` component, which is not installed; left for the user to decide.
+
+**Both together, on full runs** (every program to its end, one run; old = attempt 15): 1.17. Day 4 part 2 runs at 116 M ticks per second, 11.5 s. `cargo test` and `cargo test --release -- --ignored` pass.
+
+**The profile after attempt 19** (day 4 part 2): `propagate` 60% of the time, the rest of the simulated tick 28%, everything to do with replay 12%. The ticks are crossed as before: 63% replayed, 27% idle, 9.5% simulated.
 
 ## Ideas not tried
 
