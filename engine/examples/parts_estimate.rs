@@ -56,6 +56,9 @@ struct Level {
     /// (a table knows every situation, so nothing of such a part needs simulating).
     step_small: [(u64, u64); 2],
     miss_small: [(u64, u64); 2],
+    /// Per part, inside missed steps: (input events, events whose situation was known, flips in known bursts, all flips).
+    p_step: Vec<[u64; 4]>,
+    p_miss: Vec<[u64; 4]>,
 }
 
 fn mix(a: u64, b: u64) -> u64 {
@@ -103,7 +106,7 @@ fn level(name: String, part: Vec<u32>, parts: usize, c: &Components, simulated: 
             }
         }
     }
-    Level { name, part, parts, feeds, inputs, state: vec![0; parts], input_state: vec![0; parts], changed: vec![0; parts], input_changed: vec![0; parts], event: vec![false; parts], seen_burst: vec![false; parts], known: HashSet::new(), events: 0, events_seen: 0, events_unsettled: 0, flips_in_parts: 0, flips_seen: 0, step_keys: Vec::new(), step_events: 0, step_flips_seen: 0, miss_events: 0, miss_flips_seen: 0, index_bits: Vec::new(), step_small: [(0, 0); 2], miss_small: [(0, 0); 2] }
+    Level { name, part, parts, feeds, inputs, state: vec![0; parts], input_state: vec![0; parts], changed: vec![0; parts], input_changed: vec![0; parts], event: vec![false; parts], seen_burst: vec![false; parts], known: HashSet::new(), events: 0, events_seen: 0, events_unsettled: 0, flips_in_parts: 0, flips_seen: 0, step_keys: Vec::new(), step_events: 0, step_flips_seen: 0, miss_events: 0, miss_flips_seen: 0, index_bits: Vec::new(), step_small: [(0, 0); 2], miss_small: [(0, 0); 2], p_step: vec![[0; 4]; parts], p_miss: vec![[0; 4]; parts] }
 }
 
 fn main() -> Result<(), String> {
@@ -228,6 +231,8 @@ fn main() -> Result<(), String> {
                     continue;
                 }
                 l.flips_in_parts += 1;
+                l.p_step[p as usize][3] += 1;
+                l.p_step[p as usize][2] += l.seen_burst[p as usize] as u64;
                 for (k, limit) in SMALL.iter().enumerate() {
                     l.step_small[k].1 += (l.index_bits[p as usize] <= *limit) as u64;
                 }
@@ -265,6 +270,8 @@ fn main() -> Result<(), String> {
                     let seen = l.known.contains(&key) || l.step_keys.contains(&key);
                     l.step_keys.push(key);
                     l.step_events += 1;
+                    l.p_step[q][0] += 1;
+                    l.p_step[q][1] += seen as u64;
                     for (k, limit) in SMALL.iter().enumerate() {
                         l.step_small[k].0 += (l.index_bits[q] <= *limit) as u64;
                     }
@@ -303,6 +310,14 @@ fn main() -> Result<(), String> {
                     }
                 }
                 l.step_small = [(0, 0); 2];
+                for (total, step) in l.p_miss.iter_mut().zip(l.p_step.iter_mut()) {
+                    if !replayed {
+                        for k in 0..4 {
+                            total[k] += step[k];
+                        }
+                    }
+                    *step = [0; 4];
+                }
                 l.step_keys.clear();
                 (l.step_events, l.step_flips_seen) = (0, 0);
             }
@@ -348,6 +363,64 @@ fn main() -> Result<(), String> {
         for (k, limit) in SMALL.iter().enumerate() {
             let (events, in_them) = l.miss_small[k];
             println!("{:<9}{:>8}{:>10} of {:<5}{:>19.1}%{:>14.3}{:>12.2}", l.name, limit, l.index_bits.iter().filter(|b| **b <= *limit).count(), l.parts, pct(in_them, missed), events as f64 / run as f64, in_them as f64 / events.max(1) as f64);
+        }
+    }
+
+    // The tree with a depth that follows the parts (the user's idea): a part is used as a unit where that pays,
+    // split further where its pieces pay more, and left to the plain simulation where nothing pays. "Pays" is
+    // flips saved minus what the lookups cost, with a lookup counted as COST flips. Chosen from the root down,
+    // each part by its own numbers; the "control" level does not nest and is left out.
+    let tree: Vec<&Level> = levels.iter().filter(|l| l.name != "control").collect();
+    for cost in [4.0f64, 8.0, 16.0] {
+        // best[i][p]: (net flips per tick, lookups per tick, flips skipped per tick, units) for the subtree of part p of level i.
+        let mut best: Vec<Vec<(f64, f64, f64, Vec<(usize, usize)>)>> = Vec::new();
+        for i in (0..tree.len()).rev() {
+            let l = tree[i];
+            let mut children: Vec<Vec<usize>> = vec![Vec::new(); l.parts];
+            if i + 1 < tree.len() {
+                let mut parent = vec![usize::MAX; tree[i + 1].parts];
+                for e in 0..n {
+                    if tree[i + 1].part[e] != NONE && l.part[e] != NONE {
+                        parent[tree[i + 1].part[e] as usize] = l.part[e] as usize;
+                    }
+                }
+                for (child, p) in parent.iter().enumerate().filter(|(_, p)| **p != usize::MAX) {
+                    children[*p].push(child);
+                }
+            }
+            let below = best.last();
+            let row: Vec<(f64, f64, f64, Vec<(usize, usize)>)> = (0..l.parts)
+                .map(|p| {
+                    let [events, _, flips_known, _] = l.p_miss[p];
+                    let own = (flips_known as f64 / run as f64 - cost * events as f64 / run as f64, events as f64 / run as f64, flips_known as f64 / run as f64, vec![(i, p)]);
+                    let mut split = (0.0, 0.0, 0.0, Vec::new());
+                    if let Some(below) = below {
+                        for c in &children[p] {
+                            split = (split.0 + below[*c].0, split.1 + below[*c].1, split.2 + below[*c].2, [split.3, below[*c].3.clone()].concat());
+                        }
+                    }
+                    let plain = (0.0, 0.0, 0.0, Vec::new());
+                    [own, split, plain].into_iter().max_by(|a, b| a.0.total_cmp(&b.0)).unwrap()
+                })
+                .collect();
+            best.push(row);
+        }
+        let top = best.last().unwrap();
+        let (net, lookups, skipped): (f64, f64, f64) = top.iter().fold((0.0, 0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2));
+        let units: Vec<(usize, usize)> = top.iter().flat_map(|b| b.3.clone()).collect();
+        let by_level: Vec<String> = (0..tree.len()).map(|i| (tree[i].name.clone(), units.iter().filter(|u| u.0 == i).count())).filter(|(_, k)| *k > 0).map(|(name, k)| format!("{k} at {name}")).collect();
+        println!();
+        println!("the tree with its depth following the parts, a lookup counted as {cost} flips: {} units ({})", units.len(), by_level.join(", "));
+        println!("    skips {:.1}% of the missed flips with {:.3} lookups per tick ({:.1} flips per lookup); net {:.2} of the {:.2} flips per tick left", 100.0 * skipped * run as f64 / missed.max(1) as f64, lookups, skipped / lookups.max(1e-9), net, missed as f64 / run as f64);
+        if cost == 8.0 {
+            let mut shown = units.clone();
+            shown.sort_by(|a, b| tree[b.0].p_miss[b.1][2].cmp(&tree[a.0].p_miss[a.1][2]));
+            println!("    {:<8}{:>9}{:>8}{:>14}{:>13}{:>16}{:>12}", "level", "entities", "inputs", "lookups/tick", "known", "of missed flips", "per lookup");
+            for (i, p) in shown.into_iter().take(12) {
+                let [events, known, flips_known, _] = tree[i].p_miss[p];
+                let size = tree[i].part.iter().filter(|x| **x == p as u32).count();
+                println!("    {:<8}{:>9}{:>8}{:>14.3}{:>12.1}%{:>15.1}%{:>12.1}", tree[i].name, size, tree[i].inputs[p], events as f64 / run as f64, pct(known, events), pct(flips_known, missed), flips_known as f64 / events.max(1) as f64);
+            }
         }
     }
     Ok(())
