@@ -9,7 +9,9 @@
 //! This tool runs the reference engine and counts, per level and for the levels together (the largest part
 //! that recognises its situation wins), the share of all flips that lie in bursts seen before.
 //!
-//!   cargo run --release --example parts_estimate -- <board.vcb> <program.vcbasm or -> [ticks]
+//!   cargo run --release --example parts_estimate -- <board.vcb> <program.vcbasm or -> [ticks] [levels]
+//! `levels`: thresholds coarse to fine, for example 32,8 (and the word control for that level). Default: the
+//! powers of two under the largest degree, control, 3. A level alone shows what that level is worth by itself.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -107,15 +109,19 @@ fn main() -> Result<(), String> {
     // The levels, coarse to fine: thresholds are powers of two, the same for every board.
     let mut levels: Vec<Level> = Vec::new();
     let max_degree = *degree.iter().max().unwrap();
-    let mut thresholds: Vec<usize> = (2..7).rev().map(|k| 1usize << k).filter(|t| *t < max_degree).collect();
-    thresholds.push(3);
+    let chosen: Option<Vec<String>> = args.get(4).map(|l| l.split(',').map(str::to_string).collect());
+    let mut thresholds: Vec<usize> = match &chosen {
+        Some(list) => list.iter().filter_map(|t| t.parse().ok()).collect(),
+        None => (2..7).rev().map(|k| 1usize << k).filter(|t| *t < max_degree).chain([3]).collect(),
+    };
+    thresholds.sort_by(|a, b| b.cmp(a));
     for t in &thresholds {
         let cut: Vec<bool> = degree.iter().map(|d| *d > *t).collect();
         let (part, parts) = connected(n, &simulated, &cut, &c);
         levels.push(level(format!("T={t}"), part, parts, &c, &simulated));
     }
     // "control": the finest parts merged when the same widely shared traces (degree over 8) steer them.
-    {
+    if chosen.as_ref().is_none_or(|list| list.iter().any(|l| l == "control")) && !levels.is_empty() {
         let fine = levels.last().unwrap();
         let mut signature: Vec<Vec<u32>> = vec![Vec::new(); fine.parts];
         for x in 0..n {
@@ -186,7 +192,7 @@ fn main() -> Result<(), String> {
                 flips_cut += 1;
                 continue;
             }
-            if levels.iter().any(|l| l.part[e] != NONE && l.inputs[l.part[e] as usize] == 0) {
+            if levels.iter().rev().find(|l| l.part[e] != NONE).is_some_and(|l| l.inputs[l.part[e] as usize] == 0) { // judged at the finest level
                 flips_self += 1; // a part without inputs runs by itself: a schedule, not a burst
                 continue;
             }
@@ -246,13 +252,15 @@ fn main() -> Result<(), String> {
     let pct = |a: u64, b: u64| 100.0 * a as f64 / b.max(1) as f64;
     println!("{} simulated entities, {run} ticks, {:.2} flips per tick", simulated.iter().filter(|s| **s).count(), flips as f64 / run as f64);
     println!("flips in parts without inputs (self-running, a schedule): {:.1}%; on traces cut at every level: {:.1}%", pct(flips_self, flips), pct(flips_cut, flips));
-    println!("{:<9}{:>7}{:>10}{:>12}{:>13}{:>12}{:>14}{:>16}", "level", "parts", "largest", "events/tick", "events seen", "unsettled", "flips skipped", "situations kept");
+    // "net": flips saved per tick if a lookup costs as much as simulating 8 flips (an assumption, not a measurement).
+    println!("{:<9}{:>7}{:>10}{:>12}{:>13}{:>14}{:>12}{:>10}{:>16}", "level", "parts", "largest", "events/tick", "events seen", "flips skipped", "per lookup", "net", "situations kept");
     for l in &levels {
         let mut size = vec![0usize; l.parts];
         for p in l.part.iter().filter(|p| **p != NONE) {
             size[*p as usize] += 1;
         }
-        println!("{:<9}{:>7}{:>10}{:>12.2}{:>12.1}%{:>11.1}%{:>13.1}%{:>16}", l.name, l.parts, size.iter().max().unwrap_or(&0), l.events as f64 / run as f64, pct(l.events_seen, l.events), pct(l.events_unsettled, l.events), pct(l.flips_seen, flips), l.known.len());
+        let (per_tick, lookups) = (l.flips_seen as f64 / run as f64, l.events as f64 / run as f64);
+        println!("{:<9}{:>7}{:>10}{:>12.3}{:>12.1}%{:>13.1}%{:>12.1}{:>10.2}{:>16}", l.name, l.parts, size.iter().max().unwrap_or(&0), lookups, pct(l.events_seen, l.events), pct(l.flips_seen, flips), l.flips_seen as f64 / l.events.max(1) as f64, per_tick - 8.0 * lookups, l.known.len());
     }
     let total: u64 = covered_by.iter().sum();
     let by: Vec<String> = levels.iter().zip(&covered_by).map(|(l, k)| format!("{} {:.1}%", l.name, pct(*k, flips))).collect();
