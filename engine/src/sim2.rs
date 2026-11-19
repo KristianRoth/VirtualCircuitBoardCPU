@@ -34,6 +34,98 @@ impl Lists {
     }
 }
 
+/// The part of a board that runs by itself (attempt 11): everything a clock drives that no VMem pin, Random or
+/// Timer can ever influence. Its behaviour is fixed from tick 0 and soon repeats, so it is run once, before
+/// the simulation, and then only the flips it hands to the rest of the circuit are played from this schedule.
+#[derive(Default)]
+struct Schedule {
+    /// `at[k]`: the components that flip in tick k, for k up to `lead + period`. Later ticks repeat the last `period`.
+    at: Vec<Vec<u32>>,
+    /// From k: how many ticks until the next tick with a flip (0 if never).
+    wait: Vec<u64>,
+    lead: u64,
+    period: u64,
+}
+
+impl Schedule {
+    /// The position of a tick in the schedule: itself while the start-up lasts, then within the period.
+    #[inline(always)]
+    fn key(&self, tick: u64) -> usize {
+        if tick <= self.lead + self.period { tick as usize } else { (self.lead + 1 + (tick - self.lead - 1) % self.period) as usize }
+    }
+
+    /// The next tick after `tick` in which the schedule flips something.
+    fn next(&self, tick: u64) -> u64 {
+        if self.at.is_empty() || self.wait[self.key(tick)] == 0 { u64::MAX } else { tick + self.wait[self.key(tick)] }
+    }
+
+    /// Finds the self-running part and runs it. `keep` gets true for its entities that the rest of the circuit
+    /// reads (they stay, driven by the schedule); `drop` for the others (not simulated at all).
+    fn find(board: &Board, c: &Components, options: &Options, live: &[bool], keep: &mut [bool], drop: &mut [bool]) -> Result<Schedule> {
+        /// How long the self-running part may take to repeat. Beyond this it is simulated like everything else.
+        const LIMIT: u64 = 1 << 16;
+        let n = c.kinds.len();
+        let reach = |from: &dyn Fn(&Kind) -> bool| {
+            let mut seen = vec![false; n];
+            let mut todo: Vec<usize> = (0..n).filter(|e| from(&c.kinds[*e])).collect();
+            while let Some(e) = todo.pop() {
+                if !std::mem::replace(&mut seen[e], true) {
+                    // A clock ignores its inputs, so nothing reaches further through one.
+                    let next = if c.kinds[e] == Kind::Trace { &c.readers[e] } else { &c.writes[e] };
+                    todo.extend(next.iter().map(|x| *x as usize).filter(|x| c.kinds[*x] != Kind::Component(Ink::Clock)));
+                }
+            }
+            seen
+        };
+        let influenced = reach(&|k| matches!(k, Kind::Pin | Kind::Component(Ink::Random | Ink::Timer)));
+        let driven = reach(&|k| *k == Kind::Component(Ink::Clock));
+        let own: Vec<bool> = (0..n).map(|e| live[e] && driven[e] && !influenced[e]).collect();
+        // What the rest reads stays: a trace of the part with a reader outside it, and every component that
+        // writes such a trace or a trace outside the part.
+        let read_outside = |t: usize| c.readers[t].iter().any(|r| live[*r as usize] && !own[*r as usize]);
+        for e in (0..n).filter(|e| own[*e]) {
+            keep[e] = if c.kinds[e] == Kind::Trace { read_outside(e) } else { c.writes[e].iter().any(|t| live[*t as usize] && (!own[*t as usize] || read_outside(*t as usize))) };
+            drop[e] = !keep[e];
+        }
+        let kept: Vec<u32> = (0..n as u32).filter(|e| keep[*e as usize] && c.kinds[*e as usize] != Kind::Trace).collect();
+        let members: Vec<usize> = (0..n).filter(|e| own[*e]).collect();
+        if members.is_empty() {
+            return Ok(Schedule::default());
+        }
+        // Run the reference engine until the part is in a situation it was in before. Its situation is its
+        // signals now and one tick ago (which fixes what is pending) and the position in the clock interval.
+        let mut v1 = crate::sim::Engine::new(board, c.clone(), options)?;
+        let interval = board.settings.clock_interval as u64;
+        let mut at: Vec<Vec<u32>> = vec![Vec::new()];
+        let mut seen: std::collections::HashMap<(Vec<bool>, Vec<bool>, u64), u64> = Default::default();
+        let mut before: Vec<bool> = members.iter().map(|e| v1.state()[*e]).collect();
+        let mut kept_before: Vec<bool> = kept.iter().map(|e| v1.state()[*e as usize]).collect();
+        for tick in 1..=LIMIT {
+            v1.step();
+            let now: Vec<bool> = members.iter().map(|e| v1.state()[*e]).collect();
+            let kept_now: Vec<bool> = kept.iter().map(|e| v1.state()[*e as usize]).collect();
+            at.push(kept.iter().zip(kept_now.iter().zip(&kept_before)).filter(|(_, (a, b))| a != b).map(|(e, _)| *e).collect());
+            kept_before = kept_now;
+            if let Some(first) = seen.insert((now.clone(), std::mem::replace(&mut before, now), tick % interval), tick) {
+                let (lead, period) = (first, tick - first);
+                // wait[k]: ticks from k to the next flip. After the last position comes position lead + 1 again.
+                let last = at.len() - 1;
+                let mut wait = vec![0u64; at.len()];
+                wait[last] = (lead as usize + 1..=last).find(|k| !at[*k].is_empty()).map_or(0, |k| k as u64 - lead);
+                for k in (1..last).rev() {
+                    wait[k] = if !at[k + 1].is_empty() { 1 } else if wait[k + 1] > 0 { wait[k + 1] + 1 } else { 0 };
+                }
+                return Ok(Schedule { at, wait, lead, period });
+            }
+        }
+        // No repeat found: leave the part to the ordinary simulation.
+        for e in members {
+            (keep[e], drop[e]) = (false, false);
+        }
+        Ok(Schedule::default())
+    }
+}
+
 /// What an entity does when it is evaluated: one byte per entity instead of the netlist's kind and ink.
 #[derive(Clone, Copy, PartialEq)]
 #[repr(u8)]
@@ -66,6 +158,8 @@ pub struct Engine {
     writes: Lists,
     readers: Lists,
     writers: Lists,
+    /// The self-running part's flips (attempt 11). Empty when the board has none.
+    schedule: Schedule,
     /// Per component or pin: the readers of the traces that only it writes. Such a trace always equals its
     /// writer, so it is not simulated: its readers read the writer itself (attempt 10).
     direct: Lists,
@@ -177,6 +271,19 @@ impl Engine {
                 ops[e] = Op::Dead;
             }
         }
+        // The self-running part (attempt 11): not on a board with Random ink, where every flip must come in v1's order.
+        let (mut keep, mut dropped) = (vec![false; n], vec![false; n]);
+        let schedule = if ops.contains(&Op::Random) { Schedule::default() } else { Schedule::find(board, &components, options, &live, &mut keep, &mut dropped)? };
+        for e in 0..n {
+            if dropped[e] {
+                live[e] = false;
+                if ops[e] != Op::Trace {
+                    ops[e] = Op::Dead;
+                }
+            } else if keep[e] && ops[e] != Op::Trace {
+                ops[e] = Op::Scheduled; // flipped by the schedule, never evaluated
+            }
+        }
         // Netlist optimisation (attempt 10). A trace with one writer always equals that writer, in the same
         // tick, so it is taken out: whoever read the trace reads the writer. Lists also lose what is not
         // simulated. Not on a board with Random ink, where the order in which readers are woken must be v1's.
@@ -202,7 +309,7 @@ impl Engine {
         // within its interval would be part of every state, so states would hardly ever repeat).
         let timed = (0..n).any(|e| live[e] && components.kinds[e] == Kind::Component(Ink::Timer));
         let replay = (!ops.contains(&Op::Random) && !timed).then(|| Table::new(live_list.len().div_ceil(64), MEMORY_LIMIT));
-        let mut engine = Engine { loaded_word: 0, replay, scratch: vec![0; live_list.len().div_ceil(64)], live_list, node: NONE, node_tick: 0, real: true, arrays_node: NONE, forced: Vec::new(), pending: Vec::new(), ops, reads, writes, readers, writers, direct, count: vec![0; n], live, threshold: vec![0; n], on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
+        let mut engine = Engine { loaded_word: 0, replay, scratch: vec![0; live_list.len().div_ceil(64)], live_list, node: NONE, node_tick: 0, real: true, arrays_node: NONE, forced: Vec::new(), pending: Vec::new(), schedule, ops, reads, writes, readers, writers, direct, count: vec![0; n], live, threshold: vec![0; n], on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
         for (role, pins) in [(1, &engine.components.address_pins), (2, &engine.components.content_pins)] {
             for pin in pins {
                 engine.pin_role[*pin as usize] = role;
@@ -218,13 +325,17 @@ impl Engine {
             match kind {
                 // Observed (general boards): a clock is on at tick 0 and flips at every multiple of the interval.
                 Kind::Component(Ink::Clock) => {
-                    engine.clocks.push(e as u32);
+                    if !keep[e] {
+                        engine.clocks.push(e as u32);
+                    }
                     engine.on[e] = true;
                 }
                 // Observed (random-pulse board): unlike a clock, a timer starts off.
                 Kind::Component(Ink::Timer) => engine.timers.push(e as u32),
                 Kind::Component(Ink::LatchOn) => engine.on[e] = true,
-                Kind::Component(Ink::Not | Ink::Nor | Ink::Nand | Ink::Xnor) => engine.on[e] = engine.evaluate(e, engine.ops[e]),
+                // (Written out, not evaluated: a component on the schedule has no operation to evaluate.)
+                Kind::Component(Ink::Not | Ink::Nor | Ink::Xnor) => engine.on[e] = true,
+                Kind::Component(Ink::Nand) => engine.on[e] = !c.reads[e].is_empty(),
                 _ => {}
             }
         }
@@ -398,6 +509,9 @@ impl Engine {
         if self.tick % self.timer_ticks == 0 {
             flips.extend(&self.timers);
         }
+        if !self.schedule.at.is_empty() {
+            flips.extend(&self.schedule.at[self.schedule.key(self.tick)]);
+        }
 
         // 2. Apply.
         for t in self.rose_list.drain(..) {
@@ -475,7 +589,7 @@ impl Engine {
     }
 
     fn meta(&self) -> Meta {
-        Meta { address: self.address as u32, locked: self.locked, load_pending: self.load_pending, clock_phase: if self.clocks.is_empty() { 0 } else { (self.tick % self.clock_interval) as u32 }, timer_phase: 0 } // no node on a board with a simulated timer
+        Meta { address: self.address as u32, locked: self.locked, load_pending: self.load_pending, clock_phase: if self.clocks.is_empty() { 0 } else { (self.tick % self.clock_interval) as u32 }, timer_phase: if self.schedule.at.is_empty() { 0 } else { self.schedule.key(self.tick) as u32 } } // the second is the position in the schedule: there is no node on a board with a simulated timer
     }
 
     /// The node of the current state.
@@ -594,7 +708,7 @@ impl Simulation for Engine {
             self.sync();
             if self.dirty.is_empty() && self.forced.is_empty() && self.rose_list.is_empty() && !self.load_pending && !self.locked {
                 let next_flip = |ticks: &[u32], interval: u64| if ticks.is_empty() { u64::MAX } else { (self.tick / interval + 1) * interval };
-                let target = until.min(next_flip(&self.clocks, self.clock_interval)).min(next_flip(&self.timers, self.timer_ticks));
+                let target = until.min(next_flip(&self.clocks, self.clock_interval)).min(next_flip(&self.timers, self.timer_ticks)).min(self.schedule.next(self.tick));
                 if target > self.tick + 1 {
                     self.tick = target - 1;
                 }
