@@ -537,6 +537,19 @@ Start-up unchanged (the pre-run is a few hundred ticks). Every program stopped a
 
   With a lookup at 4 flips the user's CPU on day 4 part 2 gets 7 units and 41.6%. So variable depth helps where the coarsest part rarely recognises its situation: a few mid-sized parts with few inputs (1 to 20) that know their situation 83% to 100% of the time carry the gain, and the hundreds of tiny parts are never chosen. Two cautions: the choice was made here with the whole run known, where an engine would have to learn while running which parts pay; and the units are chosen by their own numbers, without the cost of the machinery around them. This is the form of part-level skipping worth building, if any.
 
+  **Can the tree be fixed at start-up by part size alone?** (the user's question.) Tested: split a part while it has more than `largest` entities, use what comes out if it has at least `smallest`. Net flips saved per tick, a lookup counted as 8 flips:
+
+  | Rule (largest, smallest) | the user's CPU, day 4 part 2 | day 1 part 2 | sample | sample compact |
+  |---|---|---|---|---|
+  | never split (4096, any) | 0.45 | 0.11 | -0.19 | 0.77 |
+  | (1024, 32) | -0.16 | 0.22 | -0.45 | -0.84 |
+  | (512, 32) | -0.12 | 0.32 | -0.36 | -0.96 |
+  | (256, 32) | 0.16 | 0.44 | -0.16 | -0.68 |
+  | (64, 32) | 0.15 | 0.18 | -0.25 | -0.05 |
+  | chosen per part with the run known | 0.45 | 0.82 | 0.07 | 0.93 |
+
+  No size setting is good on all four, and the best one differs per board and even per program on one board. Size is useful as a floor only: no part under about 32 entities ever paid. So the tree's shape can be built at start-up from the netlist, but which of its parts are used has to follow what each part does while running (count its lookups and the flips they save, switch it off when it loses).
+
 See "Not planned" in the ranked plan. Nothing else yet.
 
 ## Stage results
