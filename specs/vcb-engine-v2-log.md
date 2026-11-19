@@ -15,6 +15,7 @@ Every optimisation that was tried on the v2 engine, what it gained, and whether 
 | 6 | Dropping what cannot cause an event | 1.35 (quick run) | accepted |
 | 7 | The event primitive and idle-tick jumps | 1.046 (three runs) | accepted |
 | 8 | Replay of repeated steps | 2.63 (full runs) | accepted |
+| 9 | Chaining replays | 0.98 (quick run) | rejected |
 
 ## The profile and the ranked plan
 
@@ -388,6 +389,33 @@ Start-up unchanged (0.06 to 0.08 s). Every program stopped at the same tick with
 **Equality.** `cargo test` (72 passed) and `cargo test --release -- --ignored` (4 passed), among them a new one: day 1 part 1 to its Breakpoint with v2 moved by events and limits of many sizes, against v1 tick by tick, once with all the memory and once with 3 MiB for the table. `--verbose` output of v1 and v2 is byte for byte the same on day 2 part 2.
 
 **Verdict.** Accepted: 2.63 on full runs, inside the estimate. The share replayed, and so the gain, depends on how many different register contents a program passes through: day 2 and the sample repeat most, day 1 least.
+
+### 9. Chaining replays (2026-11-19): rejected
+**Idea.** Every replayed step ends in an event, and `advance` returns to the run loop for each. When nobody needs to see the VMem events one by one (no `--verbose`, no address watch, no `--quiescent`), v2 could run on through them and return only at a Breakpoint or its limit.
+
+**Expected.** Little. A replayed step is a few table lookups; on the best case (day 2 part 2, 83% replayed) the simulated 17% of the ticks already take about four fifths of the time.
+
+**Changed.** A `chain` switch on v2's engine, set by `main.rs` from the options; two conditions in `advance`.
+
+**Measured.** Quick run (one run per program, 20 million ticks). Old = attempt 8, new = this attempt, both `--engine v2`.
+
+| Program | Old, M ticks/s | New | Ratio |
+|---|---|---|---|
+| day1/part1 | 29.11 | 29.20 | 1.003 |
+| day1/part2 | 26.74 | 26.46 | 0.989 |
+| day2/part1 | 75.19 | 62.31 | 0.829 |
+| day2/part2 | 104.17 | 110.50 | 1.061 |
+| day3/part1 | 63.29 | 62.70 | 0.991 |
+| day3/part2 | 51.68 | 51.68 | 1.000 |
+| day4/part1 | 42.92 | 42.55 | 0.991 |
+| day4/part2 | 34.13 | 33.50 | 0.982 |
+| sample-primes | 88.89 | 88.50 | 0.996 |
+| sample-compact-primes | 39.22 | 38.46 | 0.981 |
+| **Score** | | | **0.98** |
+
+Every program stopped at the same tick with the same output.
+
+**Verdict.** Rejected: no gain; eight of ten programs within 2% of 1. The return to the run loop is not where the time is. With replay in place, the time is in the steps that are simulated: the misses. The code is on the local tag `v2-attempt-09-rejected`.
 
 ## Ideas not tried
 

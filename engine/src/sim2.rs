@@ -118,8 +118,6 @@ pub struct Engine {
     /// queue and the just-risen marks they follow from, so that states which behave alike are one node.
     forced: Vec<u32>,
     pending: Vec<u32>,
-    /// Chaining (attempt 9): `advance` stops only at a Breakpoint or its limit, not at VMem events.
-    chain: bool,
     scratch: Vec<u64>,
     /// What VMem did in the last tick: the address loaded from, the address written to, and whether a word changed.
     fetched: Option<usize>,
@@ -181,7 +179,7 @@ impl Engine {
         // within its interval would be part of every state, so states would hardly ever repeat).
         let timed = components.kinds.iter().zip(&live).any(|(kind, live)| *live && *kind == Kind::Component(Ink::Timer));
         let replay = (!ops.contains(&Op::Random) && !timed).then(|| Table::new(live_list.len().div_ceil(64), MEMORY_LIMIT));
-        let mut engine = Engine { loaded_word: 0, replay, scratch: vec![0; live_list.len().div_ceil(64)], live_list, node: NONE, node_tick: 0, real: true, arrays_node: NONE, forced: Vec::new(), pending: Vec::new(), chain: false, ops, reads, writes, readers, writers, count: vec![0; n], live, threshold: vec![0; n], on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
+        let mut engine = Engine { loaded_word: 0, replay, scratch: vec![0; live_list.len().div_ceil(64)], live_list, node: NONE, node_tick: 0, real: true, arrays_node: NONE, forced: Vec::new(), pending: Vec::new(), ops, reads, writes, readers, writers, count: vec![0; n], live, threshold: vec![0; n], on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
         for (role, pins) in [(1, &engine.components.address_pins), (2, &engine.components.content_pins)] {
             for pin in pins {
                 engine.pin_role[*pin as usize] = role;
@@ -413,12 +411,6 @@ impl Engine {
         }
     }
 
-    /// When nobody needs to see the VMem events one by one (no --verbose, no address watch, no --quiescent),
-    /// `advance` may go on through them and stop only at a Breakpoint or its limit (attempt 9).
-    pub fn set_chain(&mut self, chain: bool) {
-        self.chain = chain;
-    }
-
     /// (nodes stored, bytes used, ticks crossed by replay)
     pub fn replay_stats(&self) -> (usize, usize, u64) {
         self.replay.as_ref().map_or((0, 0, 0), |t| (t.nodes(), t.memory(), t.replayed_ticks))
@@ -542,10 +534,7 @@ impl Simulation for Engine {
                             self.vmem[edge.write as usize] = arrival.written;
                         }
                         (self.node, self.node_tick, self.real) = (arrival.node, self.tick, false);
-                        if !self.chain || edge.breakpoint || self.tick >= until {
-                            return;
-                        }
-                        continue;
+                        return;
                     }
                 }
             }
@@ -569,7 +558,7 @@ impl Simulation for Engine {
                 }
                 (self.node, self.node_tick) = (reached, self.tick);
             }
-            if (event && !self.chain) || self.breakpoint_hit || self.tick >= until {
+            if event || self.tick >= until {
                 return;
             }
         }
