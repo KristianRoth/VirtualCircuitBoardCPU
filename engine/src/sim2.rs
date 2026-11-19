@@ -471,6 +471,11 @@ impl Engine {
     pub fn live(&self) -> &[bool] {
         &self.live
     }
+
+    /// Per entity: whether it is flipped by the clock schedule and never evaluated (attempt 11).
+    pub fn scheduled(&self) -> Vec<bool> {
+        self.cell.iter().map(|c| c.op == Op::Scheduled).collect()
+    }
 }
 
 impl Engine {

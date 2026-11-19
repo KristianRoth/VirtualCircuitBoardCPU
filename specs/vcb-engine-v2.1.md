@@ -355,6 +355,32 @@ The item left over from step 2, done once the user had installed `llvm-tools`. `
 
 Asked for by the user as "a simpler graph". Measured first: a simulated tick flips 6 to 7 components but tells a reader about 24 times (132 on the sample), and two thirds or more of those reach an AND or OR-like gate that another input already settles. The attempt made such a gate listen to one settling input only (the watched literals of SAT solvers). The sample ran 1.5 times faster; the user's CPU 6% slower, because its gates are narrow and the count update that was saved is cheaper than moving a watch. Score 0.98, rejected, tag `v2-attempt-25-rejected`. The lesson for other graph ideas: a wasted count update costs about nothing here; a simpler graph only pays if it removes flips, not notifications.
 
+### Second research pass (2026-11-19): 29 more ideas, unchecked
+
+The full report is `specs/vcb-engine-v2.1-research2.md`. It is **one agent's reading** (Opus 5.5, asked for ideas, not winners): its claims were not checked by a second reader as the first pass's were, several sources were seen only as abstracts (it tags each idea *verified*, *claimed* or *our own*), and none of its fit judgments was measured on the engine. Its groups: A, using the regularity inside a context; B, compiling; C, the per-flip kernel; D, the table and hashing; E, other cores; F, bigger units.
+
+A measurement it found missing: the **net change of a simulated step** (state bits that differ between its start and end), against the 290 to 340 flips inside it. Step 8 closed read-set replay with "a step changes about 320 signals", which is the flip count. If the net change is much smaller, applying a step's result instead of simulating it is that much cheaper. A few lines in an estimator.
+
+The five it would look at first:
+
+1. **Three-valued simulation as an estimator (A1), with the net change counted alongside.** Set the bits that vary among the starts of a context to X and simulate the step once in 0/1/X: what stays 0 or 1 is proven the same for any data. It turns the observed 62 to 70% of identical flips into a proof, per context, with no board knowledge, and decides the rest of group A. A day; no engine change.
+2. **Per-context don't-care masks on the replay key (A3).** Bits proven not to matter in a context are left out of its key; the lookup stays one exact hash. Estimated with the read-set tool that exists.
+3. **Decide the flip when the count changes (C1, Maurer's Inversion Algorithm), after measuring mispredicted branches and instructions per flip (C5).** Removes the evaluation pass over woken gates. A few percent at best.
+4. **A compiled fan-out routine per entity (B3, Lewis 1989/1991)** as a one-day micro-benchmark on a recorded flip stream.
+5. **Chains of single-input gates as delay lines (C4).** First only a netlist count of such chains and their share of the flips; minutes.
+
+How attempt 25 bears on these (my reading): items 3 and 4 and the report's C2 work on how readers are told, which attempt 25 found to be nearly free already, so they are worth less than the report thinks. Items 1, 2 and 5 remove flips or whole steps, which is where a gain can still be.
+
+Found nothing useful, so not to be searched again: Hashlife on graphs, affine or GF(2) replay, loop acceleration in emulators, GPU and FPGA simulators, bitmap queues and SIMD gather, run-ahead, model-checking reductions, how the game's own engine works.
+
+### One-input gates counted (2026-11-19): the delay-line idea (C4) is small
+
+`examples/one_input.rs` counts the flips of one-input gates (Buffer, NOT, a one-input OR: pure one-tick delays) among what v2 simulates, over all ticks of v1's run. On the user's CPU they are 85 of 1,888 components but 15% of the flips (day 4 part 2) and 11% (day 1 part 2); the sample 80% (789 gates, 639 of which never flip), the compact sample 3%. A lone one-input gate cannot be removed: its flip is the delay. Only a gate that follows or feeds another one-input gate can: 20 gates on the user's CPU with 8 to 10% of the flips, 1 gate on each sample with none. A chain of two saves one flip of two, so the ceiling is about 5% of the flips of one board, before the cost of a timing wheel and of keeping edges in flight in the replay key. Not built.
+
+### Attempt 26 (2026-11-19): one-input gates without a count, rejected
+
+A one-input gate flips a tick after its input, always, so it was put straight among the next tick's flips, with no count, compare or evaluation. Score 0.957: slower on all of the user's CPU's programs, 1.02 on the sample where such gates make four flips of five. With attempt 25 this closes the kernel ideas that save work per reader told or per gate woken (the second research pass's C1 and C2 among them): that work is already nearly free, and whatever is added to the loop over readers costs more.
+
 ### What the research leaves open
 
 1. Can the split into control and data be found from a netlist, and how much of today's misses would a control-only key recover? (Decides A1.)
