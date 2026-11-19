@@ -161,7 +161,7 @@ The profile decides the order and may add or drop items.
 
 In the game every component takes one tick. Anything that reaches a VMem pin, a Breakpoint or a Random component must happen at exactly the tick it happens in v1.
 
-Compiler settings must leave `cargo build --release` (with the documented environment) producing the accepted build; otherwise the new build command goes into `engine/README.md` and `CLAUDE.md` in the same commit. Profile data is not committed.
+Compiler settings must leave `cargo build --release` (with the documented environment) producing the accepted build; otherwise the new build command goes into `engine/README.md` and `CLAUDE.md` in the same commit. Profile data is not committed. Since attempt 24 the accepted build is made by `sh tools/build-pgo.sh` (profile-guided); a plain `cargo build --release` gives the same engine about 12% slower.
 
 ## Data
 - v2's code lives in new files under `engine/src/`. In v1's files only the trait gains the event primitive; how v1 computes a tick does not change.

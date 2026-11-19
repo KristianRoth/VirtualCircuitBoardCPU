@@ -16,6 +16,14 @@ cargo test                         # about 30 seconds
 cargo test --release -- --ignored  # the CPU run against the game's save, about 8 seconds
 ```
 
+**The fastest build** is made with profile-guided optimisation, which `cargo build --release` alone does not do:
+
+```
+sh tools/build-pgo.sh              # about 70 seconds; needs `rustup component add llvm-tools` once
+```
+
+It builds a recording version of the engine, runs day 1 part 1 on the engine's own fixture board with it, and builds `target/release/vcb` again with what was recorded. The result is about 1.12 times faster on every board tried. A plain `cargo build --release` afterwards replaces it with the ordinary build, which is correct and that much slower. `cargo test` is not affected.
+
 On the author's Mac two settings are needed, because `cargo` is not on the PATH and the default macOS 27 SDK breaks linking:
 
 ```
