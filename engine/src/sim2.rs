@@ -149,6 +149,9 @@ enum Op {
     Trace,
     /// A component that cannot reach a VMem pin, a Breakpoint or a Random: never evaluated (attempt 6).
     Dead,
+    /// A member of a unit that is being replayed (part-level skipping): its signals are not kept up to date,
+    /// nothing wakes it, and what the rest of the circuit needs from the unit comes from the unit's table.
+    Frozen,
 }
 
 pub struct Engine {
@@ -215,6 +218,16 @@ pub struct Engine {
     /// queue and the just-risen marks they follow from, so that states which behave alike are one node.
     forced: Vec<u32>,
     pending: Vec<u32>,
+    /// Part-level skipping (experimental, off unless `enable_units` is called). See `Unit`.
+    units: Vec<Unit>,
+    /// Per entity: its unit (NO_UNIT: none), and the units that read it from outside.
+    unit_of: Vec<u16>,
+    feeds: Lists,
+    /// The operation of every entity when it is not frozen.
+    base_ops: Vec<Op>,
+    /// Units that need a look at the end of the tick: one of their inputs flipped, or they are in a burst.
+    touched: Vec<u16>,
+    active: Vec<u16>,
     scratch: Vec<u64>,
     /// What VMem did in the last tick: the address loaded from, the address written to, and whether a word changed.
     fetched: Option<usize>,
@@ -309,7 +322,7 @@ impl Engine {
         // within its interval would be part of every state, so states would hardly ever repeat).
         let timed = (0..n).any(|e| live[e] && components.kinds[e] == Kind::Component(Ink::Timer));
         let replay = (!ops.contains(&Op::Random) && !timed).then(|| Table::new(live_list.len().div_ceil(64), MEMORY_LIMIT));
-        let mut engine = Engine { loaded_word: 0, replay, scratch: vec![0; live_list.len().div_ceil(64)], live_list, node: NONE, node_tick: 0, real: true, arrays_node: NONE, forced: Vec::new(), pending: Vec::new(), schedule, ops, reads, writes, readers, writers, direct, count: vec![0; n], live, threshold: vec![0; n], on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
+        let mut engine = Engine { loaded_word: 0, replay, scratch: vec![0; live_list.len().div_ceil(64)], live_list, node: NONE, node_tick: 0, real: true, arrays_node: NONE, forced: Vec::new(), pending: Vec::new(), units: Vec::new(), unit_of: Vec::new(), feeds: Lists::new(&[]), base_ops: Vec::new(), touched: Vec::new(), active: Vec::new(), schedule, ops, reads, writes, readers, writers, direct, count: vec![0; n], live, threshold: vec![0; n], on: vec![false; n], rose: vec![false; n], rose_list: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(), queued: vec![false; n], clocks: Vec::new(), clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], components };
         for (role, pins) in [(1, &engine.components.address_pins), (2, &engine.components.content_pins)] {
             for pin in pins {
                 engine.pin_role[*pin as usize] = role;
@@ -386,7 +399,7 @@ impl Engine {
             Op::Latch | Op::Pin => self.on[e] != (self.reads.of(e).iter().filter(|t| self.rose[**t as usize]).count() % 2 == 1),
             // Clocks and timers flip from the schedule in `step`, never from their inputs (observed).
             Op::Scheduled => self.on[e],
-            Op::Random | Op::Trace | Op::Dead => unreachable!("not evaluated here"),
+            Op::Random | Op::Trace | Op::Dead | Op::Frozen => unreachable!("not evaluated here"),
         }
     }
 }
@@ -431,11 +444,15 @@ impl Engine {
             let (from, to) = (self.writes.start[e as usize] as usize, self.writes.start[e as usize + 1] as usize);
             for i in from..to {
                 let t = self.writes.items[i];
+                if self.ops[t as usize] == Op::Frozen {
+                    continue;
+                }
                 let now = self.count[t as usize] > 0;
                 if now == self.on[t as usize] {
                     continue;
                 }
                 self.on[t as usize] = now;
+                self.note_source(t);
                 if now {
                     self.rose[t as usize] = true;
                     self.rose_list.push(t);
@@ -450,6 +467,9 @@ impl Engine {
     /// One input of `reader` turned on (`now`) or off: adjusts its count and queues it if its output can change.
     #[inline(always)]
     fn feed(&mut self, reader: u32, now: bool) {
+        if self.ops[reader as usize] == Op::Frozen {
+            return;
+        }
         let old = self.count[reader as usize];
         let new = old.wrapping_add(if now { 1 } else { u32::MAX });
         self.count[reader as usize] = new;
@@ -459,7 +479,7 @@ impl Engine {
             Op::Or | Op::Breakpoint | Op::Nor | Op::And | Op::Nand => old.max(new) == self.threshold[reader as usize],
             Op::Xor | Op::Xnor | Op::Random => true, // a Random draws at every change of an input
             Op::Latch | Op::Pin => now,              // only a rising input toggles a latch
-            Op::Scheduled | Op::Trace | Op::Dead => false,
+            Op::Scheduled | Op::Trace | Op::Dead | Op::Frozen => false,
         };
         if wake && !self.queued[reader as usize] {
             self.queued[reader as usize] = true;
@@ -512,6 +532,13 @@ impl Engine {
         if !self.schedule.at.is_empty() {
             flips.extend(&self.schedule.at[self.schedule.key(self.tick)]);
         }
+        // A unit that is being replayed in the middle of a burst: its table says what it hands out in this tick.
+        for &u in &self.active {
+            let unit = &self.units[u as usize];
+            if unit.frozen {
+                flips.extend(unit.outs(unit.node));
+            }
+        }
 
         // 2. Apply.
         for t in self.rose_list.drain(..) {
@@ -522,6 +549,11 @@ impl Engine {
             self.on[e as usize] = !self.on[e as usize];
             if self.ops[e as usize] == Op::Breakpoint && self.on[e as usize] {
                 self.breakpoint_hit = true;
+            }
+        }
+        if !self.units.is_empty() {
+            for &e in &flips {
+                self.note_source(e);
             }
         }
         self.propagate(&flips);
@@ -544,6 +576,9 @@ impl Engine {
                         loaded.push(pin);
                     }
                 }
+                for &e in &loaded {
+                    self.note_source(e);
+                }
                 self.propagate(&loaded);
             }
             let flipped = |role| flips.iter().any(|e| self.pin_role[*e as usize] == role);
@@ -564,6 +599,12 @@ impl Engine {
         self.flips = flips;
         self.work = dirty;
         self.work.clear();
+        if !self.touched.is_empty() || !self.active.is_empty() {
+            self.units_end_of_tick();
+        }
+        if std::env::var_os("VCB_UNITS_CHECK").is_some() {
+            self.units_check();
+        }
     }
 
 }
@@ -583,6 +624,16 @@ impl Engine {
 
     /// Makes `state()` true for the current tick. Replay moves on without the circuit; this brings it along.
     pub fn sync(&mut self) {
+        for u in 0..self.units.len() {
+            if self.units[u].frozen {
+                self.unit_thaw(u, false);
+            }
+        }
+        self.sync_board();
+    }
+
+    /// The whole-board half of `sync`: frozen units stay frozen.
+    fn sync_board(&mut self) {
         if !self.real {
             self.restore(self.node);
         }
@@ -705,8 +756,8 @@ impl Simulation for Engine {
                     }
                 }
             }
-            self.sync();
-            if self.dirty.is_empty() && self.forced.is_empty() && self.rose_list.is_empty() && !self.load_pending && !self.locked {
+            self.sync_board();
+            if self.dirty.is_empty() && self.forced.is_empty() && self.rose_list.is_empty() && !self.load_pending && !self.locked && self.active.is_empty() {
                 let next_flip = |ticks: &[u32], interval: u64| if ticks.is_empty() { u64::MAX } else { (self.tick / interval + 1) * interval };
                 let target = until.min(next_flip(&self.clocks, self.clock_interval)).min(next_flip(&self.timers, self.timer_ticks)).min(self.schedule.next(self.tick));
                 if target > self.tick + 1 {
@@ -753,5 +804,432 @@ impl Simulation for Engine {
 
     fn vmem_changed(&self) -> bool {
         self.vmem_changed
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Part-level skipping (experimental; specs/vcb-engine-v2-log.md, "Ideas not tried" and attempt 12).
+//
+// A **unit** is a sparsely connected part of the circuit, found from the netlist alone. The rest of the
+// circuit steers it only through its inputs, and sees of it only the flips of its output components.
+// A unit has its own table of **nodes**: its signals, its inputs' values and the components of it that flip
+// in the next tick. From a node, the next node follows from which inputs flip in the tick in between: none
+// (the common case inside a burst: one array lookup) or a set of them (one hash lookup). While a unit is
+// **frozen** its inside is not simulated at all: each tick its node says which outputs flip, and the next
+// node is looked up. When a lookup fails the unit is thawed: its signals are rebuilt from the node and it is
+// simulated like everything else, which also teaches the table what it did not know.
+// ---------------------------------------------------------------------------------------------------------
+
+const NO_UNIT: u16 = u16::MAX;
+
+struct UnitNode {
+    hash: u64,
+    /// The next node with the same hash.
+    same: u32,
+    /// In `lists`: the components that flip in the next tick, then those of them the outside sees.
+    at: u32,
+    pending: u32,
+    outs: u32,
+}
+
+#[derive(Default)]
+struct Unit {
+    /// The gates and latches of the unit, and its traces (those nothing outside reads).
+    comps: Vec<u32>,
+    traces: Vec<u32>,
+    /// What the unit reads from outside.
+    inputs: Vec<u32>,
+    words: usize,
+    bits: Vec<u64>,
+    lists: Vec<u32>,
+    nodes: Vec<UnitNode>,
+    by_hash: std::collections::HashMap<u64, u32, std::hash::BuildHasherDefault<crate::replay::Mix>>,
+    /// Per node: the node one tick later when no input flips (NONE: not seen yet).
+    next: Vec<u32>,
+    /// (node, the inputs that flipped) to the node one tick later.
+    by_event: std::collections::HashMap<(u32, u64), u32, std::hash::BuildHasherDefault<crate::replay::Mix>>,
+    frozen: bool,
+    node: u32,
+    /// The inputs that flipped in this tick, as a sum of their hashes (0: none).
+    signature: u64,
+    touched: bool,
+    scratch: Vec<u64>,
+    /// Statistics: flips not simulated, lookups that failed, nodes looked up or stored while simulating.
+    skipped: u64,
+    misses: u64,
+    recorded: u64,
+}
+
+impl Unit {
+    fn pending(&self, node: u32) -> &[u32] {
+        let n = &self.nodes[node as usize];
+        &self.lists[n.at as usize..(n.at + n.pending) as usize]
+    }
+
+    fn outs(&self, node: u32) -> &[u32] {
+        let n = &self.nodes[node as usize];
+        &self.lists[(n.at + n.pending) as usize..(n.at + n.pending + n.outs) as usize]
+    }
+}
+
+impl Engine {
+    /// An input of some unit flipped: the unit must look at its situation at the end of this tick.
+    #[inline(always)]
+    fn note_source(&mut self, e: u32) {
+        if self.feeds.start.len() <= 1 {
+            return;
+        }
+        for i in self.feeds.start[e as usize] as usize..self.feeds.start[e as usize + 1] as usize {
+            let u = self.feeds.items[i] as u16;
+            let unit = &mut self.units[u as usize];
+            // A well mixed number per input, summed: the order in which inputs flip within a tick does not matter,
+            // and two different sets do not meet. (A plain multiple of the entity number would: 246 + 252 = 248 + 250.)
+            let mut h = (e as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+            h = (h ^ h >> 30).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            h = (h ^ h >> 27).wrapping_mul(0x94d0_49bb_1331_11eb);
+            unit.signature = unit.signature.wrapping_add((h ^ h >> 31) | 1);
+            if !std::mem::replace(&mut unit.touched, true) {
+                self.touched.push(u);
+            }
+        }
+    }
+
+    /// Switches part-level skipping on (experimental). Call it before the first tick. The parts are found from
+    /// the netlist alone: every trace that more than T components share is cut, T = 32, 16, 8, 4, 2; a part is
+    /// split while it has more than `largest` entities and becomes a unit if it has at least `smallest`.
+    /// Whole-board replay is switched off: the two are not joined yet.
+    pub fn enable_units(&mut self, largest: usize, smallest: usize) {
+        let c = &self.components;
+        let n = c.kinds.len();
+        self.replay = None;
+        self.base_ops = self.ops.clone();
+        if self.ops.contains(&Op::Random) || n == 0 {
+            return; // every flip must come in v1's order
+        }
+        // The same picture of the circuit as the estimator's: what is simulated, with the one-writer traces.
+        let simulated: Vec<bool> = (0..n).map(|e| self.live[e] || (c.kinds[e] == Kind::Trace && c.writers[e].len() == 1 && self.live[c.writers[e][0] as usize])).collect();
+        let degree: Vec<usize> = (0..n).map(|e| if c.kinds[e] == Kind::Trace && simulated[e] { c.readers[e].iter().chain(&c.writers[e]).filter(|x| simulated[**x as usize]).count() } else { 0 }).collect();
+        let connected = |inside: &[bool], threshold: usize| {
+            let mut part = vec![NONE; n];
+            let mut sizes: Vec<usize> = Vec::new();
+            for start in 0..n {
+                if !inside[start] || degree[start] > threshold || part[start] != NONE {
+                    continue;
+                }
+                let id = sizes.len() as u32;
+                let (mut todo, mut size) = (vec![start], 0);
+                part[start] = id;
+                while let Some(e) = todo.pop() {
+                    size += 1;
+                    let next = if c.kinds[e] == Kind::Trace { c.readers[e].iter().chain(&c.writers[e]) } else { c.reads[e].iter().chain(&c.writes[e]) };
+                    for &x in next {
+                        let x = x as usize;
+                        if inside[x] && degree[x] <= threshold && part[x] == NONE {
+                            part[x] = id;
+                            todo.push(x);
+                        }
+                    }
+                }
+                sizes.push(size);
+            }
+            (part, sizes)
+        };
+        // From the coarsest cut down: a part that is small enough is taken, a larger one is cut again.
+        let mut open = simulated.clone();
+        let mut chosen: Vec<Vec<usize>> = Vec::new();
+        for threshold in [32usize, 16, 8, 4, 2] {
+            let (part, sizes) = connected(&open, threshold);
+            let mut groups: Vec<Vec<usize>> = vec![Vec::new(); sizes.len()];
+            for e in 0..n {
+                if part[e] != NONE {
+                    groups[part[e] as usize].push(e);
+                }
+            }
+            for (group, size) in groups.into_iter().zip(sizes) {
+                if size <= largest {
+                    for &e in &group {
+                        open[e] = false;
+                    }
+                    if size >= smallest {
+                        chosen.push(group);
+                    }
+                }
+            }
+        }
+        // The members: gates and latches, and the traces that only members read. Pins, Breakpoints and what the
+        // schedule drives stay outside: something else also moves them, or their flip must be seen.
+        self.unit_of = vec![NO_UNIT; n];
+        let member = |op: Op| matches!(op, Op::Or | Op::Nor | Op::And | Op::Nand | Op::Xor | Op::Xnor | Op::Latch);
+        for group in chosen {
+            let u = self.units.len() as u16;
+            let comps: Vec<u32> = group.iter().filter(|e| self.live[**e] && member(self.ops[**e])).map(|e| *e as u32).collect();
+            if comps.len() < 8 || u == NO_UNIT - 1 {
+                continue;
+            }
+            for &e in &comps {
+                self.unit_of[e as usize] = u;
+            }
+            let traces: Vec<u32> = group.iter().filter(|t| self.live[**t] && self.ops[**t] == Op::Trace && self.readers.of(**t).iter().all(|r| self.unit_of[*r as usize] == u)).map(|t| *t as u32).collect();
+            for &t in &traces {
+                self.unit_of[t as usize] = u;
+            }
+            self.units.push(Unit { comps, traces, node: NONE, ..Default::default() });
+        }
+        // Inputs: what a member reads that is not a member; for a member trace, its writers that are not members.
+        let mut feeds: Vec<Vec<u32>> = vec![Vec::new(); n];
+        for u in 0..self.units.len() {
+            let mut inputs: Vec<u32> = Vec::new();
+            for &e in self.units[u].comps.iter() {
+                inputs.extend(self.reads.of(e as usize).iter().filter(|x| self.unit_of[**x as usize] != u as u16));
+            }
+            for &t in self.units[u].traces.iter() {
+                inputs.extend(self.writers.of(t as usize).iter().filter(|x| self.unit_of[**x as usize] != u as u16));
+            }
+            inputs.sort_unstable();
+            inputs.dedup();
+            for &x in &inputs {
+                feeds[x as usize].push(u as u32);
+            }
+            let unit = &mut self.units[u];
+            unit.words = (unit.comps.len() + unit.traces.len() + inputs.len()).div_ceil(64);
+            unit.scratch = vec![0; unit.words];
+            unit.inputs = inputs;
+            // Every unit starts simulated, and looks at its situation after the first tick.
+            unit.touched = true;
+            self.touched.push(u as u16);
+        }
+        self.feeds = Lists::new(&feeds);
+    }
+
+    /// (units, flips they skipped, lookups that failed, nodes looked up or stored while simulating, nodes kept)
+    pub fn unit_stats(&self) -> (usize, u64, u64, u64, usize) {
+        self.units.iter().fold((self.units.len(), 0, 0, 0, 0), |a, u| (a.0, a.1 + u.skipped, a.2 + u.misses, a.3 + u.recorded, a.4 + u.nodes.len()))
+    }
+
+    /// True when the outside sees component `e` of unit `u` flip: something outside reads it or a trace it writes.
+    fn unit_output(&self, u: u16, e: u32) -> bool {
+        self.direct.of(e as usize).iter().any(|r| self.unit_of[*r as usize] != u) || self.writes.of(e as usize).iter().any(|t| self.unit_of[*t as usize] != u)
+    }
+
+    /// The node of a simulated unit as it stands at the end of a tick. (node, whether it was known already)
+    fn unit_intern(&mut self, u: usize) -> (u32, bool) {
+        /// Nodes a unit may keep. At the limit it learns nothing new and stays simulated where it does not know.
+        const LIMIT: usize = 1 << 20;
+        let mut unit = std::mem::take(&mut self.units[u]);
+        unit.recorded += 1;
+        let mut scratch = std::mem::take(&mut unit.scratch);
+        let all = unit.comps.iter().chain(&unit.traces).chain(&unit.inputs);
+        scratch.fill(0);
+        for (i, e) in all.enumerate() {
+            scratch[i >> 6] |= (self.on[*e as usize] as u64) << (i & 63);
+        }
+        // What flips in the next tick: what was forced, and what is queued and evaluates to a change.
+        let mut pending = std::mem::take(&mut self.pending);
+        pending.clear();
+        pending.extend(self.forced.iter().filter(|e| self.unit_of[**e as usize] == u as u16));
+        for &e in &self.dirty {
+            if self.unit_of[e as usize] == u as u16 && self.evaluate(e as usize, self.ops[e as usize]) != self.on[e as usize] {
+                pending.push(e);
+            }
+        }
+        pending.sort_unstable();
+        pending.dedup();
+        let mut hash = 0x243f_6a88_85a3_08d3u64;
+        for w in scratch.iter().chain(pending.iter().map(|e| *e as u64 | 1 << 40).collect::<Vec<u64>>().iter()) {
+            hash = (hash ^ *w).wrapping_mul(0x9e37_79b9_7f4a_7c15).rotate_left(31);
+        }
+        let mut id = unit.by_hash.get(&hash).copied().unwrap_or(NONE);
+        let first = id;
+        while id != NONE {
+            if unit.bits[id as usize * unit.words..(id as usize + 1) * unit.words] == scratch[..] && unit.pending(id) == &pending[..] {
+                break;
+            }
+            id = unit.nodes[id as usize].same;
+        }
+        let known = id != NONE;
+        if !known && unit.nodes.len() < LIMIT {
+            id = unit.nodes.len() as u32;
+            let outs: Vec<u32> = pending.iter().copied().filter(|e| self.unit_output(u as u16, *e)).collect();
+            unit.nodes.push(UnitNode { hash, same: first, at: unit.lists.len() as u32, pending: pending.len() as u32, outs: outs.len() as u32 });
+            unit.lists.extend(&pending);
+            unit.lists.extend(&outs);
+            unit.bits.extend(&scratch);
+            unit.next.push(NONE);
+            unit.by_hash.insert(hash, id);
+        }
+        unit.scratch = scratch;
+        self.pending = pending;
+        self.units[u] = unit;
+        (id, known)
+    }
+
+    /// Stops simulating a unit: it stands at a node it knows.
+    fn unit_freeze(&mut self, u: usize) {
+        let unit = std::mem::take(&mut self.units[u]);
+        for &e in unit.comps.iter().chain(&unit.traces) {
+            self.ops[e as usize] = Op::Frozen;
+        }
+        let (unit_of, queued) = (&self.unit_of, &mut self.queued);
+        self.dirty.retain(|e| {
+            let inside = unit_of[*e as usize] == u as u16;
+            if inside {
+                queued[*e as usize] = false;
+            }
+            !inside
+        });
+        self.units[u] = Unit { frozen: true, ..unit };
+    }
+
+    /// Makes a frozen unit simulated again, from its node. `stepped`: the tick after that node has already
+    /// happened for the rest of the circuit (a lookup failed), so the unit catches up with it here: its
+    /// pending flips are applied and every member is evaluated in the next tick. Otherwise the unit stands at
+    /// its node and its pending flips are left for the next tick.
+    fn unit_thaw(&mut self, u: usize, stepped: bool) {
+        let unit = std::mem::take(&mut self.units[u]);
+        let bits = &unit.bits[unit.node as usize * unit.words..(unit.node as usize + 1) * unit.words];
+        for (i, &e) in unit.comps.iter().chain(&unit.traces).enumerate() {
+            self.ops[e as usize] = self.base_ops[e as usize];
+            self.on[e as usize] = bits[i >> 6] >> (i & 63) & 1 == 1;
+        }
+        if stepped {
+            for &e in unit.pending(unit.node) {
+                self.on[e as usize] = !self.on[e as usize];
+                if self.on[e as usize] && !std::mem::replace(&mut self.rose[e as usize], true) {
+                    self.rose_list.push(e);
+                }
+            }
+        } else {
+            self.forced.extend(unit.pending(unit.node));
+        }
+        // The counts follow from the signals. A trace of the unit is on when one of its writers is.
+        for &t in &unit.traces {
+            let count = self.writers.of(t as usize).iter().filter(|w| self.on[**w as usize]).count() as u32;
+            self.count[t as usize] = count;
+            if stepped && (count > 0) != self.on[t as usize] {
+                self.on[t as usize] = count > 0;
+                if count > 0 && !std::mem::replace(&mut self.rose[t as usize], true) {
+                    self.rose_list.push(t);
+                }
+            }
+        }
+        for &e in &unit.comps {
+            self.count[e as usize] = self.reads.of(e as usize).iter().filter(|i| self.on[**i as usize]).count() as u32;
+            // After a missed tick anything in the unit may have a changed input: evaluate them all once.
+            if stepped && !std::mem::replace(&mut self.queued[e as usize], true) {
+                self.dirty.push(e);
+            }
+        }
+        self.units[u] = Unit { frozen: false, ..unit };
+    }
+
+    /// Debugging: a unit that is simulated and at rest must show exactly the signals of its node.
+    #[allow(dead_code)]
+    fn units_check(&self) {
+        for (u, unit) in self.units.iter().enumerate() {
+            if unit.node == NONE || unit.touched || self.active.contains(&(u as u16)) {
+                continue;
+            }
+            let bits = &unit.bits[unit.node as usize * unit.words..(unit.node as usize + 1) * unit.words];
+            for (i, &e) in unit.comps.iter().chain(&unit.traces).chain(&unit.inputs).enumerate() {
+                let member = i < unit.comps.len() + unit.traces.len();
+                if (member && unit.frozen && self.direct.of(e as usize).is_empty() && self.writes.of(e as usize).is_empty()) || (member && unit.frozen) {
+                    continue;
+                }
+                if self.on[e as usize] != (bits[i >> 6] >> (i & 63) & 1 == 1) {
+                    panic!("units check: tick {}, unit {u} (frozen {}) node {}: entity {e} ({:?}, {}) is {} but the node says otherwise; its unit {}, feeds {:?}", self.tick, unit.frozen, unit.node, self.components.kinds[e as usize], if member { "member" } else { "input" }, self.on[e as usize], self.unit_of[e as usize], self.feeds.of(e as usize));
+                }
+            }
+        }
+    }
+
+    /// At the end of a tick: every unit that had an input flip or is in a burst finds its next node.
+    fn units_end_of_tick(&mut self) {
+        // The common case first: a frozen unit in a burst, no input flipped, the next node is known.
+        let mut i = 0;
+        while i < self.active.len() {
+            let u = self.active[i];
+            let unit = &mut self.units[u as usize];
+            if unit.frozen && !unit.touched && unit.next[unit.node as usize] != NONE {
+                unit.skipped += unit.nodes[unit.node as usize].pending as u64;
+                unit.node = unit.next[unit.node as usize];
+                if unit.nodes[unit.node as usize].pending > 0 {
+                    i += 1;
+                } else {
+                    self.active.swap_remove(i);
+                }
+                continue;
+            }
+            if !std::mem::replace(&mut unit.touched, true) {
+                self.touched.push(u);
+            }
+            self.active.swap_remove(i);
+        }
+        if self.touched.is_empty() {
+            return;
+        }
+        let mut list = std::mem::take(&mut self.touched);
+        for &u16 in &list {
+            let u = u16 as usize;
+            let signature = std::mem::take(&mut self.units[u].signature);
+            self.units[u].touched = false;
+            let node = self.units[u].node;
+            if self.units[u].frozen {
+                let unit = &mut self.units[u];
+                unit.skipped += unit.nodes[node as usize].pending as u64;
+                let to = if signature == 0 { unit.next[node as usize] } else { unit.by_event.get(&(node, signature)).copied().unwrap_or(NONE) };
+                if to != NONE {
+                    unit.node = to;
+                } else {
+                    unit.misses += 1;
+                    self.unit_thaw(u, true);
+                    let (reached, _) = self.unit_intern(u);
+                    self.unit_link(u, node, signature, reached);
+                    self.units[u].node = reached;
+                }
+            } else if node == NONE {
+                self.units[u].node = self.unit_intern(u).0;
+            } else if signature != 0 || self.units[u].nodes[node as usize].pending > 0 {
+                let (reached, known) = self.unit_intern(u);
+                self.unit_link(u, node, signature, reached);
+                self.units[u].node = reached;
+                // Back at a node whose continuation is known: stop simulating the unit.
+                if reached != NONE && known && (self.units[u].nodes[reached as usize].pending == 0 || self.units[u].next[reached as usize] != NONE) {
+                    self.unit_freeze(u);
+                }
+            }
+            let unit = &self.units[u];
+            if unit.node != NONE && unit.nodes[unit.node as usize].pending > 0 {
+                self.active.push(u16);
+            } else if unit.node == NONE && !unit.frozen {
+                // Not known where it stands (the table is full): look again at its next input change.
+            }
+        }
+        list.clear();
+        self.touched = list;
+    }
+
+    fn unit_link(&mut self, u: usize, from: u32, signature: u64, to: u32) {
+        if from == NONE || to == NONE {
+            return;
+        }
+        let unit = &mut self.units[u];
+        if signature == 0 {
+            if unit.next[from as usize] != NONE && unit.next[from as usize] != to {
+                let old = unit.next[from as usize];
+                let w = unit.words;
+                let names: Vec<u32> = unit.comps.iter().chain(&unit.traces).chain(&unit.inputs).copied().collect();
+                let differ: Vec<(u32, &str)> = (0..names.len()).filter(|i| (unit.bits[old as usize * w + (i >> 6)] ^ unit.bits[to as usize * w + (i >> 6)]) >> (i & 63) & 1 == 1).map(|i| (names[i], if i < unit.comps.len() { "comp" } else if i < unit.comps.len() + unit.traces.len() { "trace" } else { "input" })).collect();
+                panic!("units: unit {u} at tick {} node {from} (pending {:?}) led to {old} (pending {:?}) and now {to} (pending {:?}); signals that differ: {differ:?}", self.tick, unit.pending(from), unit.pending(old), unit.pending(to));
+            }
+            unit.next[from as usize] = to;
+        } else {
+            let old = unit.by_event.insert((from, signature), to);
+            if let Some(old) = old.filter(|old| *old != to) {
+                let w = unit.words;
+                let names: Vec<u32> = unit.comps.iter().chain(&unit.traces).chain(&unit.inputs).copied().collect();
+                let differ: Vec<(u32, &str)> = (0..names.len()).filter(|i| (unit.bits[old as usize * w + (i >> 6)] ^ unit.bits[to as usize * w + (i >> 6)]) >> (i & 63) & 1 == 1).map(|i| (names[i], if i < unit.comps.len() { "comp" } else if i < unit.comps.len() + unit.traces.len() { "trace" } else { "input" })).collect();
+                panic!("units: unit {u} at tick {} node {from} (pending {:?}) with inputs {signature:x} led to {old} (pending {:?}) and now {to} (pending {:?}); signals that differ: {differ:?}", self.tick, unit.pending(from), unit.pending(old), unit.pending(to));
+            }
+        }
     }
 }

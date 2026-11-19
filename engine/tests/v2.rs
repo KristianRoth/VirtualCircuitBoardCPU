@@ -146,3 +146,59 @@ fn v2_replaying_a_whole_program_equals_v1() {
         assert!(memory == usize::MAX || bytes <= memory);
     }
 }
+
+/// Part-level skipping (experimental): v2 with units against v1. First stepped tick by tick (every unit is
+/// thawed before each tick and may freeze again after it), then moved by events with limits of many sizes, so
+/// that units stay frozen over many ticks and are thawed by lookups that fail.
+fn units_equal_v1(ticks: u64, largest: usize) {
+    for name in ["cpu-aoc1p1.vcb", "cpu-aoc1p2.vcb"] {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/boards").join(name);
+        let mut board = Board::read(&path).unwrap();
+        let text = board.assembly.clone();
+        vcb::asm::assemble(&text, name, &mut board, true).unwrap();
+        let components = Components::build(&board).unwrap();
+        for by_events in [false, true] {
+            let mut v1 = sim::Engine::new(&board, components.clone(), &Default::default()).unwrap();
+            let mut v2 = sim2::Engine::new(&board, components.clone(), &Default::default()).unwrap();
+            v2.enable_units(largest, 32);
+            assert!(v2.unit_stats().0 > 0, "{name}: no units were found");
+            let mut stops = 0u64;
+            while v1.tick() < ticks && !v1.breakpoint_hit() {
+                if by_events {
+                    v2.advance(v2.tick() + [100_000, 1_000, 173, 40_000, 7][(stops % 5) as usize]);
+                } else {
+                    v2.step();
+                }
+                while v1.tick() < v2.tick() {
+                    v1.step();
+                    let event = v1.breakpoint_hit() || v1.vmem_access() != (None, None);
+                    assert!(!event || v1.tick() == v2.tick(), "{name}: v2 passed over v1's event at tick {}", v1.tick());
+                }
+                let same = v1.breakpoint_hit() == v2.breakpoint_hit() && v1.vmem_access() == v2.vmem_access() && v1.vmem_changed() == v2.vmem_changed();
+                assert!(same, "{name}: v2's event differs from v1's at tick {}", v1.tick());
+                if !by_events || stops % 16 == 0 {
+                    v2.sync();
+                    let signals = v1.state().iter().zip(v2.state()).zip(v2.live()).position(|((a, b), live)| a != b && *live);
+                    assert!(signals.is_none(), "{name}: entity {signals:?} differs at tick {} (by events: {by_events})", v1.tick());
+                }
+                stops += 1;
+            }
+            assert!(v1.vmem() == v2.vmem(), "{name}: VMem differs");
+            let (units, skipped, misses, _, _) = v2.unit_stats();
+            assert!(!by_events || skipped > 0 || name != "cpu-aoc1p1.vcb", "{name}: {units} units skipped nothing ({misses} misses)");
+        }
+    }
+}
+
+#[test]
+fn v2_with_units_equals_v1() {
+    units_equal_v1(60_000, 512);
+    units_equal_v1(60_000, 4096);
+}
+
+/// Several minutes in a release build: cargo test --release -- --ignored
+#[test]
+#[ignore]
+fn v2_with_units_equals_v1_on_whole_programs() {
+    units_equal_v1(u64::MAX, 512);
+}
