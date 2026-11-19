@@ -85,7 +85,7 @@ For the families that replay or jump (the last two in the table below), "the sam
 - the Random generator's position;
 - every word VMem delivered during the stretch: either part of the key, or the stretch ends at each load.
 
-A replay is used only after the full recorded state has been compared; a hash only finds candidates. As built (attempt 8 in the log): the pending work is stored as the components that flip in the next tick, which is what it amounts to; every VMem load ends a step, so delivered words select the successor and are not part of the state; replay is off on boards with Random ink or a simulated Timer. The profile counts repeats on this full key.
+A replay is used only after the full recorded state has been compared; a hash only finds candidates. As built (attempt 8 in the log): the pending work is stored as the components that flip in the next tick, which is what it amounts to; every VMem load ends a step, so delivered words select the successor and are not part of the state; replay is off on boards with Random ink. On a board with a simulated Timer (since attempt 23) the timers' position in their interval is not part of a state, and a step is recorded and replayed only if no timer flips in it. The profile counts repeats on this full key.
 
 ### The engine optimises the simulator, not a board
 Decided by the user on 2026-11-19. The goal is a faster simulator for any board, not a faster run of the user's CPU.

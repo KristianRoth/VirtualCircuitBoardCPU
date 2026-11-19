@@ -45,7 +45,7 @@ The user's CPU has 10,593 entities; about 2,100 are simulated.
 2. **Idle-tick jump** (attempt 7). With nothing queued, straight to the next tick at which the schedule, a clock or a timer flips something.
 3. **One tick of simulation.** The queued components are evaluated by comparing a count with a threshold; the ones that change flip; the counts of what they feed are adjusted; a gate whose output cannot change from that is not queued. No allocation (attempt 1), no divisions or pin scans (attempt 13), no bounds checks in a release build (attempt 14).
 
-**Off in special cases:** replay on a board with Random ink or a simulated Timer; the trace merge and the schedule on a board with Random ink (every flip must come in v1's order there).
+**Off in special cases:** replay on a board with Random ink (and, until attempt 23 in v2.1, with a simulated Timer); the trace merge and the schedule on a board with Random ink (every flip must come in v1's order there).
 
 ## Every attempt
 
@@ -206,9 +206,9 @@ Proposed 2026-11-19; the user decides. Ordered by what an idea could give, how s
 | 3 (done) | **Cheaper misses in replay**: fewer lookups during a run of misses (9), a hash kept up to date flip by flip (B6) | Packing and lookup were 15% of simulated stretches when last measured; step 0 says what they are now | a day | Skipped if step 0 shows the share is small |
 | 4 (done) | **Layout**: one record per entity (1), then renumbering with 16-bit indices (2), with Arcilator's layout and grouping passes (B1) looked at on the way | Certain but moderate, and every index in v2 changes, so it comes after the small things that would otherwise have to be redone | days | Benchmark |
 | 5 (done) | **The table across runs and under a limit**: saved between runs (6), entries thrown away at the memory limit (A2, 11) | Worth as much as the same board is run again; needed in any case before a program outgrows 2 GiB | a day or two | How the user works: repeated runs or new programs |
-| 6 | **Control-keyed replay built**, if step 1 says so | The largest possible gain left | a week | Full runs |
-| 7 | **Replay on a board with a simulated Timer** (8) | Only the compact sample gains (3.9 times today, the lowest row). Keeps the benchmark honest across designs; nothing for the user's CPU | unknown | An estimator first |
-| 8 | **Unrolling one schedule period** (C1), as an estimator | A different model of the circuit; only worth the look if step 1 fails | a day to measure | Whether the unrolled form stays small |
+| 6 (closed by steps 1 and 8) | **Control-keyed replay built**, if step 1 says so | The largest possible gain left | a week | Full runs |
+| 7 (done) | **Replay on a board with a simulated Timer** (8) | Only the compact sample gains (3.9 times today, the lowest row). Keeps the benchmark honest across designs; nothing for the user's CPU | unknown | An estimator first |
+| 8 (done: closed) | **Unrolling one schedule period** (C1), as an estimator | A different model of the circuit; only worth the look if step 1 fails | a day to measure | Whether the unrolled form stays small |
 | 9 | **The speculative ones**: warming the table on other cores (A4), native code for recurring event sequences (B5), Hashlife-style memoization (A5), write and read fused (B3) | No source or measurement behind them yet | each needs an estimator first | |
 
 Not to be tried: per-partition activity, the circuit split over threads, whole-circuit compiled simulation, an instruction-level model from a hand-written template (section D and C2).
@@ -307,6 +307,45 @@ On full runs the two accepted attempts give 1.17 together: day 4 part 2 in 11.5 
 - A different program gains almost nothing from another program's table.
 
 **What it says:** states are reused soon after they are learnt, and are local to where a program is. A small table is nearly as good as a large one, and a table does not carry over from program to program. That speaks against idea A4 (warming the table on other cores with guessed words would have to guess the near future, not reuse the past) and for keeping tables small.
+
+### Step 8 done (2026-11-19): replaying the control and simulating only the data, measured and closed
+
+The question behind "unrolling": FastSim replays 99.7% because it memoizes only the control and lets the data be computed. Could v2 replay a step's control from a record and simulate only its data? Measured with `engine/examples/control_estimate.rs` on the reference engine, 10 million ticks per run, over the steps that replay simulates today. No engine code was written: the numbers say what a build would give.
+
+**First measurement: how much of a simulated step is control at all.** Steps are grouped into contexts (the same length, the same kind of event at the end, the same address loaded: on a CPU, the same place in the program). A flip that every step of a context makes, the same signal at the same tick, does not depend on the data.
+
+| Program | Contexts | Flips per simulated step | The same in every step of the context | Different from step to step |
+|---|---|---|---|---|
+| day 1 part 2 | 1,348 | 339 | 66.9% | 30.7% |
+| day 2 part 2 | 604 | 337 | 62.5% | 37.1% |
+| day 4 part 2 | 690 | 310 | 63.8% | 36.2% |
+| sample | 538 | 311 | 70.2% | 28.5% |
+| sample compact | 464 | 293 | 66.0% | 33.4% |
+
+So two thirds of the work in a simulated step is fixed by where the program is, in only a few hundred contexts. That is the ceiling: an engine that got those flips for nothing would do a third of today's work in the steps it simulates, about 2.3 times faster overall on the weak programs.
+
+**Second measurement: what a split that can be built would save.** To replay control without simulating it, the control has to be a fixed set of entities that is looked up while the rest is simulated (the machinery of attempt 12, with one part). Take as data every entity that showed a data-dependent flip anywhere, and as control the rest, and count per tick of a simulated step:
+
+| | day 1 part 2 | day 4 part 2 | sample |
+|---|---|---|---|
+| Control entities / data entities | 757 / 1,344 | 828 / 1,273 | 1,737 / 1,374 |
+| Control flips that would not be simulated | 0.91 | 0.96 | 1.15 |
+| Control flips still applied (data reads them) | 0.17 | 0.16 | 0.16 |
+| Data flips, still simulated | 7.56 | 6.72 | 9.07 |
+| Ticks that need a hashed lookup (a data signal that control reads flipped) | 16% | 19% | 19% |
+| Ticks in which the control part knows its situation | 98.8% | 99.1% | 96.8% |
+
+**Verdict: closed.** With a fixed split the control part recognises its situation 97% to 99% of the time, as hoped, but it holds only one flip in nine. It would save about 0.9 flips per tick, some 10% of a simulated tick, and pay a hashed lookup in every fifth or sixth tick, which costs about as much. Net gain: none.
+
+Why the two measurements differ: the two thirds of the flips that are the same in every step of a context are mostly made by entities that are data-dependent in some other context. The bus carries an instruction word in one step and a value in the next; a register bit is loaded with a constant here and a result there. Control and data are not two sets of gates; the same gates are one or the other depending on where the program is. FastSim has the split because its simulator was written with it. A netlist does not have it.
+
+What would be left to try is a split per context: per place in the program, a record of the flips that are fixed there. That is no longer replaying a part of the circuit; it is compiling each place of the program into its own reduced simulation (idea B5, native code for recurring event sequences, is its nearest form). There is no design for it and no estimate of what applying a fixed flip costs when its readers still have to be told. It stays on the list as speculative.
+
+With this, steps 6 and 8 are both answered: a key on what a step reads gives little (step 1) and cannot pay, because a step changes about 320 signals and putting them into the circuit costs what simulating them costs; and a control part that is replayed while data is simulated saves a tenth and pays it back in lookups. Whole-state replay works because it never touches the circuit while it stays in its table. No way was found to extend that to states that differ in their data.
+
+### Step 7 done (2026-11-19): attempt 23
+
+Replay now works on a board with a simulated Timer, for the steps in which no timer flips (the timers' position stays out of the states). The compact sample goes from 63 to 169 M ticks per second on a full run; nothing else changes. Checked with `--verify` at four timer intervals.
 
 ### What the research leaves open
 
