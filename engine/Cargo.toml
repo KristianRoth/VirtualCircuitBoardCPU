@@ -21,5 +21,9 @@ codegen-units = 1
 panic = "abort"
 
 # `--cfg profiling` switches on v2's counters and keeps its main functions apart for a sampling profiler.
+# `--cfg parts` adds the calls at the boundaries inside a step that examples/counters.rs reads the processor's counters at.
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(profiling)', 'cfg(separate)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(profiling)', 'cfg(separate)', 'cfg(parts)'] }
+
+[dev-dependencies]
+darwin-kperf = "0.1.1"

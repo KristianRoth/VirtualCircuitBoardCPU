@@ -406,9 +406,9 @@ impl Engine {
                 // A copy of the circuit without the replay table (one is needed, empty, for the packed signals).
                 let (table, split) = (self.replay.take(), std::mem::take(&mut self.split));
                 let mut engine = self.clone();
-                // A clone keeps a vector's length, not its capacity, and `feed` pushes to the queue without a check.
-                engine.dirty.reserve_exact(self.cell.len());
-                engine.work.reserve_exact(self.cell.len());
+                // A clone keeps a vector's length, not its capacity, and `feed` writes to the queue without a check (see `push_queued`).
+                engine.dirty.reserve_exact(self.cell.len() + 1);
+                engine.work.reserve_exact(self.cell.len() + 1);
                 (self.replay, self.split) = (table, split);
                 engine.replay = Some(Table::new(self.packed.len() - 1, 0));
                 (engine.split.worker, engine.split.due) = (true, u64::MAX);
@@ -649,6 +649,8 @@ impl Engine {
     /// the counts among them follow, and the fixed gates that read something which flipped in this tick are queued.
     #[inline(never)]
     fn leave_split(&mut self) {
+        #[cfg(parts)]
+        super::part(2);
         let record = self.split.record.take().unwrap();
         let offset = (self.tick - self.split.start) as u32;
         (self.split.mode, self.split.due) = (NORMAL, u64::MAX);
@@ -717,6 +719,14 @@ impl Engine {
             self.split.sources = sources;
         }
         self.split.contexts[self.split.at as usize].records.insert(0, record);
+        #[cfg(parts)]
+        super::part(3);
+    }
+
+    /// Whether `leave_split` ran in the tick just simulated.
+    #[cfg(parts)]
+    pub(super) fn left_now(&self) -> bool {
+        self.split.left == self.tick
     }
 
     /// Whether an entity is unknown at the tick before the one being computed (`unknown` holds the tick before

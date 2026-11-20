@@ -79,8 +79,72 @@ A step with a record: 107 flips and 18 ticks, about 1.8 µs with its start and e
 5. **The worker thread is busy 14% of the time on day 4 part 2** and 1 to 2% elsewhere, 70% of that in `proof_tick`. It is never behind (attempt 28), so this costs a second core's time and nothing on the clock.
 6. **The compact sample is another picture**: a third of its time is `propagate` in ticks simulated whole (two flips in three there are outside a step with a record: the Timer's ticks and what follows them), and `restore` is 10.5%, four times its share elsewhere. Attempt 32 could not move the first; the second has not been looked at.
 
+## The processor's own counters (added the same day, at attempt 33)
+
+`engine/examples/counters.rs` reads the processor's counters through Apple's private kperf interface (the `darwin-kperf` crate, a dev-dependency), once after every step or after every so many. It needs root: `sudo target/release/examples/counters <board> <program> [ticks] [every] [nosplit] [table=<MiB>]`; `sudo sh engine/tools/counters-runs.sh` makes the four runs below. The counters are the main thread's only. Day 4 part 2, 300 million ticks, 1,838,282 steps. The M5 refused ten events at once; seven work.
+
+**Per kind of step** (a reading after every step; a reading costs 2,600 cycles and 13,400 instructions, which are taken off, and it disturbs the caches of the step after it, see the control below):
+
+| Kind | Steps | Cycles | Instructions | Branches mispredicted | Loads missing the first cache | Stores missing it | Data TLB misses |
+|---|---|---|---|---|---|---|---|
+| Taken from the replay table | 1,112,435 | 45 | 118 | 0 | 2.4 | 0.1 | 5.8 |
+| Simulated with a record | 684,378 | 9,353 | 35,878 | 89 | 355 | 58 | 109 |
+| Simulated whole | 41,468 | 15,163 | 53,608 | 167 | 319 | 122 | 106 |
+
+**All steps together, a reading after every 1,000 steps** (so that the readings disturb nothing), in four set-ups:
+
+| Per step | As usual | Without records | Table limited to 8 MiB | Both |
+|---|---|---|---|---|
+| Cycles | 3,617 | 5,443 | 4,602 | 7,223 |
+| Instructions | 14,660 | 22,786 | 19,540 | 31,271 |
+| Instructions per cycle | 4.05 | 4.19 | 4.25 | 4.33 |
+| Branches mispredicted | 36.4 | 55.5 | 50.1 | 77.1 |
+| Loads missing the first cache | 120.5 | 26.6 | 169.0 | 28.2 |
+| Stores missing the first cache | 19.9 | 10.3 | 25.8 | 11.9 |
+| First-level data TLB misses | 17.8 | 4.3 | 20.2 | 3.0 |
+| Page walks | 0.66 | 0.30 | 0.55 | 0.17 |
+| Steps with a record | 682,965 | 0 | 958,084 | 0 |
+
+What it says:
+
+1. **The records cause the cache misses.** Without records a step misses the first cache 27 times; with them 120 times, and with a small table (more steps simulated, more of them with a record) 169 times. That is about 135 more loads missing per step with a record, and four times the TLB misses. Each step uses another record, and a record is about ten separately allocated lists (its flips, the hand-over list, the bitmap of variable signals over all entity numbers, four arrays for the check at the start, the net change, the count changes), up to six of them looked at per step.
+2. **The replay table does not.** Limiting it to 8 MiB changes nothing per simulated step, and a replayed step costs 45 cycles with two misses. The table's size (1.3 GB) is not a cost.
+3. **The simulation itself fits the first cache,** as attempt 21 found: 27 misses in a step of 22,800 instructions.
+4. **Mispredicted branches are 2.4 to 2.6 per 1,000 instructions in every set-up,** about one per flip. At some 14 cycles each that is a seventh of the cycles.
+5. **A step with a record executes about 36,000 instructions** for 107 flips, a whole step 54,000 for 293. By flips alone a step with a record would need about 20,000: the rest, some 15,000 instructions, is what starting and ending it costs. That is more than the sampling profile's 14% of the time suggested, and it has not been taken apart.
+6. The reading itself: with a reading after every step the misses come out a sixth too high and the TLB misses twice too high; mispredictions and instructions are not affected.
+
+## Which branches, and which part of a step (the extended tool, at attempt 33)
+
+`counters` with `events=branches`, a reading every 1,000 steps (the machine was busy with builds during this run, which raises cycles and mispredictions by about a fifth; the shares hold):
+
+| Per step, all kinds together | With records | Without records |
+|---|---|---|
+| Conditional branches executed | 2,391 | 3,855 |
+| of them mispredicted | 52.0 (2.2%) | 75.0 (1.9%) |
+| Indirect branches executed | 8.5 | 7.1 |
+| of them mispredicted | 0.02 | 0.03 |
+
+Every mispredicted branch is an ordinary conditional one, and about one instruction in six is a conditional branch.
+
+`counters` in a `--cfg parts` build with `parts`, a reading at the end of each part of a step. A step simulated with a record:
+
+| Part | Instructions | Branches mispredicted | Loads missing the first cache (disturbed by the readings) |
+|---|---|---|---|
+| Putting a replayed state back (`restore`, in one step of twelve) | 1,128 | 6 | 22 |
+| Starting it (`begin_step`) | 1,212 | 3 | 100 |
+| Its ticks | 27,925 | 141 | 164 |
+| Ending it (`leave_split`) | 3,423 | 10 | 160 |
+| After the last tick (`intern`, the table) | 1,985 | 5 | 9 |
+| All | 35,672 | 165 | 456 |
+
+The ticks are 78% of the instructions and 85% of the mispredictions: about 260 instructions per flip in a step with a record against about 170 in a whole step.
+
+## What a miss and a misprediction cost (attempt 34)
+
+Two variants of attempt 34 answer it. A record laid out in one piece removes 36 of 121 first-cache misses per step and a third of the TLB misses, and the cycles do not move: **a first-cache miss costs nearly nothing here.** A wake and push without branches removes 11.8 of 36.9 mispredicted branches per step while executing 8% more instructions, and the cycles fall by 10%: **a mispredicted branch costs about 50 cycles.** After attempt 34 a step mispredicts 25 times, which by that price is over a third of its 3,266 cycles.
+
 ## What the profile does not show
 
-- Which instructions inside a function are slow: `sample` gives no count per address, and Xcode's Instruments (which does, and counts mispredicted branches) is not installed here, only the command-line tools.
+- Which instructions inside a function are slow: `sample` gives no count per address, and Xcode's Instruments (which does) is not installed here, only the command-line tools. The counters above are per step, not per function.
 - The profile-guided build's own split of the run loop: there the functions are inlined. The separate build stands in for it.
-- Cache misses in the replay table (up to 1.3 GB on day 4 part 2): the table's functions are a few percent together, which bounds what misses can cost, but they were not counted.
