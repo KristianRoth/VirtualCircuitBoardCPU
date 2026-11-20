@@ -458,6 +458,14 @@ Against attempt 24, attempts 27 to 30 together are about 1.30 on the quick bench
 
 The records of attempts 27 to 30 now work on a board with a simulated Timer: a proof and a step with a record end at the tick before a Timer's flip. The compact sample gains 5 to 8%; that board has a larger variable part and a Timer flip inside most steps, so a record covers less of a step there. Two forms that carry a record across or beyond a Timer's flip were built and were slower than no records (the log has them). Still off: boards with Random ink, where there is no replay either.
 
+### A fresh profile (2026-11-20)
+
+`specs/vcb-engine-profile-2026-11-20.md`: the engine at attempt 32, sampled over whole runs of five programs, with the costs per flip, tick and step. The main point: **the hottest function is now `propagate_split` (43 to 45% on the user's CPU), not `propagate` (3 to 9%)**, because nine flips in ten are made in a step with a record. It has never been tuned, and a flip costs 10.0 ns in it against 7.5 ns in `propagate`. Then `step_real` 18%, starting and ending a step with a record 14%, replay and its table about 11%. `--cfg separate` (functions kept apart, no counters) and `tools/sample_summary.py` make the next profile a matter of minutes.
+
+### Attempt 33 (2026-11-20): `propagate_split` tuned
+
+The function the profile pointed at. Its machine code is in `specs/vcb-engine-propagate-split-asm.s`. Two of nine variants were kept, 1.02 together: the record now lists the variable readers of each fixed flip itself (so the tick looks nothing up for them), and the variable bitmap is held as a slice. Most of what a flip costs more here than in `propagate` turned out to be real work: fixed readers whose counts must still be adjusted, and the hand-over of fixed flips. Keeping everything in registers was tried again and was again worse.
+
 ### What the research leaves open
 
 1. Can the split into control and data be found from a netlist, and how much of today's misses would a control-only key recover? (Decides A1.)

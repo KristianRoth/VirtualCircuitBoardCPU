@@ -72,8 +72,10 @@ struct Record {
     variable: Vec<u64>,
     /// Every flip of a fixed signal: (tick of the step, entity, its value afterwards), in order.
     flips: Vec<(u32, u32, bool)>,
-    /// Those of them that a variable gate or trace reads.
-    timed: Vec<(u32, u32, bool)>,
+    /// What those flips do to the variable part (attempt 33): one entry per variable reader of a fixed signal
+    /// that flipped, in the order the readers are told: (tick of the step, the reader, what). What: 0 or 1, a gate
+    /// one of whose inputs went off or on; 2 or 3, a trace one of whose writers went off or on.
+    timed: Vec<(u32, u32, u8)>,
     /// The length of the proven step, and what the fixed part comes to over all of it: the signals that
     /// differ at the end, and the changes to the counts of fixed readers.
     length: u32,
@@ -535,9 +537,11 @@ impl Engine {
 
     /// `propagate` while only the variable part is simulated. `inject`: this is the tick's own call (not VMem's
     /// for the pins it loaded), so the record's fixed flips of this tick are handed to their variable readers.
+    #[cfg_attr(separate, inline(never))]
     pub(super) fn propagate_split(&mut self, flipped: &[u32], inject: bool) {
         let record = self.split.record.take().unwrap();
-        let variable = &record.variable;
+        // A slice, not the vector: its address then stays in a register, where it was loaded from the record per reader (attempt 33).
+        let variable = &record.variable[..];
         let offset = (self.tick - self.split.start) as u32;
         let from = self.split.cursor;
         let mut to = from;
@@ -559,16 +563,11 @@ impl Engine {
                 *c = c.wrapping_add(step);
             }
         }
-        for &(_, e, now) in timed {
-            if g(&self.cell, e as usize).op != Op::Trace {
-                let step = if now { 1 } else { u16::MAX };
-                for i in g(&self.writes.start, e as usize) as usize..g(&self.writes.start, e as usize + 1) as usize {
-                    let t = g(&self.writes.items, i);
-                    if bit(variable, t) {
-                        let c = &mut gm(&mut self.cell, t as usize).count;
-                        *c = c.wrapping_add(step);
-                    }
-                }
+        // (Unchecked as everything here: a record's entries are entity numbers out of the netlist's own lists.)
+        for &(_, t, what) in timed {
+            if what >= 2 {
+                let c = &mut gm(&mut self.cell, t as usize).count;
+                *c = c.wrapping_add(if what == 3 { 1 } else { u16::MAX });
             }
         }
         for &e in flipped {
@@ -580,19 +579,12 @@ impl Engine {
                 self.trace_split(variable, g(&self.writes.items, i));
             }
         }
-        for &(_, e, now) in timed {
-            let lists = if g(&self.cell, e as usize).op == Op::Trace { &self.readers } else { &self.direct };
-            for i in g(&lists.start, e as usize) as usize..g(&lists.start, e as usize + 1) as usize {
-                let lists = if g(&self.cell, e as usize).op == Op::Trace { &self.readers } else { &self.direct };
-                let reader = g(&lists.items, i);
-                if bit(variable, reader) {
-                    self.feed(reader, now);
-                }
-            }
-            if g(&self.cell, e as usize).op != Op::Trace {
-                for i in g(&self.writes.start, e as usize) as usize..g(&self.writes.start, e as usize + 1) as usize {
-                    self.trace_split(variable, g(&self.writes.items, i));
-                }
+        // The record's entries are the variable readers only, so nothing is looked up or tested here.
+        for &(_, reader, what) in timed {
+            if what < 2 {
+                self.feed(reader, what == 1);
+            } else {
+                self.trace_split(variable, reader);
             }
         }
         self.split.record = Some(record);
@@ -881,11 +873,16 @@ impl Engine {
             fixed[i >> 6] |= (!bit(&variable, e) as u64) << (i & 63);
         }
         let flips: Vec<(u32, u32, bool)> = self.split.flips.iter().copied().filter(|f| !bit(&variable, f.1)).collect();
-        let read_by_variable = |e: u32| {
-            let lists: [&[u32]; 2] = if self.cell[e as usize].op == Op::Trace { [self.readers.of(e as usize), &[]] } else { [self.writes.of(e as usize), self.direct.of(e as usize)] };
-            lists.iter().any(|list| list.iter().any(|r| bit(&variable, *r)))
-        };
-        let timed: Vec<(u32, u32, bool)> = flips.iter().copied().filter(|f| read_by_variable(f.1)).collect();
+        // The variable readers of each fixed flip: the gates that read it, then the traces it writes.
+        let mut timed: Vec<(u32, u32, u8)> = Vec::new();
+        for &(tick, e, now) in &flips {
+            let trace = self.cell[e as usize].op == Op::Trace;
+            let lists = if trace { &self.readers } else { &self.direct };
+            timed.extend(lists.of(e as usize).iter().filter(|r| bit(&variable, **r)).map(|r| (tick, *r, now as u8)));
+            if !trace {
+                timed.extend(self.writes.of(e as usize).iter().filter(|t| bit(&variable, **t)).map(|t| (tick, *t, 2 + now as u8)));
+            }
+        }
         // Over the whole step: which fixed signals end up different, and what that does to fixed readers' counts.
         // (`before` and `sums` serve as work arrays here: per entity, whether it ends up different, and its count's change.)
         let mut sums = std::mem::take(&mut self.split.sums);

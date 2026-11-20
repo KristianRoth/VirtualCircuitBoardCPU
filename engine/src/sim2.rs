@@ -509,7 +509,7 @@ impl Engine {
 
     /// After components or pins flipped: recompute the traces they write, mark the ones that rose,
     /// and queue the readers of every trace that changed for the next tick.
-    #[cfg_attr(profiling, inline(never))]
+    #[cfg_attr(any(profiling, separate), inline(never))]
     fn propagate(&mut self, flipped: &[u32]) {
         // First every writer count, then the traces: a trace that loses one writer and gains another in the
         // same tick does not change, exactly as when all its writers are looked at afterwards.
@@ -650,7 +650,7 @@ impl Engine {
         draw && self.cell[e as usize].count > 0
     }
 
-    #[cfg_attr(profiling, inline(never))]
+    #[cfg_attr(any(profiling, separate), inline(never))]
     fn step_real(&mut self) {
         self.tick += 1;
         if cfg!(profiling) {
@@ -856,7 +856,7 @@ impl Engine {
     }
 
     /// The node of the current state.
-    #[cfg_attr(profiling, inline(never))]
+    #[cfg_attr(any(profiling, separate), inline(never))]
     fn intern(&mut self) -> u32 {
         if cfg!(profiling) {
             self.profile.interns += 1;
@@ -890,7 +890,7 @@ impl Engine {
     }
 
     /// Puts the circuit into the state of a node. The tick counter is already there.
-    #[cfg_attr(profiling, inline(never))]
+    #[cfg_attr(any(profiling, separate), inline(never))]
     fn restore(&mut self, id: u32) {
         if cfg!(profiling) {
             self.profile.restores += 1;
@@ -962,6 +962,7 @@ impl Simulation for Engine {
     /// Idle-tick jumps (attempt 7): while nothing is queued, no trace is still marked as risen and VMem is at
     /// rest, a tick changes nothing but the counter, so the engine goes straight to the tick of the next
     /// clock or timer flip (or to `until`) and steps there.
+    #[cfg_attr(separate, inline(never))]
     fn advance(&mut self, until: u64) {
         loop {
             if self.node != NONE && self.node_tick == self.tick {
