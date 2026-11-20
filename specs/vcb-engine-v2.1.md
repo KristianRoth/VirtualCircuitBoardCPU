@@ -424,7 +424,13 @@ The fixed part of a step is applied from a proven record and only the variable p
 | 4 | 17% / 13.8% / 2.8% | 11% / 16.8% / 5.4% | 14% / 15.3% / 15.1% |
 | 6 | 11% / 25.7% / 5.0% | 6.5% / 16.9% / 20.0% | 8% / 11.2% / 28.8% |
 
-Two to four splits halve the work that is left, at the price of more proofs and more steps with nothing to reuse. Too good in one way: the bits are chosen with hindsight over the whole run, and an engine has to choose them while learning. Attempt 27 already goes a little way there: it keeps six records per context, and an older record (proven when less was unknown) is exactly a record for one value of the bits that varied later. What is missing is proving on purpose with a control bit held known. With a proof at 35 µs (ten steps), each extra record has to be used about 25 times to pay. **Next, if wanted: choose split bits while learning** (a bit whose being unknown makes the most signals unknown in the proof), up to two or three per context.
+Two to four splits halve the work that is left, at the price of more proofs and more steps with nothing to reuse. Too good in one way: the bits are chosen with hindsight over the whole run, and an engine has to choose them while learning. Attempt 27 already goes a little way there: it keeps six records per context, and an older record (proven when less was unknown) is exactly a record for one value of the bits that varied later. What is missing is proving on purpose with a control bit held known. With a proof at 35 µs (ten steps), each extra record has to be used about 25 times to pay. (Built in attempt 28 and rejected: see below.)
+
+### Attempt 28 (2026-11-20): the proof on a worker thread; bit splitting and more workers measured and rejected
+
+Three steps asked for by the user in one go. **The proof now runs on a worker thread** with its own copy of the circuit (accepted: 1.127 on the quick benchmark and 1.044 to the Breakpoints, over attempt 27; it helps short and varied runs most). **Splitting contexts on single bits** was built in two forms (the bit held known in the proof; a tree of contexts that each learn their own unknowns, with a fall-back to the parent's records) and gave no speed: flips per step with a record fell by 13 to 19% where the estimate had promised a half, and that is 2 to 3% of a run, which the bookkeeping takes back. The estimate chose its bits with hindsight; an engine choosing from the first 32 starts of a context does much worse. **More than one worker** gains nothing: one is never behind. The log has the numbers; the tree is on the tag `v2-attempt-28-tree-rejected`.
+
+Where the engine stands after attempts 27 and 28, against attempt 24: about 1.19 on the quick benchmark and 1.25 with every program run to its Breakpoint.
 
 ### What the research leaves open
 

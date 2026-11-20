@@ -23,6 +23,7 @@ pub struct Meta {
     pub timer_phase: u32,
 }
 
+#[derive(Clone)]
 struct Node {
     hash: u64,
     /// The next node with the same hash.
@@ -69,6 +70,7 @@ impl Hasher for Mix {
     }
 }
 
+#[derive(Clone)]
 pub struct Table {
     /// u64 words of signals per node.
     words: usize,

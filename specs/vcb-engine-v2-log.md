@@ -32,6 +32,7 @@ Every optimisation that was tried on the v2 engine, what it gained, and whether 
 | 25 | v2.1: watched inputs (an AND/OR gate listens only to the input that settles it) | 0.98 (three runs); the sample 1.5, the user's CPU 0.94 | rejected |
 | 26 | v2.1: one-input gates flip a tick after their input, without count or evaluation | 0.957 (three runs); the sample 1.02 | rejected |
 | 27 | v2.1: the fixed part of a step applied from a proven record, only the variable part simulated (`sim2/split.rs`) | 1.055 quick (three runs); **1.20 to the Breakpoints** (the user's CPU 1.04 to 1.41) | accepted |
+| 28 | v2.1: the proof on a worker thread; contexts split on single bits; more workers | worker: 1.127 quick, 1.044 to the Breakpoints (over attempt 27). Bit splitting: nothing. More workers: nothing | worker accepted; the other two rejected |
 | 23 | v2.1: replay on boards with a simulated Timer | 1.07 over three runs: the compact sample 2.1, the rest unchanged | accepted |
 | 22 | v2.1: the replay table emptied at its limit; saved between runs (`--replay-cache`) | 1.001 on the benchmark; a second run of day 4 part 2 in 1.3 s | accepted (a feature, not a speed-up of a first run) |
 
@@ -884,6 +885,46 @@ Day 4 part 2 to its Breakpoint: 11.1 s to 8.7 s. On it 93% of the steps replay m
 **Verdict.** Accepted: 1.055 on the quick benchmark, 1.20 to the Breakpoints.
 
 **Open after it.** Splitting a context on single start bits (estimated beside this attempt, see the v2.1 file): three splits would halve what is left to simulate. Records for the compact sample (a Timer). Records are not kept in `--replay-cache`. A cheaper proof (it still looks at every reader of everything unknown in its second tick).
+
+## Attempt 28 (2026-11-20): the proof on a worker thread (accepted); splitting on bits and more workers (rejected)
+
+The user asked for three steps in a row, measured in between: (1) one worker thread doing the proofs, (2) split bits searched and proven on workers, (3) more workers.
+
+**Step 1: a worker proves.** A proof needs only the step's start (the packed signals, the components about to flip, the context, the unknown masks: about 100 words), and its record is true whenever it arrives. So the engine copies the start to a worker and simulates the step whole; the worker has its own copy of the circuit (a clone of the engine without the replay table, made when the first proof is wanted), puts it at that start, proves, and sends the record back; the engine takes finished records in at the next step start. It never waits. What is simulated is the same whenever a record arrives; only the speed depends on it. `set_split_threads(0)` proves on the engine's own step as attempt 27 did.
+
+With proofs free for the main thread the policy was measured again (three programs, 20 million ticks): a proof after 2 steps that fit no record is best (1.11 / 1.27 / 1.30 against split off; 8: 1.12 / 1.19 / 1.25; 1: 1.08 / 1.25 / 1.29), and proving on a step that just widened the unknowns still does not pay (its record is too narrow to be met again).
+
+**Step 2: splitting a context on bits. Built twice, no gain.**
+- *First form: the bit held known in the proof.* A worker chose up to k bits per context from 32 sampled starts (the varying bit that leaves the fewest varying bits within the groups; no board knowledge) and proofs held them known. Flips per step with a record did not fall at all (day 4 part 2: 93 without, 99 with two bits), and steps without a record rose. Holding one bit known leaves everything that varies with it unknown: the estimate's gain came from each half having its own unknowns.
+- *Second form: a tree of contexts.* A context with a split bit hands its steps to a child per value; children learn their own unknowns, prove their own records and may split again; a step that fits no record of its context falls back to the records of the contexts above. Flips per step with a record fell, but far less than estimated: day 4 part 2 at depth 0, 1, 2, 3, 4: 93, 81, 75, 72, 69 (the estimate had 102, 67, 54, 44, 34 on its sample). Run time over 300 million ticks, best of two (day 4 part 2 / day 1 part 2 / day 3 part 2, seconds): depth 0: 1.94 / 0.64 / 1.44; depth 1: 1.94 / 0.63 / 1.34; depth 2: 2.03 / 0.67 / 1.38. Nothing outside the noise at depth 1, worse at depth 2.
+
+  Why so little: the estimate chose its bits with hindsight over the whole run and split every context; the engine chooses from the first 32 starts and only where both values are common. And the room is small by now: steps with a record are about half the run time, so 13% fewer flips in them is 2 to 3% of the run, and the extra lookups, samples and steps of freshly split contexts cost that much.
+
+**Step 3: more workers.** 2 and 4 threads against 1, tree depth 0 and 2, same runs: within the noise or slightly worse (depth 0: 1.94 / 1.99 / 2.04 s on day 4 part 2 with 1, 2, 4 threads). One worker never falls behind: a program asks for a few thousand proofs of 35 µs each.
+
+**Equality** (the state kept, step 1 only): `cargo test`, `cargo test --release`, `-- --ignored`; `split_check` on day 1 part 2, day 4 part 2 (with stops inside steps) and the sample; both benchmarks end at the same ticks.
+
+**Numbers, attempt 28 against attempt 27** (plain builds):
+
+| Program | 20 million ticks, three runs | to the Breakpoint, one run |
+|---|---|---|
+| day1/part1 | 1.045 | 1.047 |
+| day1/part2 | 1.058 | 1.011 |
+| day2/part1 | 1.216 | 1.082 |
+| day2/part2 | 1.281 | 1.138 |
+| day3/part1 | 1.073 | 1.000 |
+| day3/part2 | 1.135 | 0.980 |
+| day4/part1 | 1.120 | 0.986 |
+| day4/part2 | 1.178 | 1.020 |
+| sample-primes | 1.200 | 1.180 |
+| sample-compact-primes (no records: a Timer) | 0.993 | 1.015 |
+| **Score** | **1.127** | **1.044** |
+
+As expected the worker helps most where a run is short or varied (the proofs were a quarter of day 2 part 2's first 20 million ticks) and little on a long run, where proofs were 4 to 6%.
+
+**Verdict.** The worker thread: accepted. Splitting on bits and more than one worker: rejected; the code as measured (tree and knobs) is on the tag `v2-attempt-28-tree-rejected`.
+
+**What is left of the idea.** A step with a record still costs about half a whole step. What would move it is not more records but a cheaper step: about a third of its 1.6 µs is starting and finishing it, and every one of its 18 ticks pays the tick's fixed cost.
 
 ## Ideas not tried
 
