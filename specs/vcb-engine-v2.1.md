@@ -432,6 +432,14 @@ Three steps asked for by the user in one go. **The proof now runs on a worker th
 
 Where the engine stands after attempts 27 and 28, against attempt 24: about 1.19 on the quick benchmark and 1.25 with every program run to its Breakpoint.
 
+### Third research pass and attempt 29 (2026-11-20)
+
+Three agents (one reading each, unchecked) went through The Rust Performance Book, three pages on Rust performance, and the question whether SIMD or vectorising helps. Their reports are `specs/research3-perf-book.md`, `-rust-guides.md` and `-simd.md`; **`specs/research3-findings.md` is the one merged list**. SIMD does not help the tick (a handful of scattered gates, no gather on this machine), nor does bit-parallel simulation across time or data (it needs circuits without unit delay or feedback); what there is lies in the packed-state code around a step. Twelve small findings came out, most in the start and end of a step with a record.
+
+**Attempt 29** built five of them (the hash's lanes in registers, the record check without early exit, one context lookup with a cheap hash, hot paths no longer marked cold, the first flips taken from `intern`): **1.050 on the quick benchmark and 1.050 to the Breakpoints**, accepted. The rest of the list is open; the one aimed at the tick itself is the growth path of the queue push in `feed`, which needs a look at the machine code first.
+
+Against attempt 24, attempts 27 to 29 together are about 1.25 on the quick benchmark and 1.31 with every program run to its Breakpoint.
+
 ### What the research leaves open
 
 1. Can the split into control and data be found from a netlist, and how much of today's misses would a control-only key recover? (Decides A1.)

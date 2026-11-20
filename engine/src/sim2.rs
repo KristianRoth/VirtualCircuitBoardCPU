@@ -283,6 +283,8 @@ pub struct Engine {
     /// queue and the just-risen marks they follow from, so that states which behave alike are one node.
     forced: Vec<u32>,
     pending: Vec<u32>,
+    /// The tick at which `intern` last filled `pending`: at that tick it is what flips next (attempt 29).
+    pending_at: u64,
     flush_when_full: bool,
     /// What VMem did in the last tick: the address loaded from, the address written to, and whether a word changed.
     fetched: Option<usize>,
@@ -379,7 +381,7 @@ impl Engine {
         // off (attempt 23): a step in which no timer flips does not depend on where the timers are in their
         // interval, so that position stays out of the states, and only such steps are recorded and replayed.
         let replay = (!ops.contains(&Op::Random)).then(|| Table::new(live_list.len().div_ceil(64), MEMORY_LIMIT));
-        let mut engine = Engine { profile: Profile::default(), loaded_word: 0, replay, live_list, node: NONE, node_tick: 0, real: true, arrays_node: NONE, forced: Vec::new(), pending: Vec::new(), flush_when_full: true, schedule, cell: ops.iter().map(|op| Cell { count: 0, threshold: 0, op: *op, on: false, queued: false, toggle: false }).collect(), view: vec![false; n], reads, writes, readers, writers, direct, live, packed: Vec::new(), slot: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(),  clocks: Vec::new(), clock_due: u64::MAX, timer_due: u64::MAX, schedule_due: u64::MAX, clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], split: Default::default(), components };
+        let mut engine = Engine { profile: Profile::default(), loaded_word: 0, replay, live_list, node: NONE, node_tick: 0, real: true, arrays_node: NONE, forced: Vec::new(), pending: Vec::new(), pending_at: u64::MAX, flush_when_full: true, schedule, cell: ops.iter().map(|op| Cell { count: 0, threshold: 0, op: *op, on: false, queued: false, toggle: false }).collect(), view: vec![false; n], reads, writes, readers, writers, direct, live, packed: Vec::new(), slot: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(),  clocks: Vec::new(), clock_due: u64::MAX, timer_due: u64::MAX, schedule_due: u64::MAX, clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], split: Default::default(), components };
         for (role, pins) in [(1, &engine.components.address_pins), (2, &engine.components.content_pins)] {
             for pin in pins {
                 engine.pin_role[*pin as usize] = role;
@@ -873,6 +875,7 @@ impl Engine {
             id = table.intern(&self.packed[..words], &pending, &[], meta);
         }
         self.pending = pending;
+        self.pending_at = self.tick;
         self.arrays_node = id;
         id
     }

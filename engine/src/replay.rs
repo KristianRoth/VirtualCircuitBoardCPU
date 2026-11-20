@@ -12,7 +12,7 @@ use std::hash::{BuildHasherDefault, Hasher};
 pub const NONE: u32 = u32::MAX;
 
 /// What a node holds besides the signals and the two lists.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub struct Meta {
     /// The address the address pins hold.
     pub address: u32,
@@ -51,6 +51,14 @@ pub struct Edge {
 pub struct Arrival {
     pub node: u32,
     pub written: u32,
+}
+
+/// As two words, for `Mix` (the derived one hashes five fields a byte at a time there).
+impl std::hash::Hash for Meta {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u64(self.address as u64 | (self.locked as u64) << 32 | (self.load_pending as u64) << 33);
+        state.write_u64(self.clock_phase as u64 | (self.timer_phase as u64) << 32);
+    }
 }
 
 /// The table's keys are already well mixed or small numbers; a multiplication is enough.
@@ -119,12 +127,22 @@ impl Table {
     }
 
     fn hash(bits: &[u64], dirty: &[u32], rose: &[u32], meta: Meta) -> u64 {
-        // Four lanes, so the multiplications of neighbouring words do not wait for each other.
-        let mut h = [0x243f_6a88_85a3_08d3u64, 0x1319_8a2e_0370_7344, 0xa409_3822_299f_31d0, 0x082e_fa98_ec4e_6c89];
-        for (i, w) in bits.iter().enumerate() {
-            h[i & 3] = (h[i & 3] ^ *w).wrapping_mul(0x9e37_79b9_7f4a_7c15).rotate_left(31);
+        // Four lanes, so the multiplications of neighbouring words do not wait for each other. They are four
+        // variables and the words come four at a time: as an array indexed by the word's number the lanes
+        // were kept in memory and did wait (attempt 29). The values are the same.
+        let lane = |h: u64, w: u64| (h ^ w).wrapping_mul(0x9e37_79b9_7f4a_7c15).rotate_left(31);
+        let (mut a, mut b, mut c, mut d) = (0x243f_6a88_85a3_08d3u64, 0x1319_8a2e_0370_7344u64, 0xa409_3822_299f_31d0u64, 0x082e_fa98_ec4e_6c89u64);
+        let mut fours = bits.chunks_exact(4);
+        for four in &mut fours {
+            (a, b, c, d) = (lane(a, four[0]), lane(b, four[1]), lane(c, four[2]), lane(d, four[3]));
         }
-        let mut x = h[0] ^ h[1].rotate_left(17) ^ h[2].rotate_left(34) ^ h[3].rotate_left(51);
+        match *fours.remainder() {
+            [x] => a = lane(a, x),
+            [x, y] => (a, b) = (lane(a, x), lane(b, y)),
+            [x, y, z] => (a, b, c) = (lane(a, x), lane(b, y), lane(c, z)),
+            _ => {}
+        }
+        let mut x = a ^ b.rotate_left(17) ^ c.rotate_left(34) ^ d.rotate_left(51);
         let mut mix = |v: u64| x = (x ^ v).wrapping_mul(0xff51_afd7_ed55_8ccd).rotate_left(27);
         for e in dirty {
             mix(*e as u64);

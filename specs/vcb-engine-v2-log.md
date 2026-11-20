@@ -33,6 +33,7 @@ Every optimisation that was tried on the v2 engine, what it gained, and whether 
 | 26 | v2.1: one-input gates flip a tick after their input, without count or evaluation | 0.957 (three runs); the sample 1.02 | rejected |
 | 27 | v2.1: the fixed part of a step applied from a proven record, only the variable part simulated (`sim2/split.rs`) | 1.055 quick (three runs); **1.20 to the Breakpoints** (the user's CPU 1.04 to 1.41) | accepted |
 | 28 | v2.1: the proof on a worker thread; contexts split on single bits; more workers | worker: 1.127 quick, 1.044 to the Breakpoints (over attempt 27). Bit splitting: nothing. More workers: nothing | worker accepted; the other two rejected |
+| 29 | v2.1: five findings of the third research pass: the hash's lanes in registers, the record check without early exit, one context lookup with a cheap hash, hot paths no longer marked cold, the first flips taken from `intern` | 1.050 quick (three runs), 1.050 to the Breakpoints (two runs) | accepted |
 | 23 | v2.1: replay on boards with a simulated Timer | 1.07 over three runs: the compact sample 2.1, the rest unchanged | accepted |
 | 22 | v2.1: the replay table emptied at its limit; saved between runs (`--replay-cache`) | 1.001 on the benchmark; a second run of day 4 part 2 in 1.3 s | accepted (a feature, not a speed-up of a first run) |
 
@@ -925,6 +926,40 @@ As expected the worker helps most where a run is short or varied (the proofs wer
 **Verdict.** The worker thread: accepted. Splitting on bits and more than one worker: rejected; the code as measured (tree and knobs) is on the tag `v2-attempt-28-tree-rejected`.
 
 **What is left of the idea.** A step with a record still costs about half a whole step. What would move it is not more records but a cheaper step: about a third of its 1.6 µs is starting and finishing it, and every one of its 18 ticks pays the tick's fixed cost.
+
+## Attempt 29 (2026-11-20): five findings of the third research pass — accepted
+
+Three agents read The Rust Performance Book, three other pages on Rust performance, and the question whether SIMD helps (`specs/research3-findings.md` is the merged list; SIMD does not help the tick). The user picked findings 1, 2, 3, 4 and 7. All five are in the code around a step, none in the tick's loops.
+
+1. **The replay hash** (`replay.rs`, `Table::hash`). Its four lanes were an array indexed by the word's number, which the compiler kept in memory, so each word waited for the one before. Now four variables, the words taken four at a time. The hash values are the same.
+2. **Whether a record fits** (`split.rs`, `begin_step`). An OR over all words with one test at the end, where it was a loop that could stop at any word: the compiler now does it two words at a time.
+3. **The context.** The contexts are a list, found through a map from what a context is to its place, with the table's multiply hash on two words where it was the standard hasher on five fields. A step looks its context up once and keeps the place; the step's end, the workers' jobs and their records use the place.
+4. **Marked for what they are now.** `leave_split` is no longer cold (it runs once per step with a record). The part of `mode_tick` that runs at every tick of such a step is in the tick's own code; the proof's tick is the cold one. The two counters there count in a profiling build only.
+7. **The first flips.** `begin_step` took the components that flip in the first tick by evaluating the queue; `intern` had just done exactly that for the event that ended the step before. It now takes `intern`'s list when that was made at this tick.
+
+**Equality.** `cargo test`, `cargo test --release`, `-- --ignored`; `split_check` on day 1 part 2, day 4 part 2 with stops inside steps, and the sample; both benchmarks end at the same ticks.
+
+**Numbers, against attempt 28** (plain builds):
+
+| Program | 20 million ticks, three runs | to the Breakpoint, two runs |
+|---|---|---|
+| day1/part1 | 1.059 | 1.081 |
+| day1/part2 | 1.071 | 1.057 |
+| day2/part1 | 1.044 | 1.034 |
+| day2/part2 | 1.031 | 1.051 |
+| day3/part1 | 1.060 | 1.056 |
+| day3/part2 | 1.067 | 1.058 |
+| day4/part1 | 1.064 | 1.052 |
+| day4/part2 | 1.048 | 1.061 |
+| sample-primes | 1.058 | 1.041 |
+| sample-compact-primes (no records) | 1.000 | 1.014 |
+| **Score** | **1.050** | **1.050** |
+
+The five were not measured one by one. The compact sample, which has no records and so gets only the hash, moved by 0 to 1.4%: most of the gain is in the start and end of a step with a record, as the reports said, and it is more than they estimated (3 to 8% for a longer list).
+
+**Verdict.** Accepted: 1.050 on both benchmarks.
+
+**Left from the same list** (`specs/research3-findings.md`): the growth path of the queue push in the tick's innermost loop (look at the machine code first), the last loaded word kept inside a replay edge, the poll of the finished-records channel, the divisions in `meta()`, a record's net change as an XOR mask, the test in `flip_bit`, the bounds checks in the code around a step.
 
 ## Ideas not tried
 
