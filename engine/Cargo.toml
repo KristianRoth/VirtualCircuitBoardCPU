@@ -22,4 +22,4 @@ panic = "abort"
 
 # `--cfg profiling` switches on v2's counters and keeps its main functions apart for a sampling profiler.
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(profiling)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(profiling)', 'cfg(separate)'] }

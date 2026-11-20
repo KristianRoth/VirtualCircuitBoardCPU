@@ -37,6 +37,7 @@ Every optimisation that was tried on the v2 engine, what it gained, and whether 
 | 30 | v2.1: six more findings of the third research pass, each built in its own worktree and timed alone; five merged (the queue push without growth, the last word in a replay edge, the channel poll, the net change as a mask, `flip_bit` and bounds checks) | merged: 1.044 quick (three runs), 1.083 to the Breakpoints (two runs) | five accepted, one (clock positions without divisions) rejected |
 | 31 | v2.1: six instructions in `propagate`'s machine code that looked unneeded, each tried alone | 1.005, 0.996, 1.000, 0.985, 0.964, 0.997 (three runs each) | all six rejected |
 | 32 | v2.1: records on a board with a simulated Timer (a proof and a step with a record end at the tick before a Timer's flip) | compact sample 1.048 quick, 1.078 over 100 million ticks; other boards unchanged (score 1.012) | accepted for that board; two stronger forms tried and rejected |
+| 33 | v2.1: `propagate_split`, the hottest function since the records: its machine code read, nine variants tried; two kept (the variable bitmap held as a slice; the record lists the variable readers of each fixed flip) | 1.024 quick, 1.025 to the Breakpoints (the agent's runs); 1.022 quick measured again after the merge | accepted |
 | 23 | v2.1: replay on boards with a simulated Timer | 1.07 over three runs: the compact sample 2.1, the rest unchanged | accepted |
 | 22 | v2.1: the replay table emptied at its limit; saved between runs (`--replay-cache`) | 1.001 on the benchmark; a second run of day 4 part 2 in 1.3 s | accepted (a feature, not a speed-up of a first run) |
 
@@ -1037,6 +1038,34 @@ The user: the compact sample "should not be left behind anymore". It is the one 
 **Equality.** `cargo test`, `cargo test --release`, `-- --ignored`; `split_check` on the compact sample with and without stops inside steps (identical to v2 without records at 123,716 and 271,490 stops); the compact sample with `--verify` against the reference engine over 6 million ticks at Timer intervals 1, 3, 50, 137, 1,000 and 4,096. No fixture covers it: the board is the game's own and is not in the repository.
 
 **Verdict.** Accepted: the feature now works on Timer boards; 1.05 to 1.08 on the one such board in the benchmark.
+
+## Attempt 33 (2026-11-20): `propagate_split` — accepted
+
+The profile of 2026-11-20 showed `propagate_split` at 43 to 45% of the run, never looked at, with a flip at 10.0 ns against 7.5 ns in `propagate`. An agent worked on it in its own worktree while nothing else ran: the machine code first (`specs/vcb-engine-propagate-split-asm.s`, the code before the change), then variants, each built and timed alone.
+
+**What the machine code and a count showed.** The record's `Box` is moved out and back once per call, not per reader. The variable bitmap's pointer was reloaded for every reader. The trace list's push kept its growth check and call. In the loop that hands the record's fixed flips to their variable readers, the list to walk was chosen again for every reader by the entity's kind. Nothing stays in a register across readers (the cells' address is loaded twenty times in the function; `propagate` loads it once). But **most of the 2.5 ns is work, not waste**: counted on day 4 part 2 over 300 million ticks, 70 million flips told 121 million variable readers, adjusted the counts of 80 million fixed readers, and the hand-over loop looked at 62 million readers of which only 33 million were variable. A quarter of all reader rounds were in that loop and half of them did nothing.
+
+| Variant | Score (five long runs, best of five) | Quick benchmark | Verdict |
+|---|---|---|---|
+| A: the trace list's push without the growth check | 0.994 | 1.000 | dropped |
+| B: the variable bitmap held as a slice | 1.007 (sample 1.04) | | kept |
+| D: the record borrowed, its `Box` not moved (`unsafe`) | 1.003 | | dropped |
+| T: the record's hand-over list holds the variable readers themselves | 1.011 | 1.016 | kept |
+| L: fixed readers' counts settled once at the step's end | 0.928 | | rejected |
+| M: one branch-free path for fixed and variable readers | 0.942 | | rejected |
+| H: every part of the engine in locals, so that nothing is reloaded | 1.012 over A+B+D+T's 1.028: worse on the user's CPU | | rejected |
+| **B + T** | **1.024** | **1.024** | **kept; 1.025 to the Breakpoints** |
+| A + B + D + T | 1.028 to 1.030 | 1.020 | not told from B + T, so the smaller one |
+
+**T** is the real change: `make_record` (on the worker) writes one entry per variable reader of a fixed flip, in the order they were told before, with what kind of input it is; the tick then looks up no kind, no list and no bitmap for them. **H** confirms attempt 31 once more: on this machine the reloads cost nothing, and keeping twenty values in registers does. A cheaper membership test (a mark per entity set when a record is entered) was not built: it would set and clear 500 to 800 marks at each of 3 million step starts, about as many stores as there are readers to test.
+
+**Equality** (in the worktree, on the code that was merged): `cargo test`, `cargo test --release`, `-- --ignored`; `split_check` on day 4 part 2 with stops inside steps, day 1 part 2, the sample and the compact sample, and a debug run. After the merge: `cargo test`, `cargo test --release`, `split_check` on day 4 part 2 and the compact sample.
+
+**Numbers.** The agent's: 1.024 quick (three runs), 1.025 to the Breakpoints (two runs), every program at or above 1.000. Measured again after the merge, against attempt 32: **1.022** quick (three runs; nine programs 1.014 to 1.045, day 2 part 2 0.983).
+
+**Verdict.** Accepted. Only `sim2/split.rs` changed, no `unsafe` added.
+
+**Not checked.** The profile-guided build was not timed against its predecessor (all timings are plain builds). The changed function's machine code was not read again; it shrank from 593 to 529 instructions.
 
 ## Ideas not tried
 
