@@ -48,6 +48,7 @@ struct Cell {
 }
 
 /// Many short lists in one array (attempt 3): the list of entity e is `items[start[e]..start[e + 1]]`.
+#[derive(Clone)]
 struct Lists {
     start: Vec<u32>,
     items: Vec<u32>,
@@ -75,7 +76,7 @@ impl Lists {
 /// The part of a board that runs by itself (attempt 11): everything a clock drives that no VMem pin, Random or
 /// Timer can ever influence. Its behaviour is fixed from tick 0 and soon repeats, so it is run once, before
 /// the simulation, and then only the flips it hands to the rest of the circuit are played from this schedule.
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Schedule {
     /// `at[k]`: the components that flip in tick k, for k up to `lead + period`. Later ticks repeat the last `period`.
     at: Vec<Vec<u32>>,
@@ -213,6 +214,7 @@ pub struct Profile {
     pub restores: u64,
 }
 
+#[derive(Clone)]
 pub struct Engine {
     pub components: Components,
     pub profile: Profile,
@@ -443,7 +445,7 @@ impl Engine {
                 return Err(format!("an entity with {} inputs: the v2 engine counts up to 65,535 (use --engine v1)", inputs.len()));
             }
         }
-        engine.split.due = u64::MAX;
+        (engine.split.due, engine.split.threads) = (u64::MAX, 1);
         engine.set_split(true);
         engine.show();
         Ok(engine)

@@ -145,6 +145,7 @@ pub struct Options {
 
 /// MT19937, the generator the game uses for Random ink (std::mt19937 seeded with the board's seed).
 /// Verified against 2 x 4064 recorded bits (random-vmem-seed-1 and -2).
+#[derive(Clone)]
 pub(crate) struct Rng {
     state: [u32; 624],
     index: usize,
