@@ -448,7 +448,15 @@ Two guessing ideas were measured and closed: a thread running the next step ahea
 
 Against attempt 24, attempts 27 to 30 together are about 1.30 on the quick benchmark and about 1.4 with every program run to its Breakpoint.
 
-**Still open:** records on boards with a simulated Timer; records kept in `--replay-cache`; looking up the state at rest points inside a step; a cheaper step with a record; compiling. And a fresh profile of the current build, which every estimate now lacks.
+**Still open:** records kept in `--replay-cache`; looking up the state at rest points inside a step; a cheaper step with a record; compiling. And a fresh profile of the current build, which every estimate now lacks.
+
+### Attempt 31 (2026-11-20): the hot loop's machine code read; nothing left in it
+
+`specs/vcb-engine-propagate-asm.s` is `propagate` as it runs, commented. Six instructions or groups in it looked unneeded; each was tried alone and none helps (the log has the six scores; two are worse). With attempts 25 and 26 this is the third time that a change to the loop over readers has shown nothing: what is left to gain is not in it.
+
+### Attempt 32 (2026-11-20): records on Timer boards
+
+The records of attempts 27 to 30 now work on a board with a simulated Timer: a proof and a step with a record end at the tick before a Timer's flip. The compact sample gains 5 to 8%; that board has a larger variable part and a Timer flip inside most steps, so a record covers less of a step there. Two forms that carry a record across or beyond a Timer's flip were built and were slower than no records (the log has them). Still off: boards with Random ink, where there is no replay either.
 
 ### What the research leaves open
 
