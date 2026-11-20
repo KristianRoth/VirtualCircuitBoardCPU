@@ -39,6 +39,7 @@ Every optimisation that was tried on the v2 engine, what it gained, and whether 
 | 32 | v2.1: records on a board with a simulated Timer (a proof and a step with a record end at the tick before a Timer's flip) | compact sample 1.048 quick, 1.078 over 100 million ticks; other boards unchanged (score 1.012) | accepted for that board; two stronger forms tried and rejected |
 | 33 | v2.1: `propagate_split`, the hottest function since the records: its machine code read, nine variants tried; two kept (the variable bitmap held as a slice; the record lists the variable readers of each fixed flip) | 1.024 quick, 1.025 to the Breakpoints (the agent's runs); 1.022 quick measured again after the merge | accepted |
 | 34 | v2.1: four ideas from the processor's counters, each in its own worktree: a branch-free wake and push; reader lists by kind; one flat reader loop; a record in one piece | branch-free wake and push: 1.091 and 1.084 quick, 1.079 to the Breakpoints; the others 0.92 to 1.02 | the branch-free wake and push accepted; three rejected |
+| 35 | v2.1, after its end: the records kept in a file beside `--replay-cache` | no gain in any case: the same program with other input 0.74 s against 0.72 to 0.97 s (100 million ticks); another program slower | rejected |
 | 23 | v2.1: replay on boards with a simulated Timer | 1.07 over three runs: the compact sample 2.1, the rest unchanged | accepted |
 | 22 | v2.1: the replay table emptied at its limit; saved between runs (`--replay-cache`) | 1.001 on the benchmark; a second run of day 4 part 2 in 1.3 s | accepted (a feature, not a speed-up of a first run) |
 
@@ -1101,6 +1102,27 @@ The sample CPU loses 2 to 6% (most of its readers are never woken, so it pays th
 **Verdict.** The branch-free wake and push: accepted. The other three are on the tags `v2-attempt-34-layout-rejected`, `-kinds-rejected` and `-flat-rejected`.
 
 **What follows from it.** The lever is mispredicted branches, at about 50 cycles each, and 25 per step are left: in evaluating the queued gates (`step_real`), in the test whether a reader is fixed or variable (`propagate_split`), in whether a trace changed, and in the ends of the loops. Cache misses are not a lever.
+
+## Attempt 35 (2026-11-20): the records kept between runs — rejected
+
+Item 6 of the list in `vcb-engine-v2.1-end.md`; the user asked for it after v2.1 was closed. `--replay-cache <file>` wrote the contexts and their records to `<file>.records` beside the replay table (its own format, with the board-and-build fingerprint, a checksum over the body, and every entity number checked on reading) and read them back. A record is proven from the circuit and a start alone, so it holds for any program on the board; day 4 part 2 run from day 1 part 2's cache verified against v1 over 30 million ticks.
+
+**It gains nothing, in every case measured** (plain build, seconds, the saving of the table at the end included in all of them alike):
+
+| Case | Without the records file | With it |
+|---|---|---|
+| The same program again (day 1 part 2) | 0.07 | 0.11: the table already knows every step; the 12 MB of records only cost their reading |
+| The same program with other input (day 4 part 2 from its example input's cache: 923 records), first 5 million ticks | 0.14, 0.15, 0.14 | 0.15, 0.16, 0.16 |
+| the same, first 20 million ticks | 0.26, 0.27, 0.27 | 0.27, 0.27, 0.26 |
+| the same, first 100 million ticks | 0.72, 0.97, 0.77 | 0.74, 0.73, 0.75 |
+| the same, to the Breakpoint | 7.57, 7.60 | 7.56, 7.92 |
+| Another program (day 3 part 2 from day 1 part 2's cache) | 2.06, 2.03 | 3.18, 3.27; with the contexts' learning state not carried over 2.15, 2.24 |
+
+**Why.** Since attempt 28 a record costs the main thread nothing to get: two steps that fit none, a copy of the start to the worker, and it is there within microseconds. A run has its records after its first few thousand steps, so there is nothing to save by bringing them along. And bringing them to another program does harm: a context is the VMem address and the clock's place, another program has other code at the same address, and the first program's note of which signals vary there makes the second program's proofs fix less (3.2 s against 2.0 s). With that note dropped the foreign records are merely useless: none fits, and each step looks at up to six of them.
+
+**A trap met on the way**, worth knowing for any test of the cache: the fingerprint covers the engine's own executable, so after a rebuild an old cache is refused in silence ("made by another build") and replaced. One comparison here was between two runs that had both loaded nothing.
+
+**Verdict.** Rejected. The code is on the tag `v2-attempt-35-records-cache-rejected` (it includes a temporary `VCB_FRESH` switch used for the last row).
 
 ## Ideas not tried
 

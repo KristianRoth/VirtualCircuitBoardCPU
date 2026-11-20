@@ -93,7 +93,7 @@ In the order I would take them. Sizes are guesses unless a measurement is named.
 
 **B. Records, further.**
 
-6. **Records kept in `--replay-cache`.** Today a second run reloads the replay table but proves every record again. Matters for short and repeated runs. Not started. A record is plain data plus the context's key; the file format would need a version bump.
+6. *(Closed, attempt 35: records kept in a file beside `--replay-cache`. Built after v2.1 ended, and no gain in any case, because a run has its records within its first few thousand steps anyway; see section 5.)*
 7. **The step's end.** `leave_split` is 10% of a step's instructions and the table's bookkeeping after it 6%. Attempts 29 and 30 trimmed both; what is left has not been taken apart further than the counters' parts.
 8. **A start check on only the signals the proof relied on.** When no record fits, the closest one would have been right a third to two thirds of the time. Sound if the proof notes which known signals it used. Ceiling measured: under 1% on the user's CPU, perhaps 2% on the sample. Low.
 9. **Known states inside a step** (look up the state when the circuit comes to rest, not only at events). 7 to 19% of the ticks in missed steps come after a state seen before; many of those are idle ticks already jumped, and the estimate leaves out the word a step loads. Low to middling; needs a better estimate first.
@@ -121,7 +121,7 @@ Measured and closed. The log has the numbers.
 - **In the reader loop:** fewer notifications (watched inputs, 25), one-input gates without a count (26), fewer instructions or loads (31), keeping values in registers (31, 33), reader lists sorted by kind or a loop per kind (34), one flat loop per tick (34).
 - **Cache and memory:** renumbering entities (21), a record in one piece (34), anything aimed at the replay table's size, another allocator, prefetching.
 - **Replay keyed on less:** the word's content bits (17), read sets and masks on the key (v2.1 steps 1 and 8, group A's A3 and A4).
-- **Records:** contexts split on single bits, in two forms (28); more than one worker thread (28); the Timers' position in the context, and a new stretch after each Timer flip (32); guessing a record that does not fit.
+- **Records:** keeping them between runs in a file (35: nothing to save, and another program's learning state makes proofs worse); contexts split on single bits, in two forms (28); more than one worker thread (28); the Timers' position in the context, and a new stretch after each Timer flip (32); guessing a record that does not fit.
 - **Other threads:** running the next step ahead from a guessed state (the best guess is right 16 to 28% of the time); hashing or table work on another thread (the hand-over costs more than the work).
 - **SIMD and bit-parallel simulation** across gates, time or data (the third research pass).
 - **Netlist clean-ups:** duplicates and constants (12 and 30 of 1,858 components), delay lines for chains of one-input gates.
@@ -244,7 +244,7 @@ Each prints its own usage at the top of its source. `cargo run --release --examp
 ## 7. The state of the repository
 
 - Everything is committed on `main`. The history since the last push was squashed on 2026-11-20 into eleven commits, one per attempt or pair of attempts (the user pushes; never push). Three local backup branches hold the history as it was before each clean-up (`backup/before-squash-2026-11-19`, `…-19b`, `…-2026-11-20`).
-- Rejected code is on thirteen local tags, `v2-attempt-NN-…-rejected`.
+- Rejected code is on fourteen local tags, `v2-attempt-NN-…-rejected`.
 - `engine/target/release/vcb` is the profile-guided build of the last commit.
 - `darwin-kperf` is a dev-dependency (only `examples/counters.rs` uses it); the `vcb` binary does not contain it.
 - Commit hashes quoted in the log and in the agents' reports are from before the history was squashed; the tags still point at the old commits.
