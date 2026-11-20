@@ -40,8 +40,9 @@
 //! Not on a board with Random ink or a simulated Timer (no replay table there to take the packed signals from).
 
 use super::{g, gm, Engine, Op, NONE};
-use crate::replay::{Meta, Table};
+use crate::replay::{Meta, Mix, Table};
 use std::collections::HashMap;
+use std::hash::BuildHasherDefault;
 use std::sync::{mpsc, Arc, Mutex};
 
 pub(super) const NORMAL: u8 = 0;
@@ -113,13 +114,15 @@ pub struct Counts {
     pub dropped: u64,
     /// Steps that started at an event and were simulated whole.
     pub whole_steps: u64,
-    /// Ticks simulated and flips made in steps with a record.
+    /// Ticks simulated and flips made in steps with a record (counted in a profiling build only).
     pub split_ticks: u64,
     pub split_flips: u64,
 }
 
 /// A step to prove on another thread: where it starts and what is unknown there.
 struct Job {
+    /// The context's place and what it is: the VMem address, the lock, the place in the clock's cycle.
+    at: u32,
     key: Meta,
     tick: u64,
     bits: Vec<u64>,
@@ -131,7 +134,7 @@ struct Job {
 }
 
 struct Done {
-    key: Meta,
+    at: u32,
     record: Option<Box<Record>>,
 }
 
@@ -161,8 +164,10 @@ pub(super) struct Split {
     /// Records held in all contexts.
     records: usize,
     pub counts: Counts,
-    contexts: HashMap<Meta, Context>,
-    key: Meta,
+    /// The contexts, and where each one's is. A step looks its context up once and keeps the place (attempt 29).
+    contexts: Vec<Context>,
+    places: HashMap<Meta, u32, BuildHasherDefault<Mix>>,
+    at: u32,
     /// The tick the current step started at.
     start: u64,
     left: u64,
@@ -212,7 +217,7 @@ impl Engine {
 
     /// For tools: what the record last used says about an entity.
     pub fn split_debug(&self, e: u32) -> String {
-        let Some(record) = self.split.contexts.get(&self.split.key).and_then(|c| c.records.first()) else { return "no record".into() };
+        let Some(record) = self.split.contexts.get(self.split.at as usize).and_then(|c| c.records.first()) else { return "no record".into() };
         let flips: Vec<_> = record.flips.iter().filter(|f| f.1 == e).collect();
         let inputs: Vec<_> = (if self.cell[e as usize].op == Op::Trace { self.writers.of(e as usize) } else { self.reads.of(e as usize) }).iter().map(|i| (*i, self.cell[*i as usize].op as u8, bit(&record.variable, *i), self.cell[*i as usize].on, record.flips.iter().filter(|f| f.1 == *i).count())).collect();
         format!("step from tick {} left at {}, record length {}; entity {e} variable: {}, on {}, count {}, its fixed flips {flips:?}; inputs (id, op, variable, on, fixed flips): {inputs:?}; timed {}", self.split.start, self.split.left, record.length, bit(&record.variable, e), self.cell[e as usize].on, self.cell[e as usize].count, record.timed.len())
@@ -248,7 +253,10 @@ impl Engine {
             bits[slot >> 6] |= 1 << (slot & 63);
             list.push(e);
         };
-        if self.forced.is_empty() {
+        if self.forced.is_empty() && self.pending_at == self.tick {
+            // The event that ended the step before was just looked up, and that worked these out.
+            self.pending.iter().for_each(|e| set(*e));
+        } else if self.forced.is_empty() {
             for &e in &self.dirty {
                 let op = self.cell[e as usize].op;
                 if !(op == Op::Pin && self.locked) && self.evaluate(e as usize, op) != self.cell[e as usize].on {
@@ -272,8 +280,22 @@ impl Engine {
         let first = self.first_flips();
         let key = self.meta();
         let packed = &self.packed[..words];
-        let context = self.split.contexts.entry(key).or_default();
-        let fits = |record: &Record| (0..words).all(|w| (packed[w] ^ record.start[w]) & record.known[w] | (first[w] ^ record.first[w]) & record.known_first[w] == 0);
+        let at = match self.split.places.get(&key) {
+            Some(at) => *at,
+            None => {
+                self.split.contexts.push(Context::default());
+                self.split.places.insert(key, self.split.contexts.len() as u32 - 1);
+                self.split.contexts.len() as u32 - 1
+            }
+        };
+        let context = &mut self.split.contexts[at as usize];
+        // Every word is looked at and the result tested once: so written the compiler does it two words at a
+        // time, and a record that fits (the usual case, in front) costs a third of a loop that can stop early.
+        let fits = |record: &Record| {
+            let state = packed.iter().zip(&record.start).zip(&record.known).fold(0, |all, ((now, start), known)| all | (now ^ start) & known);
+            let flips = first.iter().zip(&record.first).zip(&record.known_first).fold(0, |all, ((now, start), known)| all | (now ^ start) & known);
+            state | flips == 0
+        };
         let mut job: Option<Job> = None;
         'step: {
             if let Some(found) = context.records.iter().position(|record| fits(record)) {
@@ -286,7 +308,7 @@ impl Engine {
                 self.forced.clear();
                 self.forced.extend(self.split.first_list.iter().filter(|e| bit(&record.variable, **e)));
                 self.split.due = self.tick + record.timed.first().map_or(record.length, |t| t.0.min(record.length)) as u64;
-                (self.split.mode, self.split.key, self.split.start, self.split.cursor) = (SPLIT, key, self.tick, 0);
+                (self.split.mode, self.split.at, self.split.start, self.split.cursor) = (SPLIT, at, self.tick, 0);
                 self.split.record = Some(record);
                 self.split.traces.clear();
                 self.split.loaded.clear();
@@ -311,7 +333,7 @@ impl Engine {
                 if !(grew || context.wait < wait || context.asked || self.split.records >= MOST_RECORDS) {
                     context.wait = 0;
                     context.asked = self.split.threads > 0;
-                    job = Some(Job { key, tick: self.tick, bits: packed.to_vec(), first: self.split.first_list.clone(), first_bits: first[..words].to_vec(), unknown: context.unknown.clone(), unknown_first: context.unknown_first.clone() });
+                    job = Some(Job { at, key, tick: self.tick, bits: packed.to_vec(), first: self.split.first_list.clone(), first_bits: first[..words].to_vec(), unknown: context.unknown.clone(), unknown_first: context.unknown_first.clone() });
                 }
             }
             self.split.counts.whole_steps += 1;
@@ -324,14 +346,14 @@ impl Engine {
             }
         } else if let Some(job) = job {
             // Prove on this step.
-            self.start_proof(job.key, job.unknown, job.unknown_first, &job.first_bits);
+            self.start_proof(job.at, job.unknown, job.unknown_first, &job.first_bits);
         } else {
             self.split.scratch = first;
         }
     }
 
     /// Sets up the proof of the step that starts here.
-    fn start_proof(&mut self, key: Meta, unknown_bits: Vec<u64>, unknown_first: Vec<u64>, first: &[u64]) {
+    fn start_proof(&mut self, at: u32, unknown_bits: Vec<u64>, unknown_first: Vec<u64>, first: &[u64]) {
         let words = self.packed.len() - 1;
         let split = &mut self.split;
         let n = self.cell.len();
@@ -354,7 +376,7 @@ impl Engine {
         split.flips.clear();
         split.queue.clear();
         split.loaded.clear();
-        (split.mode, split.key, split.start, split.due) = (PROOF, key, self.tick, self.tick + 1);
+        (split.mode, split.at, split.start, split.due) = (PROOF, at, self.tick, self.tick + 1);
         split.counts.proofs += 1;
     }
 
@@ -374,20 +396,20 @@ impl Engine {
                 let (taken, finished) = (taken.clone(), finished.clone());
                 std::thread::spawn(move || loop {
                     let Ok(job) = taken.lock().unwrap().recv() else { return };
-                    let key = job.key;
+                    let at = job.at;
                     let record = engine.prove(job);
-                    if finished.send(Done { key, record }).is_err() {
+                    if finished.send(Done { at, record }).is_err() {
                         return;
                     }
                 });
             }
             self.split.workers = Some(Arc::new(Workers { jobs, done: Mutex::new(done) }));
         }
-        let key = job.key;
+        let at = job.at as usize;
         if self.split.workers.as_ref().unwrap().jobs.try_send(job).is_ok() {
             self.split.counts.proofs += 1;
-        } else if let Some(context) = self.split.contexts.get_mut(&key) {
-            context.asked = false;
+        } else {
+            self.split.contexts[at].asked = false;
         }
     }
 
@@ -396,12 +418,10 @@ impl Engine {
     fn collect(&mut self) {
         let Some(workers) = self.split.workers.take() else { return };
         if let Ok(done) = workers.done.try_lock() {
-            while let Ok(Done { key, record }) = done.try_recv() {
-                if let Some(context) = self.split.contexts.get_mut(&key) {
-                    context.asked = false;
-                }
+            while let Ok(Done { at, record }) = done.try_recv() {
+                self.split.contexts[at as usize].asked = false;
                 if let Some(record) = record {
-                    self.install(key, record);
+                    self.install(at, record);
                 }
             }
         }
@@ -409,8 +429,8 @@ impl Engine {
     }
 
     /// A new record for a context; the one used longest ago makes room.
-    fn install(&mut self, key: Meta, record: Box<Record>) {
-        if let Some(context) = self.split.contexts.get_mut(&key) {
+    fn install(&mut self, at: u32, record: Box<Record>) {
+        if let Some(context) = self.split.contexts.get_mut(at as usize) {
             context.records.insert(0, record);
             self.split.records += 1;
             if context.records.len() > RECORDS {
@@ -441,7 +461,7 @@ impl Engine {
         (self.tick, self.breakpoint_hit, self.fetched, self.written) = (job.tick, false, None, None);
         (self.real, self.node, self.arrays_node) = (true, NONE, NONE);
         self.set_due();
-        self.start_proof(job.key, job.unknown, job.unknown_first, &job.first_bits);
+        self.start_proof(job.at, job.unknown, job.unknown_first, &job.first_bits);
         let limit = job.tick + LONGEST;
         while self.split.mode == PROOF && self.tick < limit {
             if self.dirty.is_empty() && self.forced.is_empty() && !self.load_pending && !self.locked {
@@ -465,13 +485,16 @@ impl Engine {
         }
     }
 
-    /// After a tick in a mode other than the normal one.
-    #[inline(never)]
+    /// After a tick in a mode other than the normal one. In a step with a record this runs at every tick, so
+    /// that part is in the tick's own code; the step's end and the proof are not.
+    #[inline(always)]
     pub(super) fn mode_tick(&mut self) {
         let event = self.breakpoint_hit || self.fetched.is_some() || self.written.is_some();
         if self.split.mode == SPLIT {
-            self.split.counts.split_ticks += 1;
-            self.split.counts.split_flips += self.flips.len() as u64;
+            if cfg!(profiling) {
+                self.split.counts.split_ticks += 1;
+                self.split.counts.split_flips += self.flips.len() as u64;
+            }
             let record = self.split.record.as_ref().unwrap();
             let offset = (self.tick - self.split.start) as u32;
             if event || offset >= record.length {
@@ -606,7 +629,6 @@ impl Engine {
 
     /// Makes the circuit whole again at the tick it is at: the fixed signals go where the record has them,
     /// the counts among them follow, and the fixed gates that read something which flipped in this tick are queued.
-    #[cold]
     #[inline(never)]
     fn leave_split(&mut self) {
         let record = self.split.record.take().unwrap();
@@ -673,9 +695,7 @@ impl Engine {
             }
             self.split.sources = sources;
         }
-        if let Some(context) = self.split.contexts.get_mut(&self.split.key) {
-            context.records.insert(0, record);
-        }
+        self.split.contexts[self.split.at as usize].records.insert(0, record);
     }
 
     /// Whether an entity is unknown at the tick before the one being computed (`unknown` holds the tick before
@@ -687,6 +707,8 @@ impl Engine {
 
     /// After a tick of a proof: follows the unknowns one tick on, notes the flips, and at the step's end makes
     /// the record.
+    #[cold]
+    #[inline(never)]
     fn proof_tick(&mut self, event: bool) {
         let tick = self.tick;
         let offset = (tick - self.split.start) as u32;
@@ -878,7 +900,7 @@ impl Engine {
         if self.split.worker {
             self.split.made = Some(Box::new(record));
         } else {
-            self.install(self.split.key, Box::new(record));
+            self.install(self.split.at, Box::new(record));
         }
     }
 }
