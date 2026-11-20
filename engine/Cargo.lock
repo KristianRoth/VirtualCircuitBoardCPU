@@ -198,6 +198,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "darwin-kperf"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5bfe73109be5fef62018b9774aa024a09ee30c2867025a8781ffdbe0b3b961f7"
+dependencies = [
+ "darwin-kperf-events",
+ "darwin-kperf-sys",
+]
+
+[[package]]
+name = "darwin-kperf-events"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4bd79627faaefdbd5e334e6811411e944627e09d238e46f4f7ed7cc93841481e"
+
+[[package]]
+name = "darwin-kperf-sys"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7eda1eced5ca0e851725cc387dbc6643de322a9042588550301c28934d58b57"
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -589,6 +611,7 @@ dependencies = [
  "base64",
  "clap",
  "ctrlc",
+ "darwin-kperf",
  "png",
  "serde_json",
  "sha2",

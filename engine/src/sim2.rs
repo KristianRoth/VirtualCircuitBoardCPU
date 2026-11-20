@@ -13,6 +13,22 @@ const MEMORY_LIMIT: usize = 2 << 30;
 
 mod split;
 
+/// `--cfg parts` (for examples/counters.rs, which reads the processor's counters per part of a step): the engine
+/// calls this where a part of a step ends, with the part's number: 0 `restore` in `advance` (from the start of
+/// `advance`, when replay had run ahead of the circuit), 1 `begin_step`, 2 the step's ticks (called where
+/// `leave_split` starts, or after the tick with the event if the step was not left in that tick), 3 `leave_split`.
+/// What follows the last call, to the return of `advance`, is the tool's to measure. A tool puts its own function
+/// here before it makes an engine. Without the setting none of this exists and the engine's code is what it was.
+#[cfg(parts)]
+pub static mut PART_HOOK: fn(u8) = |_| {};
+
+#[cfg(parts)]
+#[inline(always)]
+fn part(ended: u8) {
+    // Safety: written once by the tool, before any engine runs; read by value.
+    (unsafe { PART_HOOK })(ended)
+}
+
 /// Indexing without the bounds check, for the tick's inner loops (attempt 14). Every index there is an entity
 /// number or a position taken from the netlist's own lists, all made in `Engine::new` for arrays of that size;
 /// a debug build still checks them.
@@ -30,16 +46,18 @@ fn gm<T>(v: &mut [T], i: usize) -> &mut T {
     unsafe { v.get_unchecked_mut(i) }
 }
 
-/// `Vec::push` without the capacity check and its call to the growth routine, for the queue push in `feed`
-/// (attempt 30). `dirty` and `work` are given room for every entity in `Engine::new` (and again after a clone,
-/// which keeps only the length), and the `queued` flag lets an entity into the queue only once.
+/// `Vec::push` without the capacity check and its call to the growth routine, and without a branch, for the
+/// queue push in `feed` (attempts 30 and 34): the entity is always written to the next slot and the length moves
+/// on only if `push`. `dirty` and `work` are given room for every entity and one more in `Engine::new` (and again
+/// after a clone, which keeps only the length): the `queued` flag lets an entity into the queue only once, and
+/// the extra slot takes the write that is not kept when every entity is queued already.
 #[inline(always)]
-fn push_queued(queue: &mut Vec<u32>, e: u32) {
-    debug_assert!(queue.len() < queue.capacity());
+fn push_queued(queue: &mut Vec<u32>, e: u32, push: bool) {
+    debug_assert!(queue.len() + (push as usize) < queue.capacity());
     // Safety: see above.
     unsafe {
         queue.as_mut_ptr().add(queue.len()).write(e);
-        queue.set_len(queue.len() + 1);
+        queue.set_len(queue.len() + push as usize);
     }
 }
 
@@ -394,7 +412,7 @@ impl Engine {
         // off (attempt 23): a step in which no timer flips does not depend on where the timers are in their
         // interval, so that position stays out of the states, and only such steps are recorded and replayed.
         let replay = (!ops.contains(&Op::Random)).then(|| Table::new(live_list.len().div_ceil(64), MEMORY_LIMIT));
-        let mut engine = Engine { profile: Profile::default(), loaded_word: 0, replay, live_list, node: NONE, node_tick: 0, real: true, arrays_node: NONE, forced: Vec::new(), pending: Vec::new(), pending_at: u64::MAX, flush_when_full: true, schedule, cell: ops.iter().map(|op| Cell { count: 0, threshold: 0, op: *op, on: false, queued: false, toggle: false }).collect(), view: vec![false; n], reads, writes, readers, writers, direct, live, packed: Vec::new(), slot: Vec::new(), dirty: Vec::with_capacity(n), work: Vec::with_capacity(n), flips: Vec::new(),  clocks: Vec::new(), clock_due: u64::MAX, timer_due: u64::MAX, schedule_due: u64::MAX, clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], split: Default::default(), components };
+        let mut engine = Engine { profile: Profile::default(), loaded_word: 0, replay, live_list, node: NONE, node_tick: 0, real: true, arrays_node: NONE, forced: Vec::new(), pending: Vec::new(), pending_at: u64::MAX, flush_when_full: true, schedule, cell: ops.iter().map(|op| Cell { count: 0, threshold: 0, op: *op, on: false, queued: false, toggle: false }).collect(), view: vec![false; n], reads, writes, readers, writers, direct, live, packed: Vec::new(), slot: Vec::new(), dirty: Vec::with_capacity(n + 1), work: Vec::with_capacity(n + 1), flips: Vec::new(),  clocks: Vec::new(), clock_due: u64::MAX, timer_due: u64::MAX, schedule_due: u64::MAX, clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], split: Default::default(), components };
         for (role, pins) in [(1, &engine.components.address_pins), (2, &engine.components.content_pins)] {
             for pin in pins {
                 engine.pin_role[*pin as usize] = role;
@@ -567,19 +585,24 @@ impl Engine {
         gm(&mut self.cell, reader as usize).count = new;
         // A gate that is not queued has the output its count gives. It can only change when the count
         // passes its threshold: the higher of the two counts is then the threshold.
-        let wake = match g(&self.cell, reader as usize).op {
-            Op::Or | Op::Breakpoint | Op::Nor | Op::And | Op::Nand => old.max(new) == g(&self.cell, reader as usize).threshold,
-            Op::Xor | Op::Xnor | Op::Random => true, // a Random draws at every change of an input
-            // Only a rising input toggles a latch; two rising together cancel out (observed).
-            Op::Latch | Op::Pin => {
-                if now {
-                    let toggle = &mut gm(&mut self.cell, reader as usize).toggle;
-                    *toggle = !*toggle;
-                }
-                now
+        // Without a branch on the kind (attempt 34): each of the three ways to be woken is a set of kinds, one bit per kind.
+        const fn kinds(ops: &[Op]) -> u32 {
+            let (mut set, mut i) = (0, 0);
+            while i < ops.len() {
+                set |= 1 << ops[i] as u32;
+                i += 1;
             }
-            Op::Scheduled | Op::Trace | Op::Dead => false,
-        };
+            set
+        }
+        const THRESHOLD: u32 = kinds(&[Op::Or, Op::Breakpoint, Op::Nor, Op::And, Op::Nand]);
+        const ALWAYS: u32 = kinds(&[Op::Xor, Op::Xnor, Op::Random]); // a Random draws at every change of an input
+        const RISING: u32 = kinds(&[Op::Latch, Op::Pin]);
+        let op = g(&self.cell, reader as usize).op as u32;
+        // Only a rising input toggles a latch; two rising together cancel out (observed).
+        let rose = now & (RISING >> op & 1 != 0);
+        gm(&mut self.cell, reader as usize).toggle ^= rose;
+        // Scheduled, Trace and Dead are in no set: never woken.
+        let wake = ((THRESHOLD >> op & 1 != 0) & (old.max(new) == g(&self.cell, reader as usize).threshold)) | (ALWAYS >> op & 1 != 0) | rose;
         if cfg!(profiling) {
             let kind = match g(&self.cell, reader as usize).op {
                 Op::Or | Op::Breakpoint | Op::Nor | Op::And | Op::Nand => 1 - wake as usize,
@@ -589,10 +612,11 @@ impl Engine {
             };
             self.profile.feeds[kind] += 1;
         }
-        if wake && !g(&self.cell, reader as usize).queued {
-            gm(&mut self.cell, reader as usize).queued = true;
-            push_queued(&mut self.dirty, reader);
-        }
+        // No branch on whether it is woken (one time in four) or queued already: the processor guesses neither well (attempt 34).
+        let queued = &mut gm(&mut self.cell, reader as usize).queued;
+        let push = wake & !*queued;
+        *queued |= wake;
+        push_queued(&mut self.dirty, reader, push);
     }
 }
 
@@ -991,9 +1015,17 @@ impl Simulation for Engine {
                     }
                 }
             }
+            #[cfg(parts)]
+            let ahead = !self.real;
             self.settle();
+            #[cfg(parts)]
+            if ahead {
+                part(0);
+            }
             if self.split.at_event {
                 self.begin_step();
+                #[cfg(parts)]
+                part(1);
             }
             if self.dirty.is_empty() && self.forced.is_empty() && !self.load_pending && !self.locked {
                 let target = until.min(self.clock_due).min(self.timer_due).min(self.schedule_due).min(self.split.due);
@@ -1006,6 +1038,11 @@ impl Simulation for Engine {
             }
             self.step_real();
             let event = self.breakpoint_hit || self.fetched.is_some() || self.written.is_some();
+            // (If `leave_split` ran in this tick it has ended the ticks' part itself.)
+            #[cfg(parts)]
+            if event && !self.left_now() {
+                part(2);
+            }
             if event && self.replay.is_some() {
                 let reached = self.intern();
                 // A step in which a timer flipped depends on when it flipped: it is not recorded.

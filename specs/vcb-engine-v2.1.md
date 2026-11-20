@@ -466,6 +466,18 @@ The records of attempts 27 to 30 now work on a board with a simulated Timer: a p
 
 The function the profile pointed at. Its machine code is in `specs/vcb-engine-propagate-split-asm.s`. Two of nine variants were kept, 1.02 together: the record now lists the variable readers of each fixed flip itself (so the tick looks nothing up for them), and the variable bitmap is held as a slice. Most of what a flip costs more here than in `propagate` turned out to be real work: fixed readers whose counts must still be adjusted, and the hand-over of fixed flips. Keeping everything in registers was tried again and was again worse.
 
+### Cache misses and mispredictions counted (2026-11-20)
+
+`examples/counters.rs` reads the processor's counters (root needed; the numbers are in the profile file). Three things nobody knew: **the records cause about 135 first-cache misses per step** (a step without records misses 27 times, with them 120; each step uses another record, spread over about ten allocations); **the replay table causes none worth naming** (45 cycles per replayed step, and limiting the table to 8 MiB changes nothing), so its size is no cost; and **a step with a record spends about 15,000 of its 36,000 instructions on starting and ending**, not on flips. One branch is mispredicted per flip, a seventh of the cycles.
+
+**Next from this:** a record laid out in one piece and smaller (one allocation; the bitmap of variable signals over the simulated signals only; the four arrays of the start check side by side; shorter entries), and the counters taken per part of a step (start, ticks, end) to see where the 15,000 instructions are.
+
+### Attempt 34 (2026-11-20): mispredicted branches are the lever, cache misses are not
+
+Four changes suggested by the counters were built side by side and both timed and counted. **A wake and push without branches is 1.08 to 1.09 faster** (accepted): 8% more instructions, a third fewer mispredicted branches, 10% fewer cycles, which puts the price of a mispredicted branch at about 50 cycles. A record laid out in one piece removes 30% of the first-cache misses and gains nothing: the misses are cheap. Reader lists by kind (with or without a kind test) and one flat reader loop gain nothing or lose.
+
+So the earlier attempts on this loop (25, 26, 31) failed for a reason that is now visible: they counted instructions and loads, and the cost was in branches. **25 mispredictions per step are left, over a third of the cycles.** Where to look for them: the evaluation of the queued gates in `step_real`; the test whether a reader is fixed or variable in `propagate_split`; whether a trace changed; the ends of the short loops. Each can now be judged by the misprediction count as well as by the clock.
+
 ### What the research leaves open
 
 1. Can the split into control and data be found from a netlist, and how much of today's misses would a control-only key recover? (Decides A1.)

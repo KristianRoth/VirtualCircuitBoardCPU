@@ -38,6 +38,7 @@ Every optimisation that was tried on the v2 engine, what it gained, and whether 
 | 31 | v2.1: six instructions in `propagate`'s machine code that looked unneeded, each tried alone | 1.005, 0.996, 1.000, 0.985, 0.964, 0.997 (three runs each) | all six rejected |
 | 32 | v2.1: records on a board with a simulated Timer (a proof and a step with a record end at the tick before a Timer's flip) | compact sample 1.048 quick, 1.078 over 100 million ticks; other boards unchanged (score 1.012) | accepted for that board; two stronger forms tried and rejected |
 | 33 | v2.1: `propagate_split`, the hottest function since the records: its machine code read, nine variants tried; two kept (the variable bitmap held as a slice; the record lists the variable readers of each fixed flip) | 1.024 quick, 1.025 to the Breakpoints (the agent's runs); 1.022 quick measured again after the merge | accepted |
+| 34 | v2.1: four ideas from the processor's counters, each in its own worktree: a branch-free wake and push; reader lists by kind; one flat reader loop; a record in one piece | branch-free wake and push: 1.091 and 1.084 quick, 1.079 to the Breakpoints; the others 0.92 to 1.02 | the branch-free wake and push accepted; three rejected |
 | 23 | v2.1: replay on boards with a simulated Timer | 1.07 over three runs: the compact sample 2.1, the rest unchanged | accepted |
 | 22 | v2.1: the replay table emptied at its limit; saved between runs (`--replay-cache`) | 1.001 on the benchmark; a second run of day 4 part 2 in 1.3 s | accepted (a feature, not a speed-up of a first run) |
 
@@ -1066,6 +1067,40 @@ The profile of 2026-11-20 showed `propagate_split` at 43 to 45% of the run, neve
 **Verdict.** Accepted. Only `sim2/split.rs` changed, no `unsafe` added.
 
 **Not checked.** The profile-guided build was not timed against its predecessor (all timings are plain builds). The changed function's machine code was not read again; it shrank from 593 to 529 instructions.
+
+## Attempt 34 (2026-11-20): what the counters pointed at — a branch-free wake and push accepted
+
+The processor's counters (see the profile file) had shown one mispredicted branch per flip and 135 first-cache misses per step caused by the records. Four changes were built by four agents in four worktrees (a fifth extended the counters tool), verified there, then timed here one after another against attempt 33, and counted with the processor's counters by the user (day 4 part 2, 300 million ticks, a reading every 1,000 steps; per step, all kinds of step together).
+
+| Variant | Quick (3 runs) | To the Breakpoints (2 runs) | Cycles | Instructions | Branches mispredicted | Loads missing the first cache |
+|---|---|---|---|---|---|---|
+| Attempt 33 | | | 3,621 | 14,625 | 36.9 | 121.5 |
+| The push without a branch | 1.067 | 1.059 | 3,381 | 15,367 | 27.7 | 121.2 |
+| **The push and the wake without a branch** | **1.091** | **1.079** | **3,266** | **15,757** | **25.1** | 126.8 |
+| Reader lists sorted by kind | 1.000 | | 3,591 | 14,649 | 36.4 | 124.7 |
+| Sorted, and a loop per kind with no kind test | 1.021 | 1.000 | 3,590 | 14,730 | 33.3 | 142.3 |
+| One flat loop over a tick's readers, whole steps | 0.973 | | 3,672 | 14,931 | 37.8 | 123.3 |
+| The same in steps with a record too | 0.916 | | 4,052 | 16,197 | 47.1 | 125.2 |
+| A record in one piece | 0.993 | 0.995 | 3,643 | 14,403 | 38.0 | 85.0 |
+
+**The push and the wake without a branch (kept).** `feed` used a `match` on the reader's kind, then `if wake && !queued { … push }`. Now the kind is looked up in three bit sets (threshold gates, always woken, woken by a rising input), the wake is a boolean expression, the reader's number is always written into the queue's next slot and the queue's length grows by `wake & !queued`, and the queued flag and a latch's toggle mark are stored without a test. The queue has one slot more than there are entities for the write that does not count. In the machine code the reader loop's only branch is its own end: `propagate` goes from 36 conditional branches to 13, `propagate_split` from 76 to 39. A reader round is 31 instructions where it was 16 to 22, with three stores where a reader that was not woken had none. **It executes 8% more instructions and takes 10% fewer cycles: 11.8 fewer mispredicted branches per step.** By that, a mispredicted branch costs this engine some 50 cycles, not the 14 of its bare penalty, and the 25 that are left are still a large part of a step.
+The sample CPU loses 2 to 6% (most of its readers are never woken, so it pays the stores for little). Every other program gains 3 to 16%.
+
+**Reader lists by kind (rejected).** Sorting alone does nothing: most lists were of one kind already (after sorting 82% on the user's CPU, no list has more than two kinds). A loop per kind, with stored places where the kind changes and no kind test at all (the user's question), removes 3.6 mispredictions per step but adds a load of the places and up to four range tests per list, and more misses; no gain in time.
+
+**One flat loop over a tick's readers (rejected).** Counted first: a simulated tick walks about eight reader lists, most with none, one or two readers, and a few long ones (five or more, about fourteen readers) carry three quarters of the tellings. Copying the lists into a work list eight numbers at a time and telling in one loop costs more than the loop ends it saves, and mispredicts more.
+
+**A record in one piece (rejected).** Measured first: a record was 7,760 bytes in twelve allocations; the first record of a context is the one that fits in every step that uses one. Laid out as one block in the order a step reads it, with 8-byte entries and no search at the end of a full step: 6,200 bytes in two allocations. **It removes 36 of the 121 first-cache misses per step and a third of the TLB misses, and gains nothing in cycles.** So those misses cost almost nothing: they are served from the second cache while the processor does other work. The misses the counters showed are not where the time is.
+
+**Also from the counters** (the extended tool, `examples/counters.rs` with `events=branches` and, in a `--cfg parts` build, `parts`): every mispredicted branch is an ordinary conditional one (indirect branches and returns: none); a step executes 2,400 conditional branches of which 2.2% are mispredicted; and of a step with a record's 35,700 instructions the ticks are 78%, ending it 10%, the table's bookkeeping after it 6%, starting it 3%, putting a replayed state back 3%.
+
+**Equality** (the kept change): in its worktree `cargo test`, `cargo test --release`, `-- --ignored`, `split_check` on four boards and a debug run, for each of its two commits; after the merge `cargo test`, `cargo test --release`, `split_check` on day 4 part 2 and the compact sample, and day 4 part 2 with `--verify` to its Breakpoint.
+
+**Numbers after the merge**, against attempt 33 (plain builds, quick benchmark, three runs): 1.084 (the user's CPU 1.076 to 1.137, the sample 0.978, the compact sample 1.034); one earlier run of the same binaries gave 1.061, and the merged build against the worktree's build of the same change 1.006.
+
+**Verdict.** The branch-free wake and push: accepted. The other three are on the tags `v2-attempt-34-layout-rejected`, `-kinds-rejected` and `-flat-rejected`.
+
+**What follows from it.** The lever is mispredicted branches, at about 50 cycles each, and 25 per step are left: in evaluating the queued gates (`step_real`), in the test whether a reader is fixed or variable (`propagate_split`), in whether a trace changed, and in the ends of the loops. Cache misses are not a lever.
 
 ## Ideas not tried
 
