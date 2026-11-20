@@ -43,6 +43,7 @@ use super::{g, gm, Engine, Op, NONE};
 use crate::replay::{Meta, Mix, Table};
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::{mpsc, Arc, Mutex};
 
 pub(super) const NORMAL: u8 = 0;
@@ -73,6 +74,9 @@ struct Record {
     /// differ at the end, and the changes to the counts of fixed readers.
     length: u32,
     net: Vec<u32>,
+    /// The same signals as one bit each in the layout of `packed` (all its words, the spare one too), so that
+    /// leaving at the full length brings `packed` up to date with one XOR per word instead of one per signal.
+    net_mask: Vec<u64>,
     counts: Vec<(u32, u16)>,
 }
 
@@ -142,6 +146,9 @@ struct Done {
 pub(super) struct Workers {
     jobs: mpsc::SyncSender<Job>,
     done: Mutex<mpsc::Receiver<Done>>,
+    /// How many records the workers have sent and how many were taken in: `collect` looks at these two only, while they are equal.
+    sent: Arc<AtomicU64>,
+    taken: AtomicU64,
 }
 
 /// A worker gives up on a step with no event after this many ticks.
@@ -385,15 +392,18 @@ impl Engine {
         if self.split.workers.is_none() {
             let (jobs, taken) = mpsc::sync_channel::<Job>(256);
             let (finished, done) = mpsc::channel::<Done>();
-            let taken = Arc::new(Mutex::new(taken));
+            let (taken, sent) = (Arc::new(Mutex::new(taken)), Arc::new(AtomicU64::new(0)));
             for _ in 0..self.split.threads {
                 // A copy of the circuit without the replay table (one is needed, empty, for the packed signals).
                 let (table, split) = (self.replay.take(), std::mem::take(&mut self.split));
                 let mut engine = self.clone();
+                // A clone keeps a vector's length, not its capacity, and `feed` pushes to the queue without a check.
+                engine.dirty.reserve_exact(self.cell.len());
+                engine.work.reserve_exact(self.cell.len());
                 (self.replay, self.split) = (table, split);
                 engine.replay = Some(Table::new(self.packed.len() - 1, 0));
                 (engine.split.worker, engine.split.due) = (true, u64::MAX);
-                let (taken, finished) = (taken.clone(), finished.clone());
+                let (taken, finished, sent) = (taken.clone(), finished.clone(), sent.clone());
                 std::thread::spawn(move || loop {
                     let Ok(job) = taken.lock().unwrap().recv() else { return };
                     let at = job.at;
@@ -401,9 +411,11 @@ impl Engine {
                     if finished.send(Done { at, record }).is_err() {
                         return;
                     }
+                    // Counted after the send: a count that has moved means a record is in the channel.
+                    sent.fetch_add(1, Relaxed);
                 });
             }
-            self.split.workers = Some(Arc::new(Workers { jobs, done: Mutex::new(done) }));
+            self.split.workers = Some(Arc::new(Workers { jobs, done: Mutex::new(done), sent, taken: AtomicU64::new(0) }));
         }
         let at = job.at as usize;
         if self.split.workers.as_ref().unwrap().jobs.try_send(job).is_ok() {
@@ -416,9 +428,15 @@ impl Engine {
     /// Takes in the records the workers have finished.
     #[inline(always)]
     fn collect(&mut self) {
+        // Nearly always nothing is ready, and two loads show it. (A record taken before its worker counted it leaves the two unequal for a moment: that costs one empty look.)
+        if self.split.workers.as_ref().is_none_or(|w| w.sent.load(Relaxed) == w.taken.load(Relaxed)) {
+            return;
+        }
         let Some(workers) = self.split.workers.take() else { return };
         if let Ok(done) = workers.done.try_lock() {
             while let Ok(Done { at, record }) = done.try_recv() {
+                // What was received is what is counted, so a record sent but not counted yet is looked for again.
+                workers.taken.fetch_add(1, Relaxed);
                 self.split.contexts[at as usize].asked = false;
                 if let Some(record) = record {
                     self.install(at, record);
@@ -605,7 +623,8 @@ impl Engine {
     /// The fixed readers of a fixed signal that flipped: their counts.
     fn count_fixed(&mut self, variable: &[u64], e: u32, now: bool, mut add: impl FnMut(&mut Engine, u32, u16)) {
         let step = if now { 1 } else { u16::MAX };
-        let trace = self.cell[e as usize].op == Op::Trace;
+        // (Unchecked from here to the end of `leave_split`: a record holds entities the proof's ticks flipped or fed.)
+        let trace = g(&self.cell, e as usize).op == Op::Trace;
         for k in 0..2 {
             let lists = match (trace, k) {
                 (true, 0) => &self.readers,
@@ -613,13 +632,13 @@ impl Engine {
                 (false, 1) => &self.direct,
                 _ => continue,
             };
-            for i in lists.start[e as usize] as usize..lists.start[e as usize + 1] as usize {
+            for i in g(&lists.start, e as usize) as usize..g(&lists.start, e as usize + 1) as usize {
                 let lists = match (trace, k) {
                     (true, _) => &self.readers,
                     (false, 0) => &self.writes,
                     _ => &self.direct,
                 };
-                let reader = lists.items[i];
+                let reader = g(&lists.items, i);
                 if !bit(variable, reader) {
                     add(self, reader, step);
                 }
@@ -638,19 +657,22 @@ impl Engine {
         let done = record.flips.partition_point(|f| f.0 <= offset);
         if offset == record.length {
             for &e in &record.net {
-                self.cell[e as usize].on ^= true;
-                self.flip_bit(e);
+                gm(&mut self.cell, e as usize).on ^= true;
+            }
+            // What `flip_bit` would do signal by signal, word by word.
+            for (word, mask) in self.packed.iter_mut().zip(&record.net_mask) {
+                *word ^= mask;
             }
             for &(reader, change) in &record.counts {
-                let c = &mut self.cell[reader as usize].count;
+                let c = &mut gm(&mut self.cell, reader as usize).count;
                 *c = c.wrapping_add(change);
             }
         } else {
             for &(_, e, now) in &record.flips[..done] {
-                self.cell[e as usize].on = now;
+                gm(&mut self.cell, e as usize).on = now;
                 self.flip_bit(e);
                 self.count_fixed(&record.variable, e, now, |engine, reader, step| {
-                    let c = &mut engine.cell[reader as usize].count;
+                    let c = &mut gm(&mut engine.cell, reader as usize).count;
                     *c = c.wrapping_add(step);
                 });
             }
@@ -667,17 +689,17 @@ impl Engine {
             let mut sources = std::mem::take(&mut self.split.sources);
             sources.clear();
             sources.extend(record.flips[..done].iter().rev().take_while(|f| f.0 == offset).map(|f| (f.1, f.2)));
-            sources.extend(self.flips.iter().chain(&self.split.loaded).map(|e| (*e, self.cell[*e as usize].on)));
+            sources.extend(self.flips.iter().chain(&self.split.loaded).map(|e| (*e, g(&self.cell, *e as usize).on)));
             sources.extend_from_slice(&self.split.traces);
             for &(e, now) in &sources {
-                let lists = if self.cell[e as usize].op == Op::Trace { &self.readers } else { &self.direct };
-                for i in lists.start[e as usize] as usize..lists.start[e as usize + 1] as usize {
-                    let lists = if self.cell[e as usize].op == Op::Trace { &self.readers } else { &self.direct };
-                    let reader = lists.items[i];
+                let lists = if g(&self.cell, e as usize).op == Op::Trace { &self.readers } else { &self.direct };
+                for i in g(&lists.start, e as usize) as usize..g(&lists.start, e as usize + 1) as usize {
+                    let lists = if g(&self.cell, e as usize).op == Op::Trace { &self.readers } else { &self.direct };
+                    let reader = g(&lists.items, i);
                     if bit(&record.variable, reader) {
                         continue;
                     }
-                    let cell = &mut self.cell[reader as usize];
+                    let cell = gm(&mut self.cell, reader as usize);
                     let wake = match cell.op {
                         Op::Latch | Op::Pin => {
                             cell.toggle ^= now;
@@ -876,6 +898,11 @@ impl Engine {
                 net.push(e);
             }
         }
+        let mut net_mask = vec![0u64; self.packed.len()];
+        for &e in &net {
+            let slot = self.slot[e as usize] as usize;
+            net_mask[slot >> 6] ^= 1 << (slot & 63);
+        }
         let mut counts: Vec<(u32, u16)> = Vec::new();
         for reader in touched {
             let sum = std::mem::take(&mut sums[reader as usize]);
@@ -895,6 +922,7 @@ impl Engine {
             timed,
             length,
             net,
+            net_mask,
             counts,
         };
         if self.split.worker {
