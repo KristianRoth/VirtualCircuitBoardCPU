@@ -1,5 +1,7 @@
 # VCB engine v2.1
 
+> **v2.1 was closed on 2026-11-20. `vcb-engine-v2.1-end.md` says where it ended, what is left to try and how to run every tool: read that first.** This file is the record of how it went.
+
 The first stage of the fast engine (v2) ended on 2026-11-19. What comes next is called **v2.1** (the user's name for it; "stage 2" in older text means the same). This file is its starting point: what the engine does now, everything that was tried and what it gave, what was learned about where the time goes, and every idea that is still open or was closed. New ideas from the brainstorming go in the last section.
 
 The rules of the work are in `vcb-engine-v2.md` (what "equal to v1" means, the acceptance rule, the rule that the engine optimises the simulator and not a board). Every attempt's full entry, with its table, is in `vcb-engine-v2-log.md`. This file summarises; where the two disagree, the log is right.

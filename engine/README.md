@@ -123,6 +123,8 @@ Ground truth is the game. For each rule there is a board that was stepped in the
 
 ## Speed (stage 1 of v2, 2026-11-19)
 
+This table is where stage 1 ended. The engine has since become about 2.3 times faster again (day 4 part 2 in 6.4 s): the current figures, and how to run the profiling and measuring tools, are in `../specs/vcb-engine-v2.1-end.md`.
+
 Every benchmark program run to its end on both engines in one session (one run each; `AoC2025` at commit `9e8bd62`; the engine at attempt 15). Both engines stop at the same tick with the same output on every row.
 
 | Program | Ticks | v1, M ticks/s | v2, M ticks/s | v2 against v1 | v1 time | v2 time |
