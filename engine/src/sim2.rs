@@ -30,6 +30,19 @@ fn gm<T>(v: &mut [T], i: usize) -> &mut T {
     unsafe { v.get_unchecked_mut(i) }
 }
 
+/// `Vec::push` without the capacity check and its call to the growth routine, for the queue push in `feed`
+/// (attempt 30). `dirty` and `work` are given room for every entity in `Engine::new` (and again after a clone,
+/// which keeps only the length), and the `queued` flag lets an entity into the queue only once.
+#[inline(always)]
+fn push_queued(queue: &mut Vec<u32>, e: u32) {
+    debug_assert!(queue.len() < queue.capacity());
+    // Safety: see above.
+    unsafe {
+        queue.as_mut_ptr().add(queue.len()).write(e);
+        queue.set_len(queue.len() + 1);
+    }
+}
+
 /// An entity as the tick's loops see it.
 #[derive(Clone, Copy)]
 struct Cell {
@@ -381,7 +394,7 @@ impl Engine {
         // off (attempt 23): a step in which no timer flips does not depend on where the timers are in their
         // interval, so that position stays out of the states, and only such steps are recorded and replayed.
         let replay = (!ops.contains(&Op::Random)).then(|| Table::new(live_list.len().div_ceil(64), MEMORY_LIMIT));
-        let mut engine = Engine { profile: Profile::default(), loaded_word: 0, replay, live_list, node: NONE, node_tick: 0, real: true, arrays_node: NONE, forced: Vec::new(), pending: Vec::new(), pending_at: u64::MAX, flush_when_full: true, schedule, cell: ops.iter().map(|op| Cell { count: 0, threshold: 0, op: *op, on: false, queued: false, toggle: false }).collect(), view: vec![false; n], reads, writes, readers, writers, direct, live, packed: Vec::new(), slot: Vec::new(), dirty: Vec::new(), work: Vec::new(), flips: Vec::new(),  clocks: Vec::new(), clock_due: u64::MAX, timer_due: u64::MAX, schedule_due: u64::MAX, clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], split: Default::default(), components };
+        let mut engine = Engine { profile: Profile::default(), loaded_word: 0, replay, live_list, node: NONE, node_tick: 0, real: true, arrays_node: NONE, forced: Vec::new(), pending: Vec::new(), pending_at: u64::MAX, flush_when_full: true, schedule, cell: ops.iter().map(|op| Cell { count: 0, threshold: 0, op: *op, on: false, queued: false, toggle: false }).collect(), view: vec![false; n], reads, writes, readers, writers, direct, live, packed: Vec::new(), slot: Vec::new(), dirty: Vec::with_capacity(n), work: Vec::with_capacity(n), flips: Vec::new(),  clocks: Vec::new(), clock_due: u64::MAX, timer_due: u64::MAX, schedule_due: u64::MAX, clock_interval, timers: Vec::new(), timer_ticks, rng, tick: 0, breakpoint_hit: false, vmem: board.vmem.clone(), address: 0, locked: false, load_pending: false, fetched: None, written: None, vmem_changed: false, pin_role: vec![0; n], split: Default::default(), components };
         for (role, pins) in [(1, &engine.components.address_pins), (2, &engine.components.content_pins)] {
             for pin in pins {
                 engine.pin_role[*pin as usize] = role;
@@ -538,13 +551,12 @@ impl Engine {
         }
     }
 
-    /// Keeps `packed` in step with a signal that just changed.
+    /// Keeps `packed` in step with a signal that just changed. On every board, also one without replay, where
+    /// nothing reads it, so that no change of a signal has to test whether replay is on (attempt 30).
     #[inline(always)]
     fn flip_bit(&mut self, e: u32) {
-        if self.replay.is_some() {
-            let slot = g(&self.slot, e as usize) as usize;
-            *gm(&mut self.packed, slot >> 6) ^= 1 << (slot & 63);
-        }
+        let slot = g(&self.slot, e as usize) as usize;
+        *gm(&mut self.packed, slot >> 6) ^= 1 << (slot & 63);
     }
 
     /// One input of `reader` turned on (`now`) or off: adjusts its count and queues it if its output can change.
@@ -579,7 +591,7 @@ impl Engine {
         }
         if wake && !g(&self.cell, reader as usize).queued {
             gm(&mut self.cell, reader as usize).queued = true;
-            self.dirty.push(reader);
+            push_queued(&mut self.dirty, reader);
         }
     }
 }
@@ -691,15 +703,12 @@ impl Engine {
         // Which kinds of VMem pin flipped: bit 0 an address pin, bit 1 a content pin.
         // (Bit 2: a Breakpoint, so that the loop does not have to look at what each flipped entity is.)
         let mut pins_flipped = 0u8;
-        // Only replay looks at the packed state; a board without replay does not keep it.
-        let packing = self.replay.is_some();
         for &e in &flips {
             let on = &mut gm(&mut self.cell, e as usize).on;
             *on = !*on;
-            if packing {
-                let slot = g(&self.slot, e as usize) as usize;
-                *gm(&mut self.packed, slot >> 6) ^= 1 << (slot & 63);
-            }
+            // The packed state is kept on every board, though only replay looks at it (see `flip_bit`).
+            let slot = g(&self.slot, e as usize) as usize;
+            *gm(&mut self.packed, slot >> 6) ^= 1 << (slot & 63);
             pins_flipped |= g(&self.pin_role, e as usize);
         }
         if pins_flipped & 4 != 0 {
@@ -860,7 +869,7 @@ impl Engine {
         pending.clear();
         for &e in if self.forced.is_empty() { &self.dirty } else { &self.forced } {
             let op = self.cell[e as usize].op;
-            if !self.forced.is_empty() || (!(op == Op::Pin && self.locked) && self.evaluate(e as usize, op) != self.cell[e as usize].on) {
+            if !self.forced.is_empty() || (!(op == Op::Pin && self.locked) && self.evaluate(e as usize, op) != g(&self.cell, e as usize).on) {
                 pending.push(e);
             }
         }
@@ -890,19 +899,20 @@ impl Engine {
         let (bits, dirty, rose, meta) = table.node(id);
         let (bits, pending, _, meta) = (bits, dirty, rose, meta);
         for e in self.dirty.drain(..) {
-            self.cell[e as usize].queued = false;
-            self.cell[e as usize].toggle = false;
+            gm(&mut self.cell, e as usize).queued = false;
+            gm(&mut self.cell, e as usize).toggle = false;
         }
         self.forced.clear();
         self.forced.extend_from_slice(pending);
         if self.arrays_node == NONE {
             for (i, e) in self.live_list.iter().enumerate() {
-                self.cell[*e as usize].on = bits[i >> 6] >> (i & 63) & 1 == 1;
+                gm(&mut self.cell, *e as usize).on = bits[i >> 6] >> (i & 63) & 1 == 1;
             }
             // The counts follow from the signals: a trace counts its writers that are on, a component the traces it reads.
             for &e in &self.live_list {
-                let inputs = if self.cell[e as usize].op == Op::Trace { self.writers.of(e as usize) } else { self.reads.of(e as usize) };
-                self.cell[e as usize].count = inputs.iter().filter(|i| self.cell[**i as usize].on).count() as u16;
+                let inputs = if g(&self.cell, e as usize).op == Op::Trace { self.writers.of(e as usize) } else { self.reads.of(e as usize) };
+                let count = inputs.iter().filter(|i| g(&self.cell, **i as usize).on).count() as u16;
+                gm(&mut self.cell, e as usize).count = count;
             }
         } else {
             // The arrays hold another node: flip only the signals that differ, and adjust the counts they feed.
@@ -912,12 +922,15 @@ impl Engine {
                 while differ != 0 {
                     let e = self.live_list[w << 6 | differ.trailing_zeros() as usize] as usize;
                     differ &= differ - 1;
-                    self.cell[e].on = !self.cell[e].on;
-                    let step = if self.cell[e].on { 1 } else { u16::MAX };
+                    // (The position comes from the table's bits and is checked; what `live_list` holds there is an entity.)
+                    let on = !g(&self.cell, e).on;
+                    gm(&mut self.cell, e).on = on;
+                    let step = if on { 1 } else { u16::MAX };
                     // A trace feeds its readers; a component feeds the traces it shares and the readers of the traces it owns.
-                    let fed = if self.cell[e].op == Op::Trace { [self.readers.of(e), &[]] } else { [self.writes.of(e), self.direct.of(e)] };
+                    let fed = if g(&self.cell, e).op == Op::Trace { [self.readers.of(e), &[]] } else { [self.writes.of(e), self.direct.of(e)] };
                     for &fed in fed.into_iter().flatten() {
-                        self.cell[fed as usize].count = self.cell[fed as usize].count.wrapping_add(step);
+                        let c = &mut gm(&mut self.cell, fed as usize).count;
+                        *c = c.wrapping_add(step);
                     }
                 }
             }

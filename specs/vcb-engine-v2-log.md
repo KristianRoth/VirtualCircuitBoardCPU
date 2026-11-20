@@ -34,6 +34,7 @@ Every optimisation that was tried on the v2 engine, what it gained, and whether 
 | 27 | v2.1: the fixed part of a step applied from a proven record, only the variable part simulated (`sim2/split.rs`) | 1.055 quick (three runs); **1.20 to the Breakpoints** (the user's CPU 1.04 to 1.41) | accepted |
 | 28 | v2.1: the proof on a worker thread; contexts split on single bits; more workers | worker: 1.127 quick, 1.044 to the Breakpoints (over attempt 27). Bit splitting: nothing. More workers: nothing | worker accepted; the other two rejected |
 | 29 | v2.1: five findings of the third research pass: the hash's lanes in registers, the record check without early exit, one context lookup with a cheap hash, hot paths no longer marked cold, the first flips taken from `intern` | 1.050 quick (three runs), 1.050 to the Breakpoints (two runs) | accepted |
+| 30 | v2.1: six more findings of the third research pass, each built in its own worktree and timed alone; five merged (the queue push without growth, the last word in a replay edge, the channel poll, the net change as a mask, `flip_bit` and bounds checks) | merged: 1.044 quick (three runs), 1.083 to the Breakpoints (two runs) | five accepted, one (clock positions without divisions) rejected |
 | 23 | v2.1: replay on boards with a simulated Timer | 1.07 over three runs: the compact sample 2.1, the rest unchanged | accepted |
 | 22 | v2.1: the replay table emptied at its limit; saved between runs (`--replay-cache`) | 1.001 on the benchmark; a second run of day 4 part 2 in 1.3 s | accepted (a feature, not a speed-up of a first run) |
 
@@ -960,6 +961,45 @@ The five were not measured one by one. The compact sample, which has no records 
 **Verdict.** Accepted: 1.050 on both benchmarks.
 
 **Left from the same list** (`specs/research3-findings.md`): the growth path of the queue push in the tick's innermost loop (look at the machine code first), the last loaded word kept inside a replay edge, the poll of the finished-records channel, the divisions in `meta()`, a record's net change as an XOR mask, the test in `flip_bit`, the bounds checks in the code around a step.
+
+## Attempt 30 (2026-11-20): six small findings, each in its own worktree — five merged
+
+The user asked for items 1 to 6 of the open list (all from `specs/research3-findings.md`) to be built side by side in separate worktrees, timed without disturbing each other, reported one by one, and merged where they pay. Six agents built and tested them in parallel (each in its own worktree and branch off attempt 29, with its own build directory); none of them timed anything, because six builds at once make every timing noise. The six binaries were then timed alone, one after another, against attempt 29.
+
+| Item | What | Quick (3 runs) | To the Breakpoints (2 runs) | Verdict |
+|---|---|---|---|---|
+| 1 | **The queue push in `feed` without the growth path.** The queue can hold no more than there are entities, so it gets that room once and the push is an unchecked write (`push_queued`). The machine code confirmed the suspicion: the reader loop reloaded the cell, reader-list and queue pointers and the queue's length and capacity from the engine at every reader, and held three calls to the growth routine; after the change it holds none and keeps them in registers. A worker's copy of the engine has to reserve the room again: a cloned list keeps its length, not its capacity. | 1.017 | 1.019 | merged |
+| 2 | **A load edge remembers its last word and where it led** (`replay.rs`). Measured first: 82% (day 4 part 2) and 85% (day 1 part 2) of load lookups bring the word the edge saw last, so five in six skip the map. An edge entry grows from 32 to 40 bytes. The cache file's format is unchanged; the word is filled in on load. | 0.999 | 1.015 | merged |
+| 3 | **The finished-records channel looked at only when a record was sent**: a worker counts what it sends, and a step's start compares that with what was taken before touching the lock and the channel. | 1.005 | 1.018 | merged |
+| 4 | **The clock's and the schedule's position from the due ticks** in place of two divisions per `meta()` call, with the division as fallback and a debug assertion comparing the two. Correct on every board. | 1.005 | 1.005 | rejected: nothing outside the noise for a new field and a fallback path |
+| 5 | **A record's net change also as an XOR mask** over the packed words, applied word by word at the end of a full-length step. | 1.012 | 1.009 | merged |
+| 6 | **`flip_bit` without its test** (the packed signals are now kept on every board, so a trace change is a load, an XOR and a store), and **the code around a step without bounds checks** where the index comes from the netlist's own lists (`leave_split`, `count_fixed`, `restore`, `intern`). | 1.016 | 1.011 | merged |
+
+Single items are near the noise of the benchmark (about 1%): only item 1 clears 1.015 on both, and item 4 is the only one that shows nothing on either. The five were merged as one attempt and measured together.
+
+**Merged, against attempt 29** (plain builds):
+
+| Program | 20 million ticks, three runs | to the Breakpoint, two runs |
+|---|---|---|
+| day1/part1 | 1.063 | 1.093 |
+| day1/part2 | 1.021 | 1.061 |
+| day2/part1 | 1.038 | 1.016 |
+| day2/part2 | 1.033 | 0.996 |
+| day3/part1 | 1.069 | 1.196 |
+| day3/part2 | 1.064 | 1.139 |
+| day4/part1 | 1.054 | 1.160 |
+| day4/part2 | 1.060 | 1.100 |
+| sample-primes | 1.043 | 1.079 |
+| sample-compact-primes | 0.992 | 1.007 |
+| **Score** | **1.044** | **1.083** |
+
+The old build ran slow in that full-length pass on some programs (day 3 part 1 at 237 M ticks per second, where it had made 266 to 282 in earlier passes), so the full-length score is too high; against the old build's earlier speeds the long programs gain 5 to 9%.
+
+**Equality** (the merged code): `cargo test`, `cargo test --release`, `-- --ignored`; `split_check` on day 4 part 2 with stops inside steps, day 1 part 2 and the sample. Each item passed the same in its own worktree before.
+
+**Verdict.** Accepted: 1.044 quick. Item 4 is on the tag `v2-attempt-30-item4-rejected`.
+
+**Also measured, and closed: running the next step ahead on another thread** (idea 11 of the open list). `examples/ahead_estimate.rs` guesses the state a step will end in from the last step of the same context in six ways (last value, last change, no change, the rule that was right last time per signal, and two with a longer context) and counts how often the next step reads nothing guessed wrong. Best single way: 28% (day 1 part 2), 22% (day 3 part 2), 20% (day 4 part 2), 16% (sample). No way of choosing among the three rules can pass 24 to 40%: 15 to 24 signals stay wrong, the data the step is computing, and the next step usually reads them. A step with a record costs 1.5 µs and a hand-over between threads a good part of that, so nothing is left. And **guessing a record that does not fit** (temporary code in the engine, removed): when a context has records and none fits, the closest one would have had the fixed part right 34 to 69% of the time, but that is only 0.6 to 5.4% of the steps replay misses; most whole steps (3.5 to 8.2%) are in contexts with no record yet.
 
 ## Ideas not tried
 

@@ -86,7 +86,9 @@ pub struct Table {
     /// Per node: its queued components, then its just-risen traces.
     lists: Vec<u32>,
     nodes: Vec<Node>,
-    edges: Vec<(Edge, Arrival)>,
+    /// Per edge: the event, an arrival, and for an edge that ends in a load the word that arrival belongs to:
+    /// the last word seen there, checked before `by_word` (an instruction fetch nearly always loads the same word).
+    edges: Vec<(Edge, Arrival, u32)>,
     by_hash: HashMap<u64, u32, BuildHasherDefault<Mix>>,
     /// For an edge that ends in a load: (node, word loaded) to where it arrives.
     by_word: HashMap<u64, Arrival, BuildHasherDefault<Mix>>,
@@ -123,7 +125,7 @@ impl Table {
 
     /// A close estimate of the bytes in use (the maps counted at 32 bytes per entry).
     pub fn memory(&self) -> usize {
-        self.bits.len() * 8 + self.lists.len() * 4 + self.nodes.len() * std::mem::size_of::<Node>() + self.edges.len() * std::mem::size_of::<(Edge, Arrival)>() + (self.by_hash.len() + self.by_word.len()) * 32
+        self.bits.len() * 8 + self.lists.len() * 4 + self.nodes.len() * std::mem::size_of::<Node>() + self.edges.len() * std::mem::size_of::<(Edge, Arrival, u32)>() + (self.by_hash.len() + self.by_word.len()) * 32
     }
 
     fn hash(bits: &[u64], dirty: &[u32], rose: &[u32], meta: Meta) -> u64 {
@@ -199,12 +201,14 @@ impl Table {
         if at == NONE {
             self.changed = true;
             self.nodes[from as usize].edge = self.edges.len() as u32;
-            self.edges.push((edge, to));
+            self.edges.push((edge, to, word));
         } else {
             // The circuit is deterministic: a node always leads to the same event after the same number of ticks.
             assert!(self.edges[at as usize].0 == edge, "replay: one state led to two different events");
         }
         if edge.fetch != NONE {
+            let entry = &mut self.edges[self.nodes[from as usize].edge as usize];
+            (entry.1, entry.2) = (to, word);
             self.changed |= self.by_word.insert((from as u64) << 32 | word as u64, to).is_none();
         }
     }
@@ -217,12 +221,15 @@ impl Table {
 
     /// Where a node's edge arrives. `word` is the word that the event loads, if it loads.
     #[cfg_attr(profiling, inline(never))]
-    pub fn arrival(&self, from: u32, edge: Edge, word: u32) -> Option<Arrival> {
-        if edge.fetch == NONE {
-            Some(self.edges[self.nodes[from as usize].edge as usize].1)
-        } else {
-            self.by_word.get(&((from as u64) << 32 | word as u64)).copied()
+    pub fn arrival(&mut self, from: u32, edge: Edge, word: u32) -> Option<Arrival> {
+        let entry = &mut self.edges[self.nodes[from as usize].edge as usize];
+        if edge.fetch == NONE || entry.2 == word {
+            return Some(entry.1);
         }
+        // Another word than last time: the map knows it or not, and the edge remembers it for the next time.
+        let to = *self.by_word.get(&((from as u64) << 32 | word as u64))?;
+        (entry.1, entry.2) = (to, word);
+        Some(to)
     }
 }
 
@@ -258,7 +265,7 @@ impl Table {
     pub fn save(&self, path: &std::path::Path, fingerprint: &[u8; 32]) -> std::io::Result<()> {
         use std::io::Write;
         let nodes: Vec<u32> = self.nodes.iter().flat_map(|n| [n.hash as u32, (n.hash >> 32) as u32, n.next, n.lists_at, n.dirty_len, n.rose_len, n.meta.address, n.meta.locked as u32 | (n.meta.load_pending as u32) << 1, n.meta.clock_phase, n.meta.timer_phase, n.edge]).collect();
-        let edges: Vec<u32> = self.edges.iter().flat_map(|(e, a)| [e.ticks as u32, (e.ticks >> 32) as u32, e.fetch, e.write, e.breakpoint as u32, a.node, a.written]).collect();
+        let edges: Vec<u32> = self.edges.iter().flat_map(|(e, a, _)| [e.ticks as u32, (e.ticks >> 32) as u32, e.fetch, e.write, e.breakpoint as u32, a.node, a.written]).collect();
         let by_word: Vec<u32> = self.by_word.iter().flat_map(|(k, a)| [*k as u32, (*k >> 32) as u32, a.node, a.written]).collect();
         let header = [self.words as u64, self.bits.len() as u64, self.lists.len() as u64, self.nodes.len() as u64, self.edges.len() as u64, self.by_word.len() as u64];
         let temporary = path.with_extension("tmp");
@@ -323,7 +330,8 @@ impl Table {
             if e[5] as usize >= n_nodes || !address_ok(e[2]) || !address_ok(e[3]) {
                 return Err(damaged("a step"));
             }
-            table.edges.push((Edge { ticks: e[0] as u64 | (e[1] as u64) << 32, fetch: e[2], write: e[3], breakpoint: e[4] != 0 }, Arrival { node: e[5], written: e[6] }));
+            // The file does not say which word a load edge's arrival belongs to: it is found among the words below.
+            table.edges.push((Edge { ticks: e[0] as u64 | (e[1] as u64) << 32, fetch: e[2], write: e[3], breakpoint: e[4] != 0 }, Arrival { node: if e[2] == NONE { e[5] } else { NONE }, written: e[6] }, 0));
         }
         table.by_word.reserve(n_words);
         for w in raw_words.chunks_exact(WORD_WORDS) {
@@ -331,6 +339,13 @@ impl Table {
                 return Err(damaged("an arrival"));
             }
             table.by_word.insert(w[0] as u64 | (w[1] as u64) << 32, Arrival { node: w[2], written: w[3] });
+            let at = table.nodes[w[1] as usize].edge;
+            if at != NONE && table.edges[at as usize].0.fetch != NONE {
+                (table.edges[at as usize].1, table.edges[at as usize].2) = (Arrival { node: w[2], written: w[3] }, w[0]);
+            }
+        }
+        if table.edges.iter().any(|e| e.1.node == NONE) {
+            return Err(damaged("a load without a word"));
         }
         table.bits = bits;
         table.lists = lists;

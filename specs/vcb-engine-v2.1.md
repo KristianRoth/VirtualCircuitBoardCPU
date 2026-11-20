@@ -440,6 +440,16 @@ Three agents (one reading each, unchecked) went through The Rust Performance Boo
 
 Against attempt 24, attempts 27 to 29 together are about 1.25 on the quick benchmark and 1.31 with every program run to its Breakpoint.
 
+### Attempt 30 (2026-11-20): six more findings side by side; running ahead closed
+
+Items 1 to 6 of the remaining list were built in six worktrees in parallel and timed one after another. Five were merged (the queue push in `feed` without the growth path, which the machine code showed was reloading pointers at every reader; the last loaded word kept in a replay edge; the channel poll; the net change as a mask; `flip_bit` and bounds checks): **1.044 on the quick benchmark, about 1.05 to 1.09 on the long programs**. The clock positions without divisions showed nothing and were left out. The log has each item's numbers.
+
+Two guessing ideas were measured and closed: a thread running the next step ahead from a guessed state (the best guess is right 16 to 28% of the time, and the ceiling of such rules is 24 to 40%), and using a record that does not fit (right a third to two thirds of the time, but it applies to under 5% of the steps replay misses).
+
+Against attempt 24, attempts 27 to 30 together are about 1.30 on the quick benchmark and about 1.4 with every program run to its Breakpoint.
+
+**Still open:** records on boards with a simulated Timer; records kept in `--replay-cache`; looking up the state at rest points inside a step; a cheaper step with a record; compiling. And a fresh profile of the current build, which every estimate now lacks.
+
 ### What the research leaves open
 
 1. Can the split into control and data be found from a netlist, and how much of today's misses would a control-only key recover? (Decides A1.)
