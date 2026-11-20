@@ -35,6 +35,8 @@ Every optimisation that was tried on the v2 engine, what it gained, and whether 
 | 28 | v2.1: the proof on a worker thread; contexts split on single bits; more workers | worker: 1.127 quick, 1.044 to the Breakpoints (over attempt 27). Bit splitting: nothing. More workers: nothing | worker accepted; the other two rejected |
 | 29 | v2.1: five findings of the third research pass: the hash's lanes in registers, the record check without early exit, one context lookup with a cheap hash, hot paths no longer marked cold, the first flips taken from `intern` | 1.050 quick (three runs), 1.050 to the Breakpoints (two runs) | accepted |
 | 30 | v2.1: six more findings of the third research pass, each built in its own worktree and timed alone; five merged (the queue push without growth, the last word in a replay edge, the channel poll, the net change as a mask, `flip_bit` and bounds checks) | merged: 1.044 quick (three runs), 1.083 to the Breakpoints (two runs) | five accepted, one (clock positions without divisions) rejected |
+| 31 | v2.1: six instructions in `propagate`'s machine code that looked unneeded, each tried alone | 1.005, 0.996, 1.000, 0.985, 0.964, 0.997 (three runs each) | all six rejected |
+| 32 | v2.1: records on a board with a simulated Timer (a proof and a step with a record end at the tick before a Timer's flip) | compact sample 1.048 quick, 1.078 over 100 million ticks; other boards unchanged (score 1.012) | accepted for that board; two stronger forms tried and rejected |
 | 23 | v2.1: replay on boards with a simulated Timer | 1.07 over three runs: the compact sample 2.1, the rest unchanged | accepted |
 | 22 | v2.1: the replay table emptied at its limit; saved between runs (`--replay-cache`) | 1.001 on the benchmark; a second run of day 4 part 2 in 1.3 s | accepted (a feature, not a speed-up of a first run) |
 
@@ -1000,6 +1002,41 @@ The old build ran slow in that full-length pass on some programs (day 3 part 1 a
 **Verdict.** Accepted: 1.044 quick. Item 4 is on the tag `v2-attempt-30-item4-rejected`.
 
 **Also measured, and closed: running the next step ahead on another thread** (idea 11 of the open list). `examples/ahead_estimate.rs` guesses the state a step will end in from the last step of the same context in six ways (last value, last change, no change, the rule that was right last time per signal, and two with a longer context) and counts how often the next step reads nothing guessed wrong. Best single way: 28% (day 1 part 2), 22% (day 3 part 2), 20% (day 4 part 2), 16% (sample). No way of choosing among the three rules can pass 24 to 40%: 15 to 24 signals stay wrong, the data the step is computing, and the next step usually reads them. A step with a record costs 1.5 µs and a hand-over between threads a good part of that, so nothing is left. And **guessing a record that does not fit** (temporary code in the engine, removed): when a context has records and none fits, the closest one would have had the fixed part right 34 to 69% of the time, but that is only 0.6 to 5.4% of the steps replay misses; most whole steps (3.5 to 8.2%) are in contexts with no record yet.
+
+## Attempt 31 (2026-11-20): the unneeded instructions in `propagate` — all six rejected
+
+The machine code of `propagate` in the profile-guided build was read and commented (`specs/vcb-engine-propagate-asm.s`); six things in it looked unneeded or dearer than necessary. The user asked for all six to be tried. Each was built alone from attempt 30 and timed alone against it (plain builds, 20 million ticks, three runs):
+
+| # | Change | Score |
+|---|---|---|
+| 1 | No `if from != to` before the loop over direct readers (a compare the next instruction repeats) | 1.005 |
+| 2 | The queue's length kept in `propagate` and written back once, not at every push | 0.996 |
+| 3 | The threshold test per direction (`new == threshold` when the input rose, `old == threshold` when it fell) for `max(old, new) == threshold` | 1.000 |
+| 4 | The wake path marked as the rare one (`std::hint::cold_path`), so that the common case falls through | 0.985 |
+| 5 | One 64-bit load of a reader's record, the count, threshold, kind and queued flag taken from it | 0.964 |
+| 6 | `propagate` forced inline into the tick (no call, no saving of ten registers) | 0.997 |
+
+None is outside the noise on the good side, and two are clearly worse. Item 5 loses 4%, as feared: the count is stored back as 16 bits and the next reader's 64-bit load has to wait when it is the same record, and a wide load followed by shifts is no cheaper than four narrow loads that run side by side. Item 4 loses 1.5%: a gate is woken about one time in four, which is not rare. The other four change one or two instructions in a loop of sixteen and show nothing, as attempts 25 and 26 found for this loop before.
+
+**Verdict.** All six rejected; nothing kept. The loop is, as far as these go, what the algorithm asks for. Whether variants 2 and 3 changed the machine code as intended was not checked.
+
+## Attempt 32 (2026-11-20): records on a board with a simulated Timer — accepted, with a small gain
+
+The user: the compact sample "should not be left behind anymore". It is the one benchmark board with a simulated Timer, and attempts 27 to 30 were switched off on it by one line.
+
+**What is kept (form A).** A Timer flips when the tick counter says so, and where the counter stands is not part of a context. So no record covers a Timer's flip: a proof (on the worker or on the engine's own step) ends at the tick before one, which makes its record that much shorter; a step with a record is left at the tick before one and simulated whole from there; neither starts if the next tick is a Timer's. Eight changed lines in `sim2/split.rs`. The worker thread, the checks and everything else of attempts 27 to 30 now run on such a board as on any other.
+
+**Numbers** (plain builds, against attempt 30). Compact sample: 1.048 on the quick benchmark (three runs), 1.078 over 100 million ticks (two runs), 1.67 s to 1.59 s over 300 million. The other nine programs: 0.989 to 1.065, noise (score of all ten 1.012 on both). 97% of the steps replay misses on the compact sample now start with a record (163,321 of 167,915 in 100 million ticks).
+
+**Why the gain is small there.** Counted in a profiling build over 100 million ticks: with records the board makes 25% fewer flips and 8% fewer simulated ticks; day 4 part 2 on the user's CPU makes 55% fewer flips and half the ticks. Two reasons. The variable part is larger on that board (the estimate of group A had 50% left to simulate there against 34 to 41% on the user's CPU). And its Timer has a flip inside most steps (a step that replay misses is about 600 ticks long, the Timer's interval 1,000): the record covers the step only up to that flip.
+
+**Two stronger forms, built and rejected.**
+- *The Timers' position as part of the context* (the tick counter modulo twice the interval), so that a record runs through a Timer's flip. The contexts multiply (the steps of that board start at many different positions): only 45% of the missed steps had a record, 11,829 proofs in 100 million ticks where form A needs 1,151, and the run was slower than without records (0.591 s against 0.569 s).
+- *A Timer's flip as the start of a new stretch with its own record* (the tick of the flip simulated whole, the stretch after it keyed apart from steps that start at an event). 246,635 stretches with a record and still slower than no records at all: 1.76 s over 300 million ticks against 1.67 s without and 1.59 s for form A. The stretches after a flip start anywhere inside a step, so little in them is the same from one to the next, and each pays a start and an end.
+
+**Equality.** `cargo test`, `cargo test --release`, `-- --ignored`; `split_check` on the compact sample with and without stops inside steps (identical to v2 without records at 123,716 and 271,490 stops); the compact sample with `--verify` against the reference engine over 6 million ticks at Timer intervals 1, 3, 50, 137, 1,000 and 4,096. No fixture covers it: the board is the game's own and is not in the repository.
+
+**Verdict.** Accepted: the feature now works on Timer boards; 1.05 to 1.08 on the one such board in the benchmark.
 
 ## Ideas not tried
 

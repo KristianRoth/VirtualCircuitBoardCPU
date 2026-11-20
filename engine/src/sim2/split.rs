@@ -37,7 +37,11 @@
 //! A context keeps a few records (an older one was proven when less was unknown: it fits fewer starts and fixes
 //! more) and earns a proof only after several steps that fitted none.
 //!
-//! Not on a board with Random ink or a simulated Timer (no replay table there to take the packed signals from).
+//! A simulated Timer flips when the tick counter says so, and where the counter stands is not part of a context.
+//! So no record covers a Timer's flip (attempt 32): a proof ends at the tick before one, which makes its record
+//! that much shorter, and a step with a record is left at the tick before one and simulated whole from there.
+//!
+//! Not on a board with Random ink (no replay there).
 
 use super::{g, gm, Engine, Op, NONE};
 use crate::replay::{Meta, Mix, Table};
@@ -244,7 +248,7 @@ impl Engine {
 
     pub fn set_split(&mut self, on: bool) {
         self.leave_mode();
-        self.split.enabled = on && self.replay.is_some() && self.timers.is_empty();
+        self.split.enabled = on && self.replay.is_some();
         self.split.at_event = false;
     }
 
@@ -303,9 +307,12 @@ impl Engine {
             let flips = first.iter().zip(&record.first).zip(&record.known_first).fold(0, |all, ((now, start), known)| all | (now ^ start) & known);
             state | flips == 0
         };
+        // A Timer flips when the tick counter says so, whatever the circuit does (attempt 32). No record covers
+        // that: a step with a record, and a proof, end at the tick before, and neither starts if that is now.
+        let room = self.timer_due > self.tick + 1;
         let mut job: Option<Job> = None;
         'step: {
-            if let Some(found) = context.records.iter().position(|record| fits(record)) {
+            if let Some(found) = context.records.iter().position(|record| fits(record)).filter(|_| room) {
                 let record = context.records.remove(found);
                 // What is queued is replaced by its outcome, and of that only the variable part is kept: the
                 // fixed components that flip in the first tick are in the record.
@@ -314,7 +321,7 @@ impl Engine {
                 }
                 self.forced.clear();
                 self.forced.extend(self.split.first_list.iter().filter(|e| bit(&record.variable, **e)));
-                self.split.due = self.tick + record.timed.first().map_or(record.length, |t| t.0.min(record.length)) as u64;
+                self.split.due = (self.tick + record.timed.first().map_or(record.length, |t| t.0.min(record.length)) as u64).min(self.timer_due - 1);
                 (self.split.mode, self.split.at, self.split.start, self.split.cursor) = (SPLIT, at, self.tick, 0);
                 self.split.record = Some(record);
                 self.split.traces.clear();
@@ -337,7 +344,7 @@ impl Engine {
                 context.wait += 1;
                 // Not when something new differs in this very step, or before the context has earned a proof.
                 let wait = if self.split.threads > 0 { WAIT } else { WAIT_ALONE };
-                if !(grew || context.wait < wait || context.asked || self.split.records >= MOST_RECORDS) {
+                if !(grew || context.wait < wait || context.asked || self.split.records >= MOST_RECORDS || !room) {
                     context.wait = 0;
                     context.asked = self.split.threads > 0;
                     job = Some(Job { at, key, tick: self.tick, bits: packed.to_vec(), first: self.split.first_list.clone(), first_bits: first[..words].to_vec(), unknown: context.unknown.clone(), unknown_first: context.unknown_first.clone() });
@@ -515,11 +522,11 @@ impl Engine {
             }
             let record = self.split.record.as_ref().unwrap();
             let offset = (self.tick - self.split.start) as u32;
-            if event || offset >= record.length {
+            if event || offset >= record.length || self.tick + 1 >= self.timer_due {
                 self.leave_split();
             } else {
                 let next = record.timed.get(self.split.cursor).map_or(record.length, |t| t.0.min(record.length));
-                self.split.due = self.split.start + next as u64;
+                self.split.due = (self.split.start + next as u64).min(self.timer_due - 1);
             }
         } else {
             self.proof_tick(event);
@@ -841,11 +848,12 @@ impl Engine {
         for &e in changed.iter().chain(&flipped) {
             wake(e, split);
         }
-        split.due = if next.is_empty() && offset > 1 { u64::MAX } else { tick + 1 };
+        split.due = if next.is_empty() && offset > 1 { self.timer_due - 1 } else { tick + 1 };
         split.queue = next;
         split.loaded.clear();
         split.lists = [changed, flipped, traces];
-        if event {
+        // The step is over, or a Timer flips in the next tick: the record covers the step up to here.
+        if event || tick + 1 >= self.timer_due {
             self.make_record(offset);
         }
     }

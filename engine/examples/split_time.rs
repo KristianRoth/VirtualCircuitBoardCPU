@@ -21,6 +21,9 @@ fn main() -> Result<(), String> {
         }
         let (_, _, replayed) = engine.replay_stats();
         println!("split {on}: {:.3} s to tick {} ({:.1} M ticks/s), {:.0}% of ticks replayed; {:?}", start.elapsed().as_secs_f64(), engine.tick(), engine.tick() as f64 / start.elapsed().as_secs_f64() / 1e6, 100.0 * replayed as f64 / engine.tick() as f64, engine.split_counts());
+        if cfg!(profiling) {
+            println!("    simulated ticks {}, flips {}, evaluations {}, idle ticks {}", engine.profile.ticks_simulated, engine.profile.flips, engine.profile.evaluations, engine.profile.ticks_idle);
+        }
     }
     Ok(())
 }
