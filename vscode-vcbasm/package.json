@@ -3,6 +3,7 @@
   "displayName": "VCB Assembly",
   "description": "Syntax colouring for Virtual Circuit Board assembly files (.vcbasm)",
   "version": "0.4.0",
+  "license": "MIT",
   "publisher": "local",
   "engines": {
     "vscode": "^1.60.0"

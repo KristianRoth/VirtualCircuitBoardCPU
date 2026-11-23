@@ -32,7 +32,7 @@ A 32-bit CPU built in the Steam game Virtual Circuit Board (VCB), and `engine/`:
 - `engine/examples/trace.rs` inspects a board (text art, what an entity connects to, a bus and its taps, signal changes during a run).
 
 ## Loose ends
-- **No licence** has been chosen for `engine/`, and it is already on GitHub. Raise it with the user.
+- **Licence:** MIT since 2026-11-23 (`LICENSE` in the root; the user's choice). `AoC2025` and `AoC2026` have none, on purpose.
 - **The root `README.md`** was extended with a short description; the CPU's instruction table is also in `AoC2025/README.md`. The user may want to rewrite it.
 - **Leftover files the user may delete:** `32-bit-alu-try.vcb.tmp` in the root, and in `saves/` two 4 MiB `.vcbmem` files and two `.vcb.tmp` files. All are git-ignored and nothing uses them.
 - **Unobserved game behaviour** (none of it used by the CPU): a non-zero word 0 preloaded in a file, VMem pin sizes other than 1×1, a Read or Write pixel touching a tunnel, bus or mesh, Random draw order in mixed cases. See the open questions in the facts file.

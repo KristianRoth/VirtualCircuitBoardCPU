@@ -84,3 +84,7 @@ Two things that can go wrong:
 https://github.com/user-attachments/assets/4178198c-dcfb-4dda-80ad-a7bf4f559366
 
 A 32-bit CPU drawn in the game: two 32-bit registers, memory of 16-bit words, a stack, and a small set of instructions without multiply or divide. Its boards, the full instruction set and the programs written for it are in [AoC2025](https://github.com/KristianRoth/AoC2025#readme). A copy of the board is among the engine's tests (`engine/tests/boards/cpu-32bit-manual-start.vcb`), so the engine does not depend on that repository.
+
+## Licence
+
+[MIT](LICENSE). Virtual Circuit Board itself, and the text of its User Guide, belong to the game's makers and are not part of this repository.

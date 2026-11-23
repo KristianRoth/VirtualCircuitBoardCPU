@@ -2,6 +2,7 @@
 name = "vcb"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 description = "Tick-exact simulation engine for Virtual Circuit Board .vcb files"
 
 [dependencies]
